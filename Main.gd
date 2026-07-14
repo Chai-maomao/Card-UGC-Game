@@ -140,7 +140,7 @@ func _on_viewport_size_changed() -> void:
 # ============================================
 
 func _view_player() -> int:
-	if NetworkManager.is_online:
+	if NetworkManager.is_online or my_player in [1, 2]:
 		return my_player
 	return game.current_player
 
@@ -221,6 +221,12 @@ func _broadcast_authority_state(label: String) -> void:
 		NetworkManager.rpc_authority_state.rpc(state)
 
 
+func _commit_authority_state(label: String) -> void:
+	if NetworkManager.is_online and NetworkManager.is_authority():
+		game.state_revision += 1
+	_broadcast_authority_state(label)
+
+
 func _apply_authority_state(state: Dictionary, label: String = "authority") -> void:
 	game.apply_initial_state(state)
 	_restore_local_art_paths()
@@ -234,10 +240,13 @@ func _apply_authority_state(state: Dictionary, label: String = "authority") -> v
 	for ev in hp_events:
 		_show_floating_for(int(ev.get("player", 0)), int(ev.get("slot", -1)), int(ev.get("delta", 0)))
 	_print_authority_state(label)
+	var game_over: String = game.check_game_over()
+	if game_over != "":
+		_show_result(game_over)
 
 
 func _restore_local_art_paths() -> void:
-	if not NetworkManager.is_online or NetworkManager.is_authority():
+	if not NetworkManager.is_online:
 		return
 	var local_art_by_key := {}
 	# Opponent arts were downloaded during the lobby and saved to local net_arts
@@ -249,6 +258,9 @@ func _restore_local_art_paths() -> void:
 			local_art_by_key[_card_identity_key(card)] = card.art_path
 	# Our own cards take precedence on identity collisions.
 	for card in PlayerData.battle_deck:
+		if card is CardData and card.art_path != "":
+			local_art_by_key[_card_identity_key(card)] = card.art_path
+	for card in PlayerData.card_library:
 		if card is CardData and card.art_path != "":
 			local_art_by_key[_card_identity_key(card)] = card.art_path
 	_restore_art_paths_in_cards(game.player_hand, local_art_by_key)
@@ -330,8 +342,14 @@ func _ready():
 	_apply_responsive_layout()
 	get_viewport().size_changed.connect(_on_viewport_size_changed)
 	update_entire_screen()
-	if NetworkManager.is_online and not NetworkManager.is_authority():
-		NetworkManager.rpc_request_initial_state.rpc()
+	if NetworkManager.is_online:
+		if NetworkManager.just_reconnected:
+			_local_slot_rejoined = true
+			match_paused = true
+			update_entire_screen()
+			call_deferred("_request_resume_state")
+		elif not NetworkManager.is_authority():
+			NetworkManager.rpc_request_initial_state.rpc()
 
 
 func _on_game_draw_cards(amount: int):
@@ -916,6 +934,7 @@ func _refresh_hand_ui():
 
 
 func _show_result(result: String):
+	NetworkManager.clear_room_session()
 	if mana_label:
 		mana_label.text = "[ %s ]" % result
 	if end_turn_button:
@@ -947,6 +966,8 @@ func update_entire_screen():
 	if status_toggle_button:
 		status_toggle_button.visible = NetworkManager.is_online
 		status_toggle_button.text = Locale.t("battle.enemy_info") if not show_enemy_status else Locale.t("battle.my_info")
+	if end_turn_button:
+		end_turn_button.disabled = match_paused or not game.is_player_turn or (NetworkManager.is_online and game.current_player != my_player)
 
 	var my_field = _my_field()
 	var their_field = _their_field()
@@ -1025,8 +1046,14 @@ var _charm_popup_active: bool = false
 # Authority collects hp_changed events during an action, then ships them in the
 # state broadcast so the non-authority client can replay floating text.
 var _pending_hp_events: Array = []
+var match_paused: bool = false
+var _resume_waiting_for_player: int = 0
+var _resume_expected_revision: int = -1
+var _local_slot_rejoined: bool = false
 
 func is_my_turn() -> bool:
+	if match_paused:
+		return false
 	if not NetworkManager.is_online:
 		return true
 	return game.current_player == my_player
@@ -1056,6 +1083,102 @@ func _init_network():
 	EventBus.rpc_intent_move_received.connect(_on_rpc_intent_move)
 	EventBus.rpc_targeting_arrow_received.connect(_on_rpc_targeting_arrow)
 	EventBus.rpc_splash_received.connect(_on_rpc_splash)
+	EventBus.rpc_resume_state_requested.connect(_on_rpc_resume_state_requested)
+	EventBus.rpc_resume_state_received.connect(_on_rpc_resume_state_received)
+	EventBus.rpc_resume_state_ack_received.connect(_on_rpc_resume_state_ack)
+	EventBus.rpc_resume_complete_received.connect(_on_rpc_resume_complete)
+	NetworkManager.opponent_disconnected.connect(_on_opponent_disconnected)
+	NetworkManager.reconnect_started.connect(_on_reconnect_started)
+	NetworkManager.reconnect_transport_ready.connect(_on_reconnect_transport_ready)
+	NetworkManager.reconnect_failed.connect(_on_reconnect_failed)
+
+
+func _pause_for_reconnect() -> void:
+	match_paused = true
+	_resume_waiting_for_player = 0
+	_resume_expected_revision = -1
+	cancel_attack()
+	remote_arrow_source = -1
+	remote_arrow_target = -1
+	if end_turn_button:
+		end_turn_button.disabled = true
+	update_entire_screen()
+
+
+func _on_opponent_disconnected(_player: int) -> void:
+	_pause_for_reconnect()
+
+
+func _on_reconnect_started() -> void:
+	_pause_for_reconnect()
+
+
+func _on_reconnect_transport_ready() -> void:
+	my_player = NetworkManager.player_number
+	_local_slot_rejoined = true
+	_pause_for_reconnect()
+	call_deferred("_request_resume_state")
+
+
+func _on_reconnect_failed(_reason: String) -> void:
+	NetworkManager.clear_room_session()
+	get_tree().change_scene_to_file.call_deferred("res://MainMenu.tscn")
+
+
+func _request_resume_state() -> void:
+	if not NetworkManager.is_online or my_player not in [1, 2]:
+		return
+	match_paused = true
+	NetworkManager.rpc_request_resume_state.rpc(my_player, game.state_revision)
+	update_entire_screen()
+
+
+func _on_rpc_resume_state_requested(requesting_player: int, known_revision: int) -> void:
+	if not NetworkManager.is_online or requesting_player == my_player:
+		return
+	# Normally only one side rejoined, so the continuously-online side is always
+	# the recovery source. If both transports dropped together, both sides are
+	# marked as rejoined and the higher committed revision wins deterministically.
+	if _local_slot_rejoined and game.state_revision < known_revision:
+		return
+	_pause_for_reconnect()
+	_resume_waiting_for_player = requesting_player
+	_resume_expected_revision = game.state_revision
+	NetworkManager.rpc_resume_state.rpc(game.export_initial_state(), my_player, requesting_player)
+
+
+func _on_rpc_resume_state_received(state: Dictionary, source_player: int, target_player: int) -> void:
+	if target_player != my_player or source_player == my_player:
+		return
+	match_paused = true
+	_apply_authority_state(state, "reconnect recovery")
+	_resume_expected_revision = game.state_revision
+	NetworkManager.rpc_resume_state_ack.rpc(my_player, game.state_revision)
+
+
+func _on_rpc_resume_state_ack(player: int, revision: int) -> void:
+	if player != _resume_waiting_for_player or revision != _resume_expected_revision:
+		return
+	_resume_waiting_for_player = 0
+	_resume_expected_revision = -1
+	_finish_resume()
+	NetworkManager.rpc_resume_complete.rpc(revision)
+
+
+func _on_rpc_resume_complete(revision: int) -> void:
+	if revision != game.state_revision:
+		return
+	_finish_resume()
+
+
+func _finish_resume() -> void:
+	match_paused = false
+	_local_slot_rejoined = false
+	NetworkManager.just_reconnected = false
+	NetworkManager.opponent_peer_id = -1
+	if end_turn_button:
+		end_turn_button.disabled = not game.is_player_turn or not is_my_turn()
+	update_entire_screen()
 
 
 func _sync_targeting_state():
@@ -1118,11 +1241,14 @@ func _on_rpc_initial_state_requested(_peer_id: int):
 func _on_rpc_authority_state(state: Dictionary):
 	if NetworkManager.is_authority():
 		return
+	var incoming_revision := int(state.get("state_revision", 0))
+	if incoming_revision < game.state_revision:
+		return
 	_apply_authority_state(state, "remote authority")
 
 
 func _host_apply_summon(hand_index: int, slot_index: int, player: int) -> void:
-	if not NetworkManager.is_authority() or player != game.current_player:
+	if match_paused or not NetworkManager.is_authority() or player != game.current_player:
 		return
 	var hand = _hand_for_player(player)
 	if hand_index < 0 or hand_index >= hand.size():
@@ -1138,11 +1264,11 @@ func _host_apply_summon(hand_index: int, slot_index: int, player: int) -> void:
 	# nothing auto-fires here. The summoned_this_turn flag travels in the state.
 	_refresh_hand_ui()
 	update_entire_screen()
-	_broadcast_authority_state("summon")
+	_commit_authority_state("summon")
 
 
 func _host_apply_summon_skill(slot_index: int, skill_index: int, target_slot: int, player: int) -> void:
-	if not NetworkManager.is_authority() or player != game.current_player:
+	if match_paused or not NetworkManager.is_authority() or player != game.current_player:
 		return
 	var saved = game.current_player
 	game.current_player = player
@@ -1156,11 +1282,11 @@ func _host_apply_summon_skill(slot_index: int, skill_index: int, target_slot: in
 	_check_charm_overflow()
 	_refresh_hand_ui()
 	update_entire_screen()
-	_broadcast_authority_state("summon skill")
+	_commit_authority_state("summon skill")
 
 
 func _host_apply_attack(source_slot: int, target_slot: int, player: int) -> void:
-	if not NetworkManager.is_authority() or player != game.current_player:
+	if match_paused or not NetworkManager.is_authority() or player != game.current_player:
 		return
 	var saved = game.current_player
 	game.current_player = player
@@ -1172,11 +1298,11 @@ func _host_apply_attack(source_slot: int, target_slot: int, player: int) -> void
 	_check_charm_overflow()
 	_refresh_hand_ui()
 	update_entire_screen()
-	_broadcast_authority_state("attack")
+	_commit_authority_state("attack")
 
 
 func _host_apply_skill(slot_index: int, skill_index: int, target_slot: int, player: int) -> void:
-	if not NetworkManager.is_authority() or player != game.current_player:
+	if match_paused or not NetworkManager.is_authority() or player != game.current_player:
 		return
 	var saved = game.current_player
 	game.current_player = player
@@ -1190,11 +1316,11 @@ func _host_apply_skill(slot_index: int, skill_index: int, target_slot: int, play
 	_check_charm_overflow()
 	_refresh_hand_ui()
 	update_entire_screen()
-	_broadcast_authority_state("activate skill")
+	_commit_authority_state("activate skill")
 
 
 func _host_apply_discard(location: String, index: int, player: int) -> void:
-	if not NetworkManager.is_authority() or player != game.current_player:
+	if match_paused or not NetworkManager.is_authority() or player != game.current_player:
 		return
 	var card: CardData = null
 	if location == "hand":
@@ -1213,11 +1339,11 @@ func _host_apply_discard(location: String, index: int, player: int) -> void:
 	game.current_player = saved
 	_refresh_hand_ui()
 	update_entire_screen()
-	_broadcast_authority_state("discard")
+	_commit_authority_state("discard")
 
 
 func _host_apply_move(source_slot: int, target_slot: int, player: int) -> void:
-	if not NetworkManager.is_authority() or player != game.current_player:
+	if match_paused or not NetworkManager.is_authority() or player != game.current_player:
 		return
 	var field = _field_for_player(player)
 	if source_slot < 0 or source_slot >= field.slots.size() or target_slot < 0 or target_slot >= field.slots.size():
@@ -1226,11 +1352,11 @@ func _host_apply_move(source_slot: int, target_slot: int, player: int) -> void:
 	field.slots[target_slot] = field.slots[source_slot]
 	field.slots[source_slot] = displaced
 	update_entire_screen()
-	_broadcast_authority_state("move")
+	_commit_authority_state("move")
 
 
 func _host_apply_end_turn(player: int) -> void:
-	if not NetworkManager.is_authority() or player != game.current_player:
+	if match_paused or not NetworkManager.is_authority() or player != game.current_player:
 		return
 	remote_arrow_source = -1
 	var result = game.end_player_turn()
@@ -1240,14 +1366,13 @@ func _host_apply_end_turn(player: int) -> void:
 	var game_over: String = game.check_game_over()
 	if game_over != "":
 		_show_result(game_over)
-		_broadcast_authority_state("game over")
+		_commit_authority_state("game over")
 		return
-	await get_tree().create_timer(0.3).timeout
 	game.start_new_turn()
 	_refresh_hand_ui()
 	end_turn_button.disabled = false
 	update_entire_screen()
-	_broadcast_authority_state("end turn")
+	_commit_authority_state("end turn")
 
 
 func _on_rpc_intent_summon(hand_index: int, slot_index: int, player: int):
@@ -1345,8 +1470,11 @@ func _build_turn_cover():
 func _toggle_turn_cover():
 	var overlay = $CanvasLayer.get_node_or_null("TurnOverlay")
 	if not turn_cover and not overlay: return
-	var show = NetworkManager.is_online and not is_my_turn()
-	if turn_cover: turn_cover.visible = show
+	var show = (NetworkManager.is_online or match_paused) and not is_my_turn()
+	if turn_cover:
+		turn_cover.visible = show
+		if turn_cover.get_child_count() > 0 and turn_cover.get_child(0) is Label:
+			turn_cover.get_child(0).text = Locale.t("battle.reconnecting") if match_paused else Locale.t("battle.waiting")
 	if overlay: overlay.visible = show
 
 

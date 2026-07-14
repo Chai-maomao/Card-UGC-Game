@@ -24,7 +24,7 @@ var game_port_end: int = DEFAULT_GAME_PORT_END
 var allow_card_art: bool = false
 
 var lobby_peer: ENetMultiplayerPeer
-var rooms: Dictionary = {}     # { "1234": {"port": int, "pid": int, "created_at": float, "players": int} }
+var rooms: Dictionary = {}     # { code: {port, pid, created_at, players, tokens} }
 var used_ports: Dictionary = {}  # { port: true } — ports currently allocated to a room
 var _reap_accum: float = 0.0
 
@@ -181,14 +181,25 @@ func _handle_lobby_request(sender_id: int, json_str: String) -> void:
 				NetworkManager.send_lobby_response(sender_id, JSON.stringify({"status": "no_ports"}))
 				print("[SERVER] Room '%s' creation failed (no free ports)" % code)
 			else:
-				var pid := _spawn_room(code, port)
+				var p1_token := _new_reconnect_token()
+				var p2_token := _new_reconnect_token()
+				var pid := _spawn_room(code, port, p1_token, p2_token)
 				if pid <= 0:
 					NetworkManager.send_lobby_response(sender_id, JSON.stringify({"status": "no_ports"}))
 					print("[SERVER] Room '%s' subprocess spawn failed" % code)
 				else:
 					used_ports[port] = true
-					rooms[code] = {"port": port, "pid": pid, "created_at": Time.get_ticks_msec() / 1000.0, "players": 1}
-					NetworkManager.send_lobby_response(sender_id, JSON.stringify({"status": "ok", "port": port, "player": 1, "card_art": allow_card_art}))
+					rooms[code] = {
+						"port": port,
+						"pid": pid,
+						"created_at": Time.get_ticks_msec() / 1000.0,
+						"players": 1,
+						"tokens": {1: p1_token, 2: p2_token},
+					}
+					NetworkManager.send_lobby_response(sender_id, JSON.stringify({
+						"status": "ok", "port": port, "player": 1,
+						"reconnect_token": p1_token, "card_art": allow_card_art,
+					}))
 					print("[SERVER] Room '%s' created on port %d (pid %d)" % [code, port, pid])
 
 	elif action == "join":
@@ -205,14 +216,43 @@ func _handle_lobby_request(sender_id: int, json_str: String) -> void:
 			print("[SERVER] Room '%s' is full (join rejected)" % code)
 		else:
 			room["players"] = int(room.get("players", 0)) + 1
-			NetworkManager.send_lobby_response(sender_id, JSON.stringify({"status": "ok", "port": room["port"], "player": 2, "card_art": allow_card_art}))
+			var tokens: Dictionary = room.get("tokens", {})
+			NetworkManager.send_lobby_response(sender_id, JSON.stringify({
+				"status": "ok", "port": room["port"], "player": 2,
+				"reconnect_token": str(tokens.get(2, "")), "card_art": allow_card_art,
+			}))
 			print("[SERVER] Peer %d joining room '%s' on port %d (%d/2)" % [sender_id, code, room["port"], room["players"]])
+
+	elif action == "reconnect":
+		var requested_player := int(data.get("player", 0))
+		var reconnect_token := str(data.get("reconnect_token", ""))
+		if not _is_valid_code(code) or requested_player not in [1, 2] or reconnect_token == "":
+			NetworkManager.send_lobby_response(sender_id, JSON.stringify({"status": "invalid_reconnect"}))
+			return
+		var room = rooms.get(code)
+		if room == null:
+			NetworkManager.send_lobby_response(sender_id, JSON.stringify({"status": "not_found"}))
+			return
+		if _is_port_free(int(room.get("port", 0))):
+			_free_room(code)
+			NetworkManager.send_lobby_response(sender_id, JSON.stringify({"status": "not_found"}))
+			return
+		var tokens: Dictionary = room.get("tokens", {})
+		if reconnect_token != str(tokens.get(requested_player, "")):
+			NetworkManager.send_lobby_response(sender_id, JSON.stringify({"status": "invalid_reconnect"}))
+			print("[SERVER] Invalid reconnect token for room '%s' P%d" % [code, requested_player])
+			return
+		NetworkManager.send_lobby_response(sender_id, JSON.stringify({
+			"status": "ok", "port": room["port"], "player": requested_player,
+			"reconnect_token": reconnect_token, "card_art": allow_card_art,
+		}))
+		print("[SERVER] Reconnect approved for room '%s' P%d" % [code, requested_player])
 
 	else:
 		print("[SERVER] Unknown action '%s' from peer %d (ignored)" % [action, sender_id])
 
 
-func _spawn_room(code: String, port: int) -> int:
+func _spawn_room(code: String, port: int, p1_token: String, p2_token: String) -> int:
 	# Launch a dedicated relay subprocess for this room. Uses the running
 	# executable so it works both in-editor (editor binary + res://) and
 	# when exported. Returns the OS pid, or -1 on failure.
@@ -220,9 +260,15 @@ func _spawn_room(code: String, port: int) -> int:
 	var args := PackedStringArray([
 		"--headless", "res://room_server.tscn", "--",
 		"--room-port=%d" % port, "--room-code=%s" % code,
+		"--p1-token=%s" % p1_token, "--p2-token=%s" % p2_token,
 	])
 	var pid := OS.create_process(exe, args)
 	return pid
+
+
+func _new_reconnect_token() -> String:
+	var crypto := Crypto.new()
+	return crypto.generate_random_bytes(24).hex_encode()
 
 
 func _is_valid_code(code: String) -> bool:
@@ -232,4 +278,3 @@ func _is_valid_code(code: String) -> bool:
 		if not ((c >= "0" and c <= "9") or (c >= "a" and c <= "z") or (c >= "A" and c <= "Z")):
 			return false
 	return true
-

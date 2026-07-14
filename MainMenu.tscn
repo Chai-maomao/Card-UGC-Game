@@ -23,6 +23,11 @@ grow_vertical = 2
 layout_mode = 2
 theme_override_constants/separation = 20
 
+[node name="ResumeBattleButton" type="Button" parent="CenterContainer/VBoxContainer"]
+visible = false
+layout_mode = 2
+text = "Resume Battle"
+
 [node name="StartBattleButton" type="Button" parent="CenterContainer/VBoxContainer" unique_id=165459522]
 layout_mode = 2
 text = "Start"

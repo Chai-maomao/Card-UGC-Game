@@ -148,6 +148,7 @@ func _ready():
 	NetworkManager.lobby_connected.connect(_on_lobby_connected)
 	NetworkManager.lobby_connection_failed.connect(_on_lobby_connection_failed)
 	NetworkManager.game_connection_failed.connect(_on_game_connection_failed)
+	NetworkManager.reconnect_failed.connect(_on_reconnect_failed)
 	EventBus.rpc_ready_received.connect(_on_rpc_ready)
 	NetworkManager.game_started.connect(_on_battle_start)
 	EventBus.rpc_card_art_received.connect(_on_card_art_received)
@@ -233,18 +234,24 @@ func _on_game_connection_failed():
 	_reset_lobby_buttons()
 
 
+func _on_reconnect_failed(_reason: String) -> void:
+	NetworkManager.clear_room_session()
+	_on_game_connection_failed()
+
+
 func _on_lobby_response_create(data: Dictionary):
 	var status: String = data.get("status", "")
 	if status == "ok":
 		var port: int = data.get("port", 0)
 		var player: int = data.get("player", 1)
+		var token := str(data.get("reconnect_token", ""))
 		_my_player = player
 		NetworkManager.server_allows_card_art = bool(data.get("card_art", false))
 		var server_ip: String = server_input.text.strip_edges()
 		if server_ip == "": server_ip = "127.0.0.1"
 		status_label.text = Locale.t("lobby.room_created", [_pending_room_code])
 		await get_tree().create_timer(0.3).timeout
-		var err = NetworkManager.connect_to_game_room(server_ip, port, player)
+		var err = NetworkManager.connect_to_game_room(server_ip, port, player, _pending_room_code, token)
 		if err != OK:
 			status_label.text = Locale.t("lobby.failed_join_room", [err])
 			_reset_lobby_buttons()
@@ -295,13 +302,14 @@ func _on_lobby_response_join(data: Dictionary):
 	if status == "ok":
 		var port: int = data.get("port", 0)
 		var player: int = data.get("player", 2)
+		var token := str(data.get("reconnect_token", ""))
 		_my_player = player
 		NetworkManager.server_allows_card_art = bool(data.get("card_art", false))
 		var server_ip: String = server_input.text.strip_edges()
 		if server_ip == "": server_ip = "127.0.0.1"
 		status_label.text = Locale.t("lobby.joined_room", [_pending_room_code])
 		await get_tree().create_timer(0.3).timeout
-		var err = NetworkManager.connect_to_game_room(server_ip, port, player)
+		var err = NetworkManager.connect_to_game_room(server_ip, port, player, _pending_room_code, token)
 		if err != OK:
 			status_label.text = Locale.t("lobby.failed_join_room", [err])
 			_reset_lobby_buttons()
@@ -390,6 +398,7 @@ func _show_waiting_room():
 	exit_btn.add_theme_font_size_override("font_size", max(10, int(14 * s)))
 	exit_btn.pressed.connect(func():
 		NetworkManager.close_connection()
+		NetworkManager.clear_room_session()
 		get_tree().change_scene_to_file("res://MainMenu.tscn")
 	)
 	waiting_ui.add_child(exit_btn)
@@ -683,9 +692,11 @@ func _start_battle():
 
 
 func _on_battle_start():
+	NetworkManager.mark_room_match_started()
 	NetworkManager.get_tree().change_scene_to_file("res://Main.tscn")
 
 
 func _on_back_pressed():
 	NetworkManager.close_connection()
+	NetworkManager.clear_room_session()
 	get_tree().change_scene_to_file("res://MainMenu.tscn")

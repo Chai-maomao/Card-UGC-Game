@@ -12,6 +12,7 @@ var first_switch: bool = true
 var shared_deck: Array = []
 var shared_discard: Array = []
 var game_rng := RandomNumberGenerator.new()
+var state_revision: int = 0
 
 
 func init_game(draw_cb: Callable) -> void:
@@ -41,6 +42,9 @@ func export_initial_state() -> Dictionary:
 		"turn_number": turn_number,
 		"is_player_turn": is_player_turn,
 		"first_switch": first_switch,
+		"state_revision": state_revision,
+		"rng_seed": game_rng.seed,
+		"rng_state": game_rng.state,
 	}
 
 
@@ -55,6 +59,9 @@ func apply_initial_state(state: Dictionary) -> void:
 	turn_number = int(state.get("turn_number", 1))
 	is_player_turn = bool(state.get("is_player_turn", true))
 	first_switch = bool(state.get("first_switch", true))
+	state_revision = int(state.get("state_revision", state_revision))
+	game_rng.seed = int(state.get("rng_seed", game_rng.seed))
+	game_rng.state = int(state.get("rng_state", game_rng.state))
 
 
 func _serialize_field(field: BattleField) -> Dictionary:
