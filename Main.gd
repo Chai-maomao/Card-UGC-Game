@@ -51,13 +51,6 @@ var show_enemy_status: bool = false
 var practice_ai_running: bool = false
 var battle_finished: bool = false
 var _turn_ending: bool = false  # 防止短时间内重复点击结束按钮
-# Base card UI elements — one per side, card-sized, placed at right of each field
-var _player_base_card: Panel
-var _player_base_hp_label: Label
-var _player_base_mana_label: Label
-var _enemy_base_card: Panel
-var _enemy_base_hp_label: Label
-var _enemy_base_mana_label: Label
 var feedback_targets: Dictionary = {}
 var _pending_feedback_events: Array = []
 var _action_broadcast: Dictionary = {}
@@ -130,17 +123,6 @@ func _apply_responsive_layout() -> void:
 	# Middle info bar (mana label + buttons)
 	if mana_label:
 		mana_label.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	# Base cards (one per side, card-sized)
-	for base in [_player_base_card, _enemy_base_card]:
-		if base:
-			base.custom_minimum_size = BASE_CARD_SIZE * s
-			for child in base.get_node("Layout").get_children():
-				if child is Label:
-					child.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-				elif child is HBoxContainer:
-					for sub in child.get_children():
-						if sub is Label:
-							sub.add_theme_font_size_override("font_size", max(10, int(14 * s)))
 	if status_toggle_button:
 		status_toggle_button.add_theme_font_size_override("font_size", max(10, int(14 * s)))
 		status_toggle_button.custom_minimum_size = Vector2(120 * s, 0)
@@ -377,7 +359,6 @@ func _ready():
 	_build_turn_cover()
 	_build_pile_buttons()
 	_apply_theme()
-	_create_base_card()
 	if $CanvasLayer/MainBackground:
 		$CanvasLayer/MainBackground.mouse_filter = Control.MOUSE_FILTER_PASS
 		$CanvasLayer/MainBackground.gui_input.connect(_on_battle_background_gui_input)
@@ -2792,23 +2773,23 @@ func _on_result_back_menu_pressed() -> void:
 func update_entire_screen():
 	if battle_finished:
 		return
-	
-	# Update base cards (one per side, showing each player's info)
-	if _player_base_card:
-		var pf = game.player_field if my_player == 1 else game.player2_field
-		_player_base_hp_label.text = "%d" % pf.player_hp
-		_player_base_mana_label.text = "%d/%d" % [pf.get_total_mana(), pf.max_mana]
-		var p_title := _player_base_card.get_node_or_null("Layout/Title")
-		if p_title: p_title.text = Locale.t("battle.base") if my_player == 1 else Locale.t("battle.base_p2")
-	if _enemy_base_card:
-		var oppf = game.player2_field if my_player == 1 else game.player_field
-		_enemy_base_hp_label.text = "%d" % oppf.player_hp
-		_enemy_base_mana_label.text = "%d/%d" % [oppf.get_total_mana(), oppf.max_mana]
-		var e_title := _enemy_base_card.get_node_or_null("Layout/Title")
-		if e_title: e_title.text = Locale.t("battle.base") if my_player == 2 else Locale.t("battle.base_p2")
-	
 	if mana_label:
-		mana_label.text = "" if game.is_player_turn else Locale.t("battle.switching")
+		if game.is_player_turn:
+			var viewed_player := _view_player()
+			if NetworkManager.is_online and show_enemy_status:
+				viewed_player = _opponent_player()
+			var f = _field_for_player(viewed_player)
+			var hand_size := _hand_for_player(viewed_player).size()
+			var view_text := Locale.t("battle.view_turn", [game.current_player])
+			if NetworkManager.is_online:
+				var who := Locale.t("battle.enemy") if show_enemy_status else Locale.t("battle.you")
+				view_text = Locale.t("battle.viewing", [viewed_player, who])
+			mana_label.text = Locale.t("battle.status_line", [
+				view_text, f.get_total_mana(), f.max_mana,
+				f.player_hp, hand_size, 6, game.turn_number
+			])
+		else:
+			mana_label.text = Locale.t("battle.switching")
 	if status_toggle_button:
 		status_toggle_button.visible = NetworkManager.is_online
 		status_toggle_button.text = Locale.t("battle.enemy_info") if not show_enemy_status else Locale.t("battle.my_info")
@@ -3300,100 +3281,6 @@ func _update_remote_splash(player: int, slot_index: int):
 	var card = field.slots[slot_index]
 	if card != null:
 		_show_splash(card)
-
-func _create_base_card():
-	# --- Player base card: rightmost in hand area, card-sized ---
-	var hand_area := $CanvasLayer/MainBackground/MainLayout/HandArea
-	var hand_scroll := $CanvasLayer/MainBackground/MainLayout/HandArea/HandScroll
-	
-	# Wrap HandScroll + base card in an HBoxContainer
-	var hand_row := HBoxContainer.new()
-	hand_row.name = "HandRow"
-	hand_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	hand_row.size_flags_horizontal = 3
-	hand_row.size_flags_vertical = 3
-	hand_row.add_theme_constant_override("separation", 12)
-	hand_area.remove_child(hand_scroll)
-	hand_area.add_child(hand_row)
-	hand_row.add_child(hand_scroll)
-	
-	_player_base_card = _make_base_card_panel("PlayerBaseCard")
-	hand_row.add_child(_player_base_card)
-	_player_base_hp_label = _player_base_card.get_node("Layout/HPRow/HPLabel")
-	_player_base_mana_label = _player_base_card.get_node("Layout/ManaRow/ManaLabel")
-	
-	# --- Enemy base card: rightmost in EnemySide ---
-	_enemy_base_card = _make_base_card_panel("EnemyBaseCard")
-	enemy_side_ui.add_child(_enemy_base_card)
-	_enemy_base_hp_label = _enemy_base_card.get_node("Layout/HPRow/HPLabel")
-	_enemy_base_mana_label = _enemy_base_card.get_node("Layout/ManaRow/ManaLabel")
-
-func _make_base_card_panel(card_name: String) -> Panel:
-	var panel := Panel.new()
-	panel.name = card_name
-	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var bg_style := StyleBoxFlat.new()
-	bg_style.bg_color = Color(0.06, 0.08, 0.14, 0.9)
-	bg_style.corner_radius_top_left = 8
-	bg_style.corner_radius_top_right = 8
-	bg_style.corner_radius_bottom_left = 8
-	bg_style.corner_radius_bottom_right = 8
-	bg_style.border_width_left = 2
-	bg_style.border_width_right = 2
-	bg_style.border_width_top = 2
-	bg_style.border_width_bottom = 2
-	bg_style.border_color = Color(0.6, 0.5, 0.3, 0.7)
-	panel.add_theme_stylebox_override("panel", bg_style)
-	
-	var vbox := VBoxContainer.new()
-	vbox.name = "Layout"
-	vbox.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	vbox.add_theme_constant_override("separation", 4)
-	panel.add_child(vbox)
-	
-	# Title
-	var title := Label.new()
-	title.name = "Title"
-	title.text = Locale.t("battle.base")
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 14)
-	title.add_theme_color_override("font_color", Color(0.9, 0.85, 0.6))
-	vbox.add_child(title)
-	
-	# HP row
-	var hp_hbox := HBoxContainer.new()
-	hp_hbox.name = "HPRow"
-	hp_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	hp_hbox.add_theme_constant_override("separation", 4)
-	var hp_icon := Label.new()
-	hp_icon.text = "\u2764"
-	hp_icon.add_theme_font_size_override("font_size", 16)
-	hp_hbox.add_child(hp_icon)
-	var hp_label := Label.new()
-	hp_label.name = "HPLabel"
-	hp_label.add_theme_font_size_override("font_size", 16)
-	hp_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.3))
-	hp_hbox.add_child(hp_label)
-	vbox.add_child(hp_hbox)
-	
-	# Mana row
-	var mana_hbox := HBoxContainer.new()
-	mana_hbox.name = "ManaRow"
-	mana_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	mana_hbox.add_theme_constant_override("separation", 4)
-	var mana_icon := Label.new()
-	mana_icon.text = "\u2726"
-	mana_icon.add_theme_font_size_override("font_size", 16)
-	mana_hbox.add_child(mana_icon)
-	var mana_label_node := Label.new()
-	mana_label_node.name = "ManaLabel"
-	mana_label_node.add_theme_font_size_override("font_size", 16)
-	mana_label_node.add_theme_color_override("font_color", Color(0.3, 0.5, 1.0))
-	mana_hbox.add_child(mana_label_node)
-	vbox.add_child(mana_hbox)
-	
-	return panel
 
 func _build_turn_cover():
 	turn_cover = ColorRect.new()
