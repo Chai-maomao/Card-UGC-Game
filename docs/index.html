@@ -146,8 +146,8 @@
   .hero { padding: 120px 0 100px; text-align: center; position: relative; overflow: hidden; }
   .hero-ribbons {
     position: absolute;
-    top: -80px; right: -200px;
-    width: 1100px; height: 100%;
+    top: -40px; right: -180px;
+    width: 900px; height: 100%;
     pointer-events: none;
     z-index: 0;
   }
@@ -390,59 +390,152 @@
 
 <!-- HERO -->
 <section class="hero" id="top">
-  <!-- Decorative gradient ribbons (Stripe-inspired) -->
-  <svg class="hero-ribbons" viewBox="0 0 1440 800" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
+  <!-- Stripe-inspired gradient silk ribbons: fine pinstripes fanning toward a focal point -->
+  <svg class="hero-ribbons" viewBox="0 0 1200 800" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice" aria-hidden="true">
     <defs>
-      <!-- ribbon 1: pink -> orange -->
-      <linearGradient id="ribbon-pink" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0%" stop-color="#ff7eb6" stop-opacity="0.0"/>
-        <stop offset="20%" stop-color="#ff7eb6" stop-opacity="0.55"/>
-        <stop offset="50%" stop-color="#ff8a5b" stop-opacity="0.7"/>
-        <stop offset="80%" stop-color="#ffb14a" stop-opacity="0.55"/>
-        <stop offset="100%" stop-color="#ffb14a" stop-opacity="0.0"/>
+      <!-- Color stops for the silk palette (pink / coral / orange / amber / purple / blue) -->
+      <linearGradient id="silk-1" x1="0" y1="0" x2="1" y2="0.6">
+        <stop offset="0%"  stop-color="#ff7eb6"/>
+        <stop offset="50%" stop-color="#ff8a5b"/>
+        <stop offset="100%" stop-color="#ffb14a"/>
       </linearGradient>
-      <!-- ribbon 2: orange -> pink -->
-      <linearGradient id="ribbon-orange" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0%" stop-color="#ffa45a" stop-opacity="0.0"/>
-        <stop offset="30%" stop-color="#ffa45a" stop-opacity="0.6"/>
-        <stop offset="60%" stop-color="#ff6b8a" stop-opacity="0.6"/>
-        <stop offset="100%" stop-color="#ff6b8a" stop-opacity="0.0"/>
+      <linearGradient id="silk-2" x1="0" y1="0" x2="1" y2="0.6">
+        <stop offset="0%"  stop-color="#ff6b8a"/>
+        <stop offset="50%" stop-color="#ff8a5b"/>
+        <stop offset="100%" stop-color="#ffa45a"/>
       </linearGradient>
-      <!-- ribbon 3: purple -> blue (thin highlight) -->
-      <linearGradient id="ribbon-purple" x1="0" y1="0" x2="1" y2="1">
-        <stop offset="0%" stop-color="#a07cff" stop-opacity="0.0"/>
-        <stop offset="40%" stop-color="#a07cff" stop-opacity="0.5"/>
-        <stop offset="70%" stop-color="#6ba8ff" stop-opacity="0.45"/>
-        <stop offset="100%" stop-color="#6ba8ff" stop-opacity="0.0"/>
+      <linearGradient id="silk-3" x1="0" y1="0" x2="1" y2="0.6">
+        <stop offset="0%"  stop-color="#a07cff"/>
+        <stop offset="50%" stop-color="#c478ff"/>
+        <stop offset="100%" stop-color="#ff6b8a"/>
       </linearGradient>
-      <!-- soft blur for the whole group -->
-      <filter id="ribbon-blur" x="-10%" y="-10%" width="120%" height="120%">
-        <feGaussianBlur stdDeviation="14"/>
+      <linearGradient id="silk-4" x1="0" y1="0" x2="1" y2="0.6">
+        <stop offset="0%"  stop-color="#6ba8ff"/>
+        <stop offset="50%" stop-color="#a07cff"/>
+        <stop offset="100%" stop-color="#c478ff"/>
+      </linearGradient>
+      <linearGradient id="silk-5" x1="0" y1="0" x2="1" y2="0.6">
+        <stop offset="0%"  stop-color="#ff5c8a"/>
+        <stop offset="50%" stop-color="#ff8a5b"/>
+        <stop offset="100%" stop-color="#ffb14a"/>
+      </linearGradient>
+      <!-- Per-strand length gradient: fade in then out along its path -->
+      <linearGradient id="fade-along" x1="0" y1="0" x2="1" y2="0">
+        <stop offset="0%"   stop-color="white" stop-opacity="0"/>
+        <stop offset="15%"  stop-color="white" stop-opacity="0.55"/>
+        <stop offset="55%"  stop-color="white" stop-opacity="0.85"/>
+        <stop offset="100%" stop-color="white" stop-opacity="0"/>
+      </linearGradient>
+      <!-- Soft blur to melt the strands into a silk-like glow -->
+      <filter id="silk-soft" x="-10%" y="-10%" width="120%" height="120%">
+        <feGaussianBlur stdDeviation="2.5"/>
+      </filter>
+      <filter id="silk-far" x="-10%" y="-10%" width="120%" height="120%">
+        <feGaussianBlur stdDeviation="5"/>
       </filter>
     </defs>
-    <g filter="url(#ribbon-blur)">
-      <!-- main sweeping curve from top-right -->
-      <path d="M 1440 -50
-               C 1200 80, 1100 240, 950 360
-               C 820 460, 720 540, 640 700
-               L 480 800
-               L 1440 800 Z"
-            fill="url(#ribbon-pink)"/>
-      <!-- second sweep, slightly offset -->
-      <path d="M 1440 60
-               C 1280 180, 1180 320, 1040 440
-               C 920 540, 820 620, 760 800
-               L 600 800
-               L 1440 800 Z"
-            fill="url(#ribbon-orange)"/>
-      <!-- thin highlight band -->
-      <path d="M 1440 0
-               C 1320 140, 1240 260, 1140 380
-               C 1080 460, 1020 540, 1000 700
-               L 1100 800
-               L 1440 800 Z"
-            fill="url(#ribbon-purple)" opacity="0.6"/>
+    <!-- The strands all emanate from a focal point near the top-right and fan out
+         toward the lower-left. Each <line> uses fade-along on its own gradient
+         (lineGradientUnits=userSpaceOnUse so the fade is along the line axis). -->
+    <g filter="url(#silk-soft)">
+      <!-- Strands use very thin strokes and individual gradients for color variation.
+           The "transform rotate" pivots around a virtual focal point off-screen,
+           giving the impression of light streaming from a point. -->
+      <g transform="rotate(-32 1200 200)">
+        <!-- Each row: many short lines stacked horizontally = fan of strands.
+             y values are small offsets that, after rotation, become a fan. -->
+        <g stroke="url(#silk-1)" fill="none" stroke-width="1.4" stroke-linecap="round" opacity="0.85">
+          <line x1="0" y1="-220" x2="1200" y2="-220"/>
+          <line x1="0" y1="-200" x2="1200" y2="-200"/>
+          <line x1="0" y1="-180" x2="1200" y2="-180"/>
+          <line x1="0" y1="-160" x2="1200" y2="-160"/>
+          <line x1="0" y1="-140" x2="1200" y2="-140"/>
+          <line x1="0" y1="-120" x2="1200" y2="-120"/>
+          <line x1="0" y1="-100" x2="1200" y2="-100"/>
+          <line x1="0" y1="-80"  x2="1200" y2="-80"/>
+          <line x1="0" y1="-60"  x2="1200" y2="-60"/>
+          <line x1="0" y1="-40"  x2="1200" y2="-40"/>
+          <line x1="0" y1="-20"  x2="1200" y2="-20"/>
+          <line x1="0" y1="0"    x2="1200" y2="0"/>
+          <line x1="0" y1="20"   x2="1200" y2="20"/>
+          <line x1="0" y1="40"   x2="1200" y2="40"/>
+          <line x1="0" y1="60"   x2="1200" y2="60"/>
+          <line x1="0" y1="80"   x2="1200" y2="80"/>
+          <line x1="0" y1="100"  x2="1200" y2="100"/>
+          <line x1="0" y1="120"  x2="1200" y2="120"/>
+          <line x1="0" y1="140"  x2="1200" y2="140"/>
+          <line x1="0" y1="160"  x2="1200" y2="160"/>
+          <line x1="0" y1="180"  x2="1200" y2="180"/>
+          <line x1="0" y1="200"  x2="1200" y2="200"/>
+        </g>
+      </g>
     </g>
+    <g filter="url(#silk-soft)">
+      <g transform="rotate(-32 1200 200)">
+        <g stroke="url(#silk-2)" fill="none" stroke-width="1.2" stroke-linecap="round" opacity="0.7">
+          <line x1="-20" y1="-160" x2="1220" y2="-160"/>
+          <line x1="-20" y1="-130" x2="1220" y2="-130"/>
+          <line x1="-20" y1="-100" x2="1220" y2="-100"/>
+          <line x1="-20" y1="-70"  x2="1220" y2="-70"/>
+          <line x1="-20" y1="-40"  x2="1220" y2="-40"/>
+          <line x1="-20" y1="-10"  x2="1220" y2="-10"/>
+          <line x1="-20" y1="20"   x2="1220" y2="20"/>
+          <line x1="-20" y1="50"   x2="1220" y2="50"/>
+          <line x1="-20" y1="80"   x2="1220" y2="80"/>
+          <line x1="-20" y1="110"  x2="1220" y2="110"/>
+          <line x1="-20" y1="140"  x2="1220" y2="140"/>
+        </g>
+      </g>
+    </g>
+    <g filter="url(#silk-soft)">
+      <g transform="rotate(-32 1200 200)">
+        <g stroke="url(#silk-3)" fill="none" stroke-width="1.0" stroke-linecap="round" opacity="0.6">
+          <line x1="40" y1="-240" x2="1160" y2="-240"/>
+          <line x1="40" y1="-200" x2="1160" y2="-200"/>
+          <line x1="40" y1="-160" x2="1160" y2="-160"/>
+          <line x1="40" y1="-120" x2="1160" y2="-120"/>
+          <line x1="40" y1="-80"  x2="1160" y2="-80"/>
+          <line x1="40" y1="-40"  x2="1160" y2="-40"/>
+          <line x1="40" y1="0"    x2="1160" y2="0"/>
+          <line x1="40" y1="40"   x2="1160" y2="40"/>
+          <line x1="40" y1="80"   x2="1160" y2="80"/>
+          <line x1="40" y1="120"  x2="1160" y2="120"/>
+          <line x1="40" y1="160"  x2="1160" y2="160"/>
+        </g>
+      </g>
+    </g>
+    <g filter="url(#silk-far)">
+      <g transform="rotate(-32 1200 200)">
+        <g stroke="url(#silk-4)" fill="none" stroke-width="2.0" stroke-linecap="round" opacity="0.45">
+          <line x1="120" y1="-260" x2="1080" y2="-260"/>
+          <line x1="120" y1="-220" x2="1080" y2="-220"/>
+          <line x1="120" y1="-180" x2="1080" y2="-180"/>
+          <line x1="120" y1="-140" x2="1080" y2="-140"/>
+          <line x1="120" y1="-100" x2="1080" y2="-100"/>
+          <line x1="120" y1="-60"  x2="1080" y2="-60"/>
+          <line x1="120" y1="-20"  x2="1080" y2="-20"/>
+          <line x1="120" y1="20"   x2="1080" y2="20"/>
+          <line x1="120" y1="60"   x2="1080" y2="60"/>
+          <line x1="120" y1="100"  x2="1080" y2="100"/>
+          <line x1="120" y1="140"  x2="1080" y2="140"/>
+        </g>
+      </g>
+    </g>
+    <g filter="url(#silk-soft)">
+      <g transform="rotate(-32 1200 200)">
+        <g stroke="url(#silk-5)" fill="none" stroke-width="0.8" stroke-linecap="round" opacity="0.75">
+          <line x1="-50" y1="-90"  x2="1250" y2="-90"/>
+          <line x1="-50" y1="-50"  x2="1250" y2="-50"/>
+          <line x1="-50" y1="-10"  x2="1250" y2="-10"/>
+          <line x1="-50" y1="30"   x2="1250" y2="30"/>
+          <line x1="-50" y1="70"   x2="1250" y2="70"/>
+          <line x1="-50" y1="110"  x2="1250" y2="110"/>
+        </g>
+      </g>
+    </g>
+    <!-- Focal-point glow at the convergence -->
+    <ellipse cx="1100" cy="180" rx="220" ry="80" fill="url(#silk-1)" opacity="0.5" filter="url(#silk-far)" transform="rotate(-32 1100 180)"/>
+    <ellipse cx="1100" cy="180" rx="120" ry="40" fill="#fff" opacity="0.35" filter="url(#silk-far)" transform="rotate(-32 1100 180)"/>
   </svg>
   <div class="wrap">
     <div class="hero-inner">
@@ -544,36 +637,33 @@
           <rect width="200" height="280" fill="url(#g-war)"/>
           <rect width="200" height="280" fill="url(#g-war-glow)"/>
           <rect x="14" y="14" width="172" height="252" rx="10" ry="10" fill="none" stroke="rgba(255,107,74,0.3)" stroke-width="1"/>
-          <!-- crossed swords -->
+          <!-- crossed swords (point-down, within the r=44 circle) -->
           <g transform="translate(100 140)">
             <circle r="44" fill="rgba(255,107,74,0.08)" stroke="rgba(255,107,74,0.3)" stroke-width="1.5"/>
-            <g transform="rotate(-30)">
-              <!-- pommel -->
-              <circle cx="0" cy="-44" r="3" fill="#c4a060"/>
+            <g transform="rotate(-35)">
+              <!-- pommel (top) -->
+              <circle cx="0" cy="-34" r="2.4" fill="#c4a060"/>
               <!-- grip -->
-              <rect x="-3" y="-40" width="6" height="14" fill="#5a3a20" stroke="#3a2410" stroke-width="0.5"/>
-              <line x1="-3" y1="-36" x2="3" y2="-36" stroke="#3a2410" stroke-width="0.4"/>
-              <line x1="-3" y1="-32" x2="3" y2="-32" stroke="#3a2410" stroke-width="0.4"/>
+              <rect x="-2.4" y="-31" width="4.8" height="10" fill="#5a3a20" stroke="#3a2410" stroke-width="0.4"/>
+              <line x1="-2.4" y1="-28" x2="2.4" y2="-28" stroke="#3a2410" stroke-width="0.35"/>
+              <line x1="-2.4" y1="-25" x2="2.4" y2="-25" stroke="#3a2410" stroke-width="0.35"/>
               <!-- crossguard -->
-              <rect x="-12" y="-26" width="24" height="6" fill="#c4a060"/>
-              <rect x="-3" y="-26" width="6" height="6" fill="#8a7040"/>
-              <!-- blade -->
-              <rect x="-3" y="-20" width="6" height="36" fill="url(#g-war-sword)"/>
-              <rect x="-3" y="-22" width="6" height="3" fill="#c4a060"/>
+              <rect x="-10" y="-21" width="20" height="4.5" fill="#c4a060"/>
+              <rect x="-2.4" y="-21" width="4.8" height="4.5" fill="#8a7040"/>
+              <!-- blade (point-down) -->
+              <rect x="-2.4" y="-16.5" width="4.8" height="28" fill="url(#g-war-sword)"/>
+              <!-- tip -->
+              <polygon points="-2.4,11.5 2.4,11.5 0,17" fill="url(#g-war-sword)"/>
             </g>
-            <g transform="rotate(30)">
-              <!-- pommel -->
-              <circle cx="0" cy="-44" r="3" fill="#c4a060"/>
-              <!-- grip -->
-              <rect x="-3" y="-40" width="6" height="14" fill="#5a3a20" stroke="#3a2410" stroke-width="0.5"/>
-              <line x1="-3" y1="-36" x2="3" y2="-36" stroke="#3a2410" stroke-width="0.4"/>
-              <line x1="-3" y1="-32" x2="3" y2="-32" stroke="#3a2410" stroke-width="0.4"/>
-              <!-- crossguard -->
-              <rect x="-12" y="-26" width="24" height="6" fill="#c4a060"/>
-              <rect x="-3" y="-26" width="6" height="6" fill="#8a7040"/>
-              <!-- blade -->
-              <rect x="-3" y="-20" width="6" height="36" fill="url(#g-war-sword)"/>
-              <rect x="-3" y="-22" width="6" height="3" fill="#c4a060"/>
+            <g transform="rotate(35)">
+              <circle cx="0" cy="-34" r="2.4" fill="#c4a060"/>
+              <rect x="-2.4" y="-31" width="4.8" height="10" fill="#5a3a20" stroke="#3a2410" stroke-width="0.4"/>
+              <line x1="-2.4" y1="-28" x2="2.4" y2="-28" stroke="#3a2410" stroke-width="0.35"/>
+              <line x1="-2.4" y1="-25" x2="2.4" y2="-25" stroke="#3a2410" stroke-width="0.35"/>
+              <rect x="-10" y="-21" width="20" height="4.5" fill="#c4a060"/>
+              <rect x="-2.4" y="-21" width="4.8" height="4.5" fill="#8a7040"/>
+              <rect x="-2.4" y="-16.5" width="4.8" height="28" fill="url(#g-war-sword)"/>
+              <polygon points="-2.4,11.5 2.4,11.5 0,17" fill="url(#g-war-sword)"/>
             </g>
           </g>
           <circle cx="28" cy="28" r="13" fill="#240a0a" stroke="#ff6b4a" stroke-width="1.5"/>
