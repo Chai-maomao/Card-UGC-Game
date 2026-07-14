@@ -160,7 +160,10 @@ func _start_battle_with_cards(cards: Array) -> void:
 
 
 func _on_back_pressed() -> void:
-	get_tree().change_scene_to_file("res://MainMenu.tscn")
+	if PlayerData.battle_select_mode == "online":
+		get_tree().change_scene_to_file("res://MultiplayerMenu.tscn")
+	else:
+		get_tree().change_scene_to_file("res://MainMenu.tscn")
 
 
 func _show_battle_config_popup(cards: Array) -> void:

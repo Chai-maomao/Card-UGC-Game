@@ -477,7 +477,7 @@ func _show_waiting_room(initial_message: String = ""):
 	_theme_waiting_button(exit_btn, "secondary")
 	exit_btn.pressed.connect(func():
 		NetworkManager.close_connection()
-		get_tree().change_scene_to_file("res://MainMenu.tscn")
+		get_tree().change_scene_to_file("res://MultiplayerMenu.tscn")
 	)
 	waiting_ui.add_child(exit_btn)
 
@@ -761,4 +761,4 @@ func _on_battle_start():
 
 func _on_back_pressed():
 	NetworkManager.close_connection()
-	get_tree().change_scene_to_file("res://MainMenu.tscn")
+	get_tree().change_scene_to_file("res://MultiplayerMenu.tscn")
