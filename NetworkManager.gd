@@ -310,16 +310,6 @@ func connect_to_game_room(address: String, port: int, assigned_player: int) -> i
 	return OK
 
 
-func can_reconnect_to_last_game_room() -> bool:
-	return is_dedicated_server and is_valid_address(last_game_address) and last_game_port > 0 and last_game_player_number > 0
-
-
-func reconnect_to_last_game_room() -> int:
-	if not can_reconnect_to_last_game_room():
-		return ERR_UNAVAILABLE
-	return connect_to_game_room(last_game_address, last_game_port, last_game_player_number)
-
-
 # ============================================
 # Peer events
 # ============================================
@@ -354,14 +344,10 @@ func _on_peer_disconnected(id: int):
 const _HEARTBEAT_MAGIC := "HB"
 
 func _send_heartbeat() -> void:
-	# In relay mode broadcast to all; in direct P2P target the opponent.
-	var target_ids: Array[int] = []
-	if is_dedicated_server:
-		# broadcast — server will fan out to the other client
-		pass
-	else:
-		target_ids.append(opponent_peer_id)
-	multiplayer.send_bytes(_HEARTBEAT_MAGIC.to_ascii_buffer(), target_ids, MultiplayerPeer.TRANSFER_MODE_UNRELIABLE)
+	# send_bytes peer_id: 0 = broadcast to all, >0 = specific peer.
+	# Relay mode broadcasts (server fans out); direct P2P targets the opponent.
+	var target_peer: int = 0 if is_dedicated_server else opponent_peer_id
+	multiplayer.send_bytes(_HEARTBEAT_MAGIC.to_ascii_buffer(), target_peer, MultiplayerPeer.TRANSFER_MODE_UNRELIABLE)
 
 
 func _on_peer_packet(peer_id: int, data: PackedByteArray) -> void:

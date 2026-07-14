@@ -348,7 +348,6 @@ func _card_identity_key(card: CardData) -> String:
 # ============================================
 
 var _disconnect_overlay: Control
-var _disconnect_reconnect_btn: Button
 var _disconnect_back_btn: Button
 
 
@@ -1399,6 +1398,7 @@ func _on_skill_activated(slot_index: int, skill_index: int):
 		return
 	if is_activate and card.has_attacked:
 		return
+	cancel_attack()
 	if _skill_needs_targeting(skill):
 		if game.turn_number <= 1 and _manual_target_is_enemy(skill):
 			print("Turn 1: enemy-targeting skills are not allowed!")
@@ -1463,6 +1463,7 @@ func _on_attack_requested(slot_index: int):
 		return
 	if field.slots[slot_index].is_silenced() and not field.slots[slot_index].attack_ignores_silence:
 		return
+	cancel_attack()
 	current_attacker_idx = slot_index
 	if attack_arrow:
 		attack_arrow.visible = true
@@ -2211,18 +2212,6 @@ func _on_opponent_disconnected() -> void:
 	_show_disconnect_result_page()
 
 
-func _on_opponent_reconnected() -> void:
-	if not _disconnect_overlay:
-		return
-	_disconnect_overlay.queue_free()
-	_disconnect_overlay = null
-	_disconnect_reconnect_btn = null
-	_disconnect_back_btn = null
-	battle_finished = false
-	my_player = NetworkManager.player_number
-	update_entire_screen()
-
-
 # ============================================
 # Skill interaction handlers (view discard/deck, zero cost)
 # ============================================
@@ -2547,15 +2536,6 @@ func _show_disconnect_result_page() -> void:
 	button_row.add_theme_constant_override("separation", 18)
 	box.add_child(button_row)
 
-	var reconnect_btn := Button.new()
-	reconnect_btn.text = Locale.t("result.reconnect")
-	reconnect_btn.custom_minimum_size = Vector2(150, 48)
-	reconnect_btn.disabled = not NetworkManager.can_reconnect_to_last_game_room()
-	UITheme.apply_button(reconnect_btn, "primary")
-	reconnect_btn.pressed.connect(_on_disconnect_reconnect_pressed)
-	button_row.add_child(reconnect_btn)
-	_disconnect_reconnect_btn = reconnect_btn
-
 	var multiplayer_btn := Button.new()
 	multiplayer_btn.text = Locale.t("result.back_multiplayer")
 	multiplayer_btn.custom_minimum_size = Vector2(170, 48)
@@ -2577,38 +2557,6 @@ func _show_disconnect_result_page() -> void:
 	twn.set_parallel(true)
 	twn.tween_property(layer, "modulate:a", 1.0, 0.20)
 	twn.tween_property(panel, "scale", Vector2.ONE, 0.24).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-
-
-func _on_disconnect_reconnect_pressed() -> void:
-	var err := NetworkManager.reconnect_to_last_game_room()
-	if err != OK:
-		if _disconnect_overlay:
-			var body := _disconnect_overlay.get_node_or_null("CenterContainer/PanelContainer/MarginContainer/VBoxContainer/BodyLabel")
-			if body:
-				body.text = Locale.t("result.reconnect_failed")
-			if _disconnect_reconnect_btn:
-				_disconnect_reconnect_btn.disabled = true
-		return
-	if _disconnect_reconnect_btn:
-		_disconnect_reconnect_btn.disabled = true
-	if _disconnect_back_btn:
-		_disconnect_back_btn.disabled = true
-	if _disconnect_overlay:
-		var body := _disconnect_overlay.get_node_or_null("CenterContainer/PanelContainer/MarginContainer/VBoxContainer/BodyLabel")
-		if body:
-			body.text = Locale.t("result.reconnecting")
-
-
-func _on_reconnect_failed() -> void:
-	if not _disconnect_overlay:
-		return
-	if _disconnect_reconnect_btn:
-		_disconnect_reconnect_btn.disabled = false
-	if _disconnect_back_btn:
-		_disconnect_back_btn.disabled = false
-	var body := _disconnect_overlay.get_node_or_null("CenterContainer/PanelContainer/MarginContainer/VBoxContainer/BodyLabel")
-	if body:
-		body.text = Locale.t("result.reconnect_failed")
 
 
 func _on_disconnect_back_multiplayer_pressed() -> void:
@@ -2905,8 +2853,6 @@ func _init_network():
 	EventBus.rpc_targeting_arrow_received.connect(_on_rpc_targeting_arrow)
 	EventBus.rpc_splash_received.connect(_on_rpc_splash)
 	NetworkManager.opponent_disconnected.connect(_on_opponent_disconnected)
-	NetworkManager.connected.connect(_on_opponent_reconnected)
-	NetworkManager.game_connection_failed.connect(_on_reconnect_failed)
 
 
 func _sync_targeting_state():
