@@ -190,6 +190,7 @@
     overflow: hidden;
   }
   .hero-card img { width: 100%; height: 100%; object-fit: cover; display: block; }
+  .hero-card .card-svg { width: 100%; height: 100%; display: block; }
   .hc1 { width: 200px; height: 280px; left: 50%; top: 30px; transform: translateX(-50%) rotate(-3deg); z-index: 3; }
   .hc2 { width: 190px; height: 266px; left: 14%; top: 60px; transform: rotate(-7deg); z-index: 2; opacity: 0.88; }
   .hc3 { width: 190px; height: 266px; right: 14%; top: 60px; transform: rotate(7deg); z-index: 2; opacity: 0.88; }
@@ -394,9 +395,113 @@
       </div>
     </div>
     <div class="hero-visual">
-      <div class="hero-card hc2"><img src="assets/card-2.png" alt="卡牌预览" /></div>
-      <div class="hero-card hc3"><img src="assets/card-3.png" alt="卡牌预览" /></div>
-      <div class="hero-card hc1"><img src="assets/card-1.png" alt="卡牌预览" /></div>
+      <div class="hero-card hc2">
+        <svg class="card-svg" viewBox="0 0 200 280" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice" aria-label="治疗卡牌">
+          <defs>
+            <linearGradient id="g-heal" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#1a3a4a"/>
+              <stop offset="100%" stop-color="#0a1a24"/>
+            </linearGradient>
+            <radialGradient id="g-heal-glow" cx="0.5" cy="0.35" r="0.6">
+              <stop offset="0%" stop-color="#5ee0c0" stop-opacity="0.45"/>
+              <stop offset="60%" stop-color="#5ee0c0" stop-opacity="0"/>
+            </radialGradient>
+            <linearGradient id="g-heal-rune" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#7eeac8"/>
+              <stop offset="100%" stop-color="#3aa888"/>
+            </linearGradient>
+          </defs>
+          <rect width="200" height="280" fill="url(#g-heal)"/>
+          <rect width="200" height="280" fill="url(#g-heal-glow)"/>
+          <!-- decorative frame -->
+          <rect x="14" y="14" width="172" height="252" rx="10" ry="10" fill="none" stroke="rgba(94,224,192,0.25)" stroke-width="1"/>
+          <!-- heal cross rune -->
+          <g transform="translate(100 140)">
+            <circle r="44" fill="rgba(94,224,192,0.08)" stroke="rgba(94,224,192,0.3)" stroke-width="1.5"/>
+            <path d="M -18 -6 L -6 -6 L -6 -18 L 6 -18 L 6 -6 L 18 -6 L 18 6 L 6 6 L 6 18 L -6 18 L -6 6 L -18 6 Z" fill="url(#g-heal-rune)"/>
+          </g>
+          <!-- cost gem -->
+          <circle cx="28" cy="28" r="13" fill="#0a1a24" stroke="#5ee0c0" stroke-width="1.5"/>
+          <text x="28" y="33" text-anchor="middle" font-family="Inter, sans-serif" font-size="15" font-weight="700" fill="#7eeac8">2</text>
+          <!-- card name -->
+          <text x="100" y="240" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="14" font-weight="600" fill="rgba(255,255,255,0.92)">治愈</text>
+          <text x="100" y="256" text-anchor="middle" font-family="Inter, sans-serif" font-size="9" letter-spacing="2" fill="rgba(94,224,192,0.7)">HEAL</text>
+        </svg>
+      </div>
+      <div class="hero-card hc3">
+        <svg class="card-svg" viewBox="0 0 200 280" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice" aria-label="法师卡牌">
+          <defs>
+            <linearGradient id="g-mage" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#2a1a4a"/>
+              <stop offset="100%" stop-color="#100a24"/>
+            </linearGradient>
+            <radialGradient id="g-mage-glow" cx="0.5" cy="0.4" r="0.55">
+              <stop offset="0%" stop-color="#9b6dff" stop-opacity="0.4"/>
+              <stop offset="60%" stop-color="#9b6dff" stop-opacity="0"/>
+            </radialGradient>
+            <linearGradient id="g-mage-orb" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#c4a8ff"/>
+              <stop offset="100%" stop-color="#6a4acc"/>
+            </linearGradient>
+          </defs>
+          <rect width="200" height="280" fill="url(#g-mage)"/>
+          <rect width="200" height="280" fill="url(#g-mage-glow)"/>
+          <rect x="14" y="14" width="172" height="252" rx="10" ry="10" fill="none" stroke="rgba(155,109,255,0.3)" stroke-width="1"/>
+          <!-- arcane orb with rings -->
+          <g transform="translate(100 140)">
+            <ellipse rx="58" ry="18" fill="none" stroke="rgba(155,109,255,0.25)" stroke-width="1"/>
+            <ellipse rx="58" ry="18" fill="none" stroke="rgba(155,109,255,0.18)" stroke-width="1" transform="rotate(60)"/>
+            <ellipse rx="58" ry="18" fill="none" stroke="rgba(155,109,255,0.18)" stroke-width="1" transform="rotate(120)"/>
+            <circle r="26" fill="url(#g-mage-orb)"/>
+            <circle r="26" fill="none" stroke="rgba(255,255,255,0.4)" stroke-width="1"/>
+            <!-- inner star -->
+            <path d="M 0 -14 L 4 -4 L 14 0 L 4 4 L 0 14 L -4 4 L -14 0 L -4 -4 Z" fill="rgba(255,255,255,0.9)"/>
+          </g>
+          <circle cx="28" cy="28" r="13" fill="#100a24" stroke="#9b6dff" stroke-width="1.5"/>
+          <text x="28" y="33" text-anchor="middle" font-family="Inter, sans-serif" font-size="15" font-weight="700" fill="#c4a8ff">4</text>
+          <text x="100" y="240" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="14" font-weight="600" fill="rgba(255,255,255,0.92)">秘术</text>
+          <text x="100" y="256" text-anchor="middle" font-family="Inter, sans-serif" font-size="9" letter-spacing="2" fill="rgba(155,109,255,0.7)">ARCANE</text>
+        </svg>
+      </div>
+      <div class="hero-card hc1">
+        <svg class="card-svg" viewBox="0 0 200 280" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid slice" aria-label="战士卡牌">
+          <defs>
+            <linearGradient id="g-war" x1="0" y1="0" x2="1" y2="1">
+              <stop offset="0%" stop-color="#4a1a1a"/>
+              <stop offset="100%" stop-color="#240a0a"/>
+            </linearGradient>
+            <radialGradient id="g-war-glow" cx="0.5" cy="0.4" r="0.55">
+              <stop offset="0%" stop-color="#ff6b4a" stop-opacity="0.4"/>
+              <stop offset="60%" stop-color="#ff6b4a" stop-opacity="0"/>
+            </radialGradient>
+            <linearGradient id="g-war-sword" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0%" stop-color="#e8e8f0"/>
+              <stop offset="100%" stop-color="#8888a0"/>
+            </linearGradient>
+          </defs>
+          <rect width="200" height="280" fill="url(#g-war)"/>
+          <rect width="200" height="280" fill="url(#g-war-glow)"/>
+          <rect x="14" y="14" width="172" height="252" rx="10" ry="10" fill="none" stroke="rgba(255,107,74,0.3)" stroke-width="1"/>
+          <!-- crossed swords -->
+          <g transform="translate(100 140)">
+            <circle r="44" fill="rgba(255,107,74,0.08)" stroke="rgba(255,107,74,0.3)" stroke-width="1.5"/>
+            <g transform="rotate(-30)">
+              <rect x="-3" y="-38" width="6" height="52" fill="url(#g-war-sword)"/>
+              <rect x="-12" y="10" width="24" height="6" fill="#c4a060"/>
+              <rect x="-3" y="-42" width="6" height="6" fill="#c4a060"/>
+            </g>
+            <g transform="rotate(30)">
+              <rect x="-3" y="-38" width="6" height="52" fill="url(#g-war-sword)"/>
+              <rect x="-12" y="10" width="24" height="6" fill="#c4a060"/>
+              <rect x="-3" y="-42" width="6" height="6" fill="#c4a060"/>
+            </g>
+          </g>
+          <circle cx="28" cy="28" r="13" fill="#240a0a" stroke="#ff6b4a" stroke-width="1.5"/>
+          <text x="28" y="33" text-anchor="middle" font-family="Inter, sans-serif" font-size="15" font-weight="700" fill="#ffa888">3</text>
+          <text x="100" y="240" text-anchor="middle" font-family="Noto Sans SC, sans-serif" font-size="14" font-weight="600" fill="rgba(255,255,255,0.92)">战刃</text>
+          <text x="100" y="256" text-anchor="middle" font-family="Inter, sans-serif" font-size="9" letter-spacing="2" fill="rgba(255,107,74,0.7)">BLADE</text>
+        </svg>
+      </div>
     </div>
   </div>
 </section>
