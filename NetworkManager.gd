@@ -114,6 +114,8 @@ func host_game(port: int = 4568) -> int:
 	player_number = 1
 	peer.peer_connected.connect(_on_peer_connected)
 	peer.peer_disconnected.connect(_on_peer_disconnected)
+	if not multiplayer.peer_packet.is_connected(_on_peer_packet):
+		multiplayer.peer_packet.connect(_on_peer_packet)
 	print("Hosting on port %d" % port)
 	return OK
 
@@ -134,6 +136,8 @@ func join_game(address: String, port: int = 4568) -> int:
 	player_number = 2
 	peer.peer_connected.connect(_on_peer_connected)
 	peer.peer_disconnected.connect(_on_peer_disconnected)
+	if not multiplayer.peer_packet.is_connected(_on_peer_packet):
+		multiplayer.peer_packet.connect(_on_peer_packet)
 	_game_deadline = _now() + CONNECT_TIMEOUT
 	print("Joining %s:%d" % [address, port])
 	return OK
@@ -299,6 +303,8 @@ func connect_to_game_room(address: String, port: int, assigned_player: int) -> i
 	is_online = true
 	peer.peer_connected.connect(_on_peer_connected)
 	peer.peer_disconnected.connect(_on_peer_disconnected)
+	if not multiplayer.peer_packet.is_connected(_on_peer_packet):
+		multiplayer.peer_packet.connect(_on_peer_packet)
 	_game_deadline = _now() + CONNECT_TIMEOUT
 	print("Connecting to game room %s:%d (player %d)" % [address, port, player_number])
 	return OK
@@ -343,20 +349,24 @@ func _on_peer_disconnected(id: int):
 	opponent_disconnected.emit()
 
 
-# Application-level heartbeat — called by the remote peer every HEARTBEAT_INTERVAL.
-# Receiving this proves the opponent process is still alive.
-@rpc("any_peer", "call_remote")
-func rpc_heartbeat() -> void:
-	_last_heartbeat_received = _now()
-
+# Heartbeat via raw bytes — bypasses the RPC checksum system so it works
+# even when the two instances have slightly different code versions.
+const _HEARTBEAT_MAGIC := "HB"
 
 func _send_heartbeat() -> void:
-	# In relay mode the server doesn't forward targeted rpc_id, so broadcast.
-	# In direct P2P, target the opponent directly to avoid hitting bystanders.
+	# In relay mode broadcast to all; in direct P2P target the opponent.
+	var target_ids: Array[int] = []
 	if is_dedicated_server:
-		rpc_heartbeat.rpc()
+		# broadcast — server will fan out to the other client
+		pass
 	else:
-		rpc_heartbeat.rpc_id(opponent_peer_id)
+		target_ids.append(opponent_peer_id)
+	multiplayer.send_bytes(_HEARTBEAT_MAGIC.to_ascii_buffer(), target_ids, MultiplayerPeer.TRANSFER_MODE_UNRELIABLE)
+
+
+func _on_peer_packet(peer_id: int, data: PackedByteArray) -> void:
+	if data.get_string_from_ascii() == _HEARTBEAT_MAGIC:
+		_last_heartbeat_received = _now()
 
 
 func _on_opponent_vanished() -> void:
