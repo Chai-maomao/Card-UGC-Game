@@ -218,6 +218,24 @@ func has_taunt() -> bool:
 	return false
 
 
+# Stun: the card skips its next turn. Buffs are consumed by consume_stun()
+# when the owner's turn starts; they are exempt from the normal duration tick.
+func has_stun() -> bool:
+	for eff in status_effects:
+		if eff.get("buff_id", "") == SkillEngine.BUFF_STUN and eff.get("value", 0) > 0:
+			return true
+	return false
+
+
+func consume_stun() -> bool:
+	for i in range(status_effects.size()):
+		if status_effects[i].get("buff_id", "") == SkillEngine.BUFF_STUN and status_effects[i].get("value", 0) > 0:
+			status_effects.remove_at(i)
+			print("  [Stun] %s is stunned and skips its turn" % card_name)
+			return true
+	return false
+
+
 # ============================================
 # Buff management (no merging — each buff is independent)
 # ============================================
@@ -263,7 +281,7 @@ func tick_buffs(owner_player: int) -> void:
 		if eff.get("owner", 0) != owner_player:
 			continue
 		var buff_id: String = eff.get("buff_id", "")
-		if buff_id == SkillEngine.BUFF_MANA_REFUND:
+		if buff_id == SkillEngine.BUFF_MANA_REFUND or buff_id == SkillEngine.BUFF_STUN:
 			continue
 
 		if buff_id == SkillEngine.BUFF_REGEN:
@@ -271,6 +289,11 @@ func tick_buffs(owner_player: int) -> void:
 			if regen_val > 0 and hp > 0:
 				heal(regen_val)
 				print("  [Regen] %s heals %d (HP: %d)" % [card_name, regen_val, hp])
+		elif buff_id == SkillEngine.BUFF_POISON:
+			var poison_val: int = eff.get("value", 0)
+			if poison_val > 0 and hp > 0:
+				hp = max(0, hp - poison_val)
+				print("  [Poison] %s takes %d poison (HP: %d)" % [card_name, poison_val, hp])
 
 		eff["duration"] = eff.get("duration", 0) - 1
 		if eff["duration"] <= 0:

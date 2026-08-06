@@ -12,21 +12,21 @@ grow_vertical = 2
 script = ExtResource("1_skill")
 
 [node name="Panel" type="Panel" parent="." unique_id=2000002]
-custom_minimum_size = Vector2(520, 640)
+custom_minimum_size = Vector2(920, 640)
 layout_mode = 1
 anchors_preset = 8
 anchor_left = 0.5
 anchor_top = 0.5
 anchor_right = 0.5
 anchor_bottom = 0.5
-offset_left = -260.0
+offset_left = -460.0
 offset_top = -320.0
-offset_right = 260.0
+offset_right = 460.0
 offset_bottom = 320.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="MarginContainer" type="MarginContainer" parent="Panel" unique_id=2000100]
+[node name="Margin" type="MarginContainer" parent="Panel" unique_id=2000100]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -34,101 +34,149 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 theme_override_constants/margin_left = 12
-theme_override_constants/margin_top = 8
+theme_override_constants/margin_top = 10
 theme_override_constants/margin_right = 12
+theme_override_constants/margin_bottom = 10
+
+[node name="HBox" type="HBoxContainer" parent="Panel/Margin" unique_id=2000101]
+layout_mode = 2
+theme_override_constants/separation = 10
+
+[node name="PalettePanel" type="Panel" parent="Panel/Margin/HBox" unique_id=2000200]
+custom_minimum_size = Vector2(250, 0)
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="Margin" type="MarginContainer" parent="Panel/Margin/HBox/PalettePanel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 8
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 8
 theme_override_constants/margin_bottom = 8
 
-[node name="ScrollContainer" type="ScrollContainer" parent="Panel/MarginContainer" unique_id=2000101]
+[node name="VBox" type="VBoxContainer" parent="Panel/Margin/HBox/PalettePanel/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="PaletteTitle" type="Label" parent="Panel/Margin/HBox/PalettePanel/Margin/VBox"]
+layout_mode = 2
+text = "Blocks"
+horizontal_alignment = 1
+
+[node name="PaletteScroll" type="ScrollContainer" parent="Panel/Margin/HBox/PalettePanel/Margin/VBox"]
+layout_mode = 2
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="PaletteVBox" type="VBoxContainer" parent="Panel/Margin/HBox/PalettePanel/Margin/VBox/PaletteScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 5
+
+[node name="MainPanel" type="Panel" parent="Panel/Margin/HBox" unique_id=2000300]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="Margin" type="MarginContainer" parent="Panel/Margin/HBox/MainPanel"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 10
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 10
+theme_override_constants/margin_bottom = 8
+
+[node name="Scroll" type="ScrollContainer" parent="Panel/Margin/HBox/MainPanel/Margin"]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 horizontal_scroll_mode = 0
 
-[node name="VBoxContainer" type="VBoxContainer" parent="Panel/MarginContainer/ScrollContainer" unique_id=2000004]
+[node name="VBox" type="VBoxContainer" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll"]
 layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 6
 
-[node name="TitleLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=2000005]
+[node name="TitleLabel" type="Label" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox" unique_id=2000005]
 layout_mode = 2
-theme_override_font_sizes/font_size = 20
+theme_override_font_sizes/font_size = 18
 text = "Skill Editor"
 horizontal_alignment = 1
 
-[node name="HelpLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
+[node name="HelpLabel" type="Label" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox"]
 layout_mode = 2
-text = "1. Name it  2. Pick when it triggers  3. Add one or more effects"
+text = "Pick a trigger, then stack effect blocks."
 autowrap_mode = 3
 
-[node name="Separator0" type="HSeparator" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=2000028]
+[node name="Separator0" type="HSeparator" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox" unique_id=2000028]
 layout_mode = 2
 
-[node name="SkillNameLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=2000026]
+[node name="SkillNameLabel" type="Label" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox" unique_id=2000026]
 layout_mode = 2
 text = "Skill Name:"
 
-[node name="SkillNameInput" type="LineEdit" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=2000027]
+[node name="SkillNameInput" type="LineEdit" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox" unique_id=2000027]
 layout_mode = 2
 placeholder_text = "e.g. Railgun"
 
-[node name="TriggerLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=2000007]
+[node name="TriggerLabel" type="Label" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox" unique_id=2000007]
 layout_mode = 2
 text = "Trigger:"
 
-[node name="TriggerHintLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
-layout_mode = 2
-text = "When does this skill happen?"
-autowrap_mode = 3
-
-[node name="TriggerSelect" type="OptionButton" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=2000008]
-layout_mode = 2
-
-[node name="TriggerPreviewLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
+[node name="TriggerPreviewLabel" type="Label" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox"]
 layout_mode = 2
 text = "-"
 autowrap_mode = 3
 
-[node name="SeparatorMid" type="HSeparator" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=2000015]
+[node name="SeparatorMid" type="HSeparator" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox" unique_id=2000015]
 layout_mode = 2
 
-[node name="EffectsLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=2001000]
+[node name="SettingsLabel" type="Label" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox"]
 layout_mode = 2
-text = "Effects:"
+text = "Skill Settings"
 
-[node name="EffectsHintLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
-layout_mode = 2
-text = "Each effect is one action, such as damage, heal, or add a status."
-autowrap_mode = 3
-
-[node name="EffectsList" type="VBoxContainer" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=2001001]
+[node name="SettingsRow" type="VBoxContainer" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox"]
 layout_mode = 2
 theme_override_constants/separation = 4
 
-[node name="AddEffectButton" type="Button" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=2001002]
+[node name="EffectsLabel" type="Label" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox" unique_id=2001000]
 layout_mode = 2
-text = "+ Add Effect"
+text = "Effects:"
 
-[node name="SeparatorBottom" type="HSeparator" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=2000021]
+[node name="EffectsList" type="VBoxContainer" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox" unique_id=2001001]
+layout_mode = 2
+theme_override_constants/separation = 6
+
+[node name="SeparatorBottom" type="HSeparator" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox" unique_id=2000021]
 layout_mode = 2
 
-[node name="PreviewLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
+[node name="PreviewLabel" type="Label" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox"]
 layout_mode = 2
 text = "Skill Preview:"
 
-[node name="SkillSummary" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=2000022]
+[node name="SkillSummary" type="Label" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox" unique_id=2000022]
 layout_mode = 2
 horizontal_alignment = 0
 autowrap_mode = 3
 
-[node name="ButtonRow" type="HBoxContainer" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=2000023]
+[node name="ButtonRow" type="HBoxContainer" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox" unique_id=2000023]
 layout_mode = 2
 theme_override_constants/separation = 16
 alignment = 1
 
-[node name="SaveButton" type="Button" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/ButtonRow" unique_id=2000024]
+[node name="SaveButton" type="Button" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/ButtonRow" unique_id=2000024]
 layout_mode = 2
 text = "Save Skill"
 
-[node name="CancelButton" type="Button" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/ButtonRow" unique_id=2000025]
+[node name="CancelButton" type="Button" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/ButtonRow" unique_id=2000025]
 layout_mode = 2
 text = "Cancel"

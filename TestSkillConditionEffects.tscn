@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://cpm5xi65k6vsy"]
+
+[ext_resource type="Script" path="res://TestSkillConditionEffects.gd" id="1"]
+
+[node name="TestSkillConditionEffects" type="Node"]
+script = ExtResource("1")

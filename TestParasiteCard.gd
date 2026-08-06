@@ -169,7 +169,7 @@ func _test_directed_skill_damage_hits_parasite_hp_first() -> void:
 
 func _test_aoe_skill_bypasses_parasite() -> void:
 	var game = _new_game()
-	var caster := _card("Caster", 1, 5, 0, [_damage_skill("Nova", SkillEngine.TARGET_ALL_ENEMIES, 2)])
+	var caster := _card("Caster", 1, 5, 0, [_damage_skill("Nova", SkillEngine.TARGET_ALL, 2, SkillEngine.TRIGGER_ON_ACTIVATE, SkillEngine.TARGET_SIDE_ENEMY)])
 	var victim := _card("Victim", 1, 5, 0)
 	var parasite := _parasite("AoE Bypass", 1, 3, 0)
 	ParasiteRules.attach(parasite, victim)

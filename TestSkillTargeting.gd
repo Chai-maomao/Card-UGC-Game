@@ -37,19 +37,19 @@ func _fail(message: String) -> void:
 
 
 func _test_target_normalization_helpers() -> void:
-	var enemy_aoe := _TargetResolver.normalize_effect_target({"target": SkillEngine.TARGET_ALL_ENEMIES, "effect": SkillEngine.EFFECT_DAMAGE, "value": 1})
+	var enemy_aoe := _TargetResolver.normalize_effect_target({"target": "all_enemies", "effect": SkillEngine.EFFECT_DAMAGE, "value": 1})
 	if enemy_aoe.get("target", "") != SkillEngine.TARGET_ALL or enemy_aoe.get("target_side", "") != SkillEngine.TARGET_SIDE_ENEMY:
 		_fail("target resolver did not normalize old all_enemies target")
 	if not _TargetResolver.is_directed_target(SkillEngine.TARGET_SINGLE):
 		_fail("target resolver did not identify target_single as directed")
-	if _TargetResolver.default_target_side(SkillEngine.TARGET_ALL_ALLIES) != SkillEngine.TARGET_SIDE_ALLY:
+	if _TargetResolver.default_target_side("all_allies") != SkillEngine.TARGET_SIDE_ALLY:
 		_fail("target resolver returned wrong default side for all_allies")
 
 
 func _test_skill_text_formatter_helpers() -> void:
 	var old_lang := Locale.language
 	Locale.language = "zh"
-	var sentence := _TextFormatter.format_effect_sentence({"target": SkillEngine.TARGET_ALL_ENEMIES, "effect": SkillEngine.EFFECT_DAMAGE, "value_min": 1, "value_max": 3, "random_count": 2})
+	var sentence := _TextFormatter.format_effect_sentence({"target": "all_enemies", "effect": SkillEngine.EFFECT_DAMAGE, "value_min": 1, "value_max": 3, "random_count": 2})
 	if not sentence.contains("敌方") or not sentence.contains("1-3"):
 		_fail("skill text formatter did not describe normalized enemy random damage")
 	Locale.language = old_lang
@@ -111,7 +111,7 @@ func _test_old_all_enemy_mapping() -> void:
 	game.player2_field.slots[0] = enemy_a
 	game.player2_field.slots[1] = enemy_b
 	caster.skills = [{"skill_name": "Old AoE", "trigger": SkillEngine.TRIGGER_ON_ACTIVATE, "effects": [
-		{"target": SkillEngine.TARGET_ALL_ENEMIES, "effect": SkillEngine.EFFECT_DAMAGE, "value": 1}
+		{"target": "all_enemies", "effect": SkillEngine.EFFECT_DAMAGE, "value": 1}
 	]}]
 	SkillEngine.trigger_single_skill(caster, 0, game.make_skill_context(0, -1))
 	if enemy_a.hp != 4 or enemy_b.hp != 4:

@@ -1,6 +1,7 @@
 [gd_scene format=3 uid="uid://d3s4tmqxv10c5"]
 
 [ext_resource type="Script" uid="uid://cnv1h02g0od5u" path="res://CardEditor.gd" id="1_ey4pb"]
+[ext_resource type="PackedScene" uid="uid://q3l6yb16sy31" path="res://CardUI.tscn" id="2_cardui"]
 
 [node name="CardEditor" type="Control" unique_id=938346573]
 layout_mode = 3
@@ -155,6 +156,18 @@ text = "(empty)"
 layout_mode = 2
 text = "Edit Skill 2"
 
+[node name="Skill3Label" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9360024]
+layout_mode = 2
+text = "Skill 3:"
+
+[node name="Skill3Summary" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9360025]
+layout_mode = 2
+text = "(empty)"
+
+[node name="EditSkill3Button" type="Button" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9360026]
+layout_mode = 2
+text = "Edit Skill 3"
+
 [node name="Separator3" type="HSeparator" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9360030]
 layout_mode = 2
 
@@ -168,6 +181,33 @@ offset_right = 8.0
 offset_bottom = 8.0
 text = "Back"
 
+[node name="CardPreviewPanel" type="PanelContainer" parent="."]
+layout_mode = 0
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -294.0
+offset_top = 72.0
+offset_right = -28.0
+offset_bottom = 342.0
+grow_horizontal = 0
+
+[node name="PreviewBox" type="VBoxContainer" parent="CardPreviewPanel"]
+layout_mode = 2
+
+[node name="PreviewTitle" type="Label" parent="CardPreviewPanel/PreviewBox"]
+layout_mode = 2
+text = "Card Preview"
+horizontal_alignment = 1
+
+[node name="PreviewCenter" type="CenterContainer" parent="CardPreviewPanel/PreviewBox"]
+layout_mode = 2
+size_flags_vertical = 3
+
+[node name="PreviewCard" parent="CardPreviewPanel/PreviewBox/PreviewCenter" instance=ExtResource("2_cardui")]
+layout_mode = 2
+mouse_filter = 2
+
 [node name="ArtFileDialog" type="FileDialog" parent="." unique_id=9400007]
 title = "Select Card Art"
 file_mode = 0
@@ -176,6 +216,7 @@ filters = PackedStringArray("*.png ; PNG Image", "*.jpg ; JPEG Image", "*.jpeg ;
 
 [connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/EditSkill1Button" to="." method="_on_edit_skill1_pressed"]
 [connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/EditSkill2Button" to="." method="_on_edit_skill2_pressed"]
+[connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/EditSkill3Button" to="." method="_on_edit_skill3_pressed"]
 [connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/TemplateButton" to="." method="_on_template_pressed"]
 [connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/SaveButton" to="." method="_on_save_button_pressed"]
 [connection signal="pressed" from="BackButton" to="." method="_on_back_button_pressed"]

@@ -13,27 +13,12 @@ const UITheme = preload("res://UITheme.gd")
 @onready var card_editor_btn = $CenterContainer/VBoxContainer/CardEditorButton
 @onready var my_cards_btn = $CenterContainer/VBoxContainer/MyCardsButton
 @onready var online_btn = $CenterContainer/VBoxContainer/OnlineButton
-@onready var language_option = $CenterContainer/VBoxContainer/LanguageOption
+@onready var settings_btn = $CenterContainer/VBoxContainer/SettingsButton
+@onready var version_label = $VersionLabel
 
 var menu_panel: PanelContainer
 var title_label: Label
 var subtitle_label: Label
-
-const LANGUAGE_CODES := ["zh", "en"]
-const LANGUAGE_LABELS := ["简体中文", "English"]
-
-
-func _language_prompt() -> String:
-	return Locale.t("menu.language_prompt")
-
-
-func _setup_language_option() -> void:
-	language_option.clear()
-	for label in LANGUAGE_LABELS:
-		language_option.add_item(label)
-	language_option.selected = max(0, LANGUAGE_CODES.find(Locale.language))
-	language_option.text = _language_prompt()
-
 
 func _apply_texts() -> void:
 	resume_battle_btn.text = Locale.t("menu.resume")
@@ -41,8 +26,8 @@ func _apply_texts() -> void:
 	card_editor_btn.text = Locale.t("menu.card_editor")
 	my_cards_btn.text = Locale.t("menu.my_cards")
 	online_btn.text = Locale.t("menu.online")
-	if language_option:
-		language_option.text = _language_prompt()
+	settings_btn.text = Locale.t("menu.settings")
+	version_label.text = Locale.t("settings.version", [AppVersion.VERSION])
 
 
 func _ui_scale() -> float:
@@ -59,18 +44,20 @@ func _apply_responsive_layout() -> void:
 		if btn:
 			btn.custom_minimum_size = btn_size
 			btn.add_theme_font_size_override("font_size", max(12, int(18 * s)))
-	if language_option:
-		language_option.custom_minimum_size = Vector2(220, 40) * s
-		language_option.add_theme_font_size_override("font_size", max(11, int(15 * s)))
+	if settings_btn:
+		settings_btn.custom_minimum_size = btn_size
+		settings_btn.add_theme_font_size_override("font_size", max(12, int(18 * s)))
 	var vbox := start_battle_btn.get_parent() as VBoxContainer
 	if vbox:
 		vbox.add_theme_constant_override("separation", int(18 * s))
 	if menu_panel:
-		menu_panel.custom_minimum_size = Vector2(360, 430) * s
+		menu_panel.custom_minimum_size = Vector2(360, 500) * s
 	if title_label:
 		UITheme.apply_title(title_label, max(28, int(42 * s)))
 	if subtitle_label:
 		subtitle_label.add_theme_font_size_override("font_size", max(12, int(15 * s)))
+	if version_label:
+		version_label.add_theme_font_size_override("font_size", max(10, int(13 * s)))
 
 
 func _apply_theme() -> void:
@@ -109,9 +96,9 @@ func _apply_theme() -> void:
 	UITheme.apply_label(subtitle_label, true)
 	box.add_child(subtitle_label)
 	box.add_child(buttons_box)
-	for btn in [start_battle_btn, card_editor_btn, my_cards_btn, online_btn]:
+	for btn in [start_battle_btn, card_editor_btn, my_cards_btn, online_btn, settings_btn]:
 		UITheme.apply_button(btn, "primary" if btn == start_battle_btn else "secondary")
-	UITheme.apply_button(language_option, "secondary")
+	UITheme.apply_label(version_label, true)
 
 
 func _on_viewport_size_changed() -> void:
@@ -126,8 +113,7 @@ func _ready():
 	card_editor_btn.pressed.connect(_on_card_editor_pressed)
 	my_cards_btn.pressed.connect(_on_my_cards_pressed)
 	online_btn.pressed.connect(_on_online_pressed)
-	_setup_language_option()
-	language_option.item_selected.connect(_on_language_selected)
+	settings_btn.pressed.connect(_on_settings_pressed)
 	Locale.language_changed.connect(_apply_texts)
 	NetworkManager.reconnect_transport_ready.connect(_on_reconnect_transport_ready)
 	NetworkManager.reconnect_failed.connect(_on_reconnect_failed)
@@ -138,13 +124,6 @@ func _ready():
 	if PlayerData.continue_editing_flag:
 		PlayerData.continue_editing_flag = false
 		_show_card_type_popup.call_deferred()
-
-
-func _on_language_selected(index: int) -> void:
-	if index >= 0 and index < LANGUAGE_CODES.size():
-		Locale.set_language(LANGUAGE_CODES[index])
-	else:
-		language_option.text = _language_prompt()
 
 
 func _on_start_battle_pressed():
@@ -418,6 +397,10 @@ func _on_online_pressed():
 	NetworkManager.close_connection()
 	NetworkManager.clear_room_session()
 	get_tree().change_scene_to_file("res://MultiplayerMenu.tscn")
+
+
+func _on_settings_pressed() -> void:
+	get_tree().change_scene_to_file("res://SettingsMenu.tscn")
 
 
 func _on_resume_battle_pressed() -> void:

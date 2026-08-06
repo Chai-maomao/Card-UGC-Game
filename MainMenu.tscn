@@ -44,5 +44,18 @@ text = "My Cards"
 layout_mode = 2
 text = "Online Battle"
 
-[node name="LanguageOption" type="OptionButton" parent="CenterContainer/VBoxContainer" unique_id=1557201400]
+[node name="SettingsButton" type="Button" parent="CenterContainer/VBoxContainer"]
 layout_mode = 2
+text = "Settings"
+
+[node name="VersionLabel" type="Label" parent="."]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -34.0
+offset_bottom = -10.0
+grow_horizontal = 2
+grow_vertical = 0
+horizontal_alignment = 1

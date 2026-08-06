@@ -96,39 +96,33 @@ static func _skill_score(skill: Dictionary, atk: int) -> float:
 	return score * trigger_weight
 
 
+static func _polarity_multiplier(polarity: String, eff: Dictionary) -> float:
+	if polarity == "harmful":
+		return _harmful_target_multiplier(eff)
+	return _helpful_target_multiplier(eff)
+
+
 static func _effect_score(eff: Dictionary) -> float:
 	var effect: String = eff.get("effect", "")
 	var value: float = _effect_expected_value(eff)
 	var probability: float = clamp(float(eff.get("probability", 100)) / 100.0, 0.0, 1.0)
 	var target_weight: float = _target_weight(eff)
 	var condition_weight: float = _condition_weight(eff)
+	var meta: Dictionary = SkillRegistry.effect_meta(effect)
+	var kind: String = str(meta.get("score_kind", "none"))
+	var weight: float = float(meta.get("score_weight", 0.0))
+	var polarity: String = str(meta.get("polarity", "helpful"))
 	var score: float = 0.0
-	match effect:
-		SkillEngine.EFFECT_DAMAGE:
-			score = value * 1.0 * _harmful_target_multiplier(eff)
-		SkillEngine.EFFECT_LIFESTEAL_DAMAGE:
-			score = value * 1.55 * _harmful_target_multiplier(eff)
-		SkillEngine.EFFECT_HEAL:
-			score = _diminishing_value(value, HEAL_SOFT_CAP) * 0.72 * _helpful_target_multiplier(eff)
-		SkillEngine.EFFECT_SHIELD:
-			score = value * 0.68 * _helpful_target_multiplier(eff)
-		SkillEngine.EFFECT_DRAW_CARDS:
-			score = value * 2.0 * _helpful_target_multiplier(eff)
-		SkillEngine.EFFECT_GAIN_MANA:
-			score = value * 1.45 * _helpful_target_multiplier(eff)
-		SkillEngine.EFFECT_EXECUTE:
-			score = max(1.0, value * 0.9) * _harmful_target_multiplier(eff)
-		SkillEngine.EFFECT_CLEANSE:
-			score = 1.2 * _helpful_target_multiplier(eff)
-		SkillEngine.EFFECT_DISPEL:
-			score = 1.2 * _harmful_target_multiplier(eff)
-		SkillEngine.EFFECT_CHARM:
-			score = 3.0 * _harmful_target_multiplier(eff)
-		SkillEngine.EFFECT_GAIN_ATTACK:
-			score = value * 1.45 * _helpful_target_multiplier(eff)
-		SkillEngine.EFFECT_GAIN_MAX_HP:
-			score = value * 1.05 * _helpful_target_multiplier(eff)
-		SkillEngine.EFFECT_ADD_BUFF:
+	match kind:
+		"value_linear":
+			score = value * weight * _polarity_multiplier(polarity, eff)
+		"value_diminishing":
+			score = _diminishing_value(value, HEAL_SOFT_CAP) * weight * _polarity_multiplier(polarity, eff)
+		"threshold":
+			score = max(1.0, value * weight) * _polarity_multiplier(polarity, eff)
+		"fixed":
+			score = weight * _polarity_multiplier(polarity, eff)
+		"buff":
 			score = _buff_score(eff) * _buff_target_multiplier(eff)
 	return score * target_weight * probability * condition_weight
 
@@ -180,9 +174,13 @@ static func _buff_target_multiplier(eff: Dictionary) -> float:
 static func _effect_target_side(eff: Dictionary) -> String:
 	var target: String = eff.get("target", "")
 	match target:
-		SkillEngine.TARGET_SELF, SkillEngine.TARGET_SELF_SIDES, SkillEngine.TARGET_ALL_ALLIES:
+		SkillEngine.TARGET_SELF, SkillEngine.TARGET_SELF_SIDES:
 			return SkillEngine.TARGET_SIDE_ALLY
-		SkillEngine.TARGET_ALL_ENEMIES:
+		# Legacy save compat: old cards may still carry the pre-combined
+		# "all_enemies"/"all_allies" targets.
+		"all_allies":
+			return SkillEngine.TARGET_SIDE_ALLY
+		"all_enemies":
 			return SkillEngine.TARGET_SIDE_ENEMY
 		SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES:
 			var directed_side: String = eff.get("target_side", SkillEngine.TARGET_SIDE_ENEMY)
@@ -226,6 +224,10 @@ static func _buff_score(eff: Dictionary) -> float:
 			return 2.0 * min(duration, 2.0)
 		SkillEngine.BUFF_MISFORTUNE:
 			return max(1.0, value / 18.0) * duration
+		SkillEngine.BUFF_POISON:
+			return value * 0.9 * duration
+		SkillEngine.BUFF_STUN:
+			return 3.0 * min(duration, 2.0)
 	return value * 0.45 * duration
 
 

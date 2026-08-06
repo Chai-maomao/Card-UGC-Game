@@ -228,7 +228,7 @@ func deserialize_library(json_string: String) -> Array:
 		var migrated_cards: Array = []
 		for card in old_cards_by_id.values():
 			migrated_cards.append(prepare_deck_card(card, false))
-		deck_library.append({"id": make_id("deck"), "name": "默认卡组", "cards": migrated_cards})
+		deck_library.append({"id": make_id("deck"), "name": Locale.t("deck.default_name"), "cards": migrated_cards})
 	_normalize_library()
 	return card_library
 
@@ -260,7 +260,7 @@ func _normalize_library() -> void:
 		var cards: Array = []
 		for card in original_cards:
 			cards.append(prepare_deck_card(card, false))
-		deck_library.append({"id": make_id("deck"), "name": "默认卡组", "cards": cards})
+		deck_library.append({"id": make_id("deck"), "name": Locale.t("deck.default_name"), "cards": cards})
 		rebuild_card_library_cache()
 	if current_deck_id == "" and not deck_library.is_empty():
 		current_deck_id = deck_library[0].get("id", "")
@@ -502,7 +502,7 @@ func prepare_import_cards(package: Dictionary, target_deck_id: String = "") -> D
 func apply_prepared_import(prepared: Dictionary, package: Dictionary, replace_library: bool = false, append_to_current_deck: bool = false) -> Dictionary:
 	var deck := get_current_deck()
 	if deck.is_empty():
-		deck = create_deck("默认卡组")
+		deck = create_deck(Locale.t("deck.default_name"))
 	var added_count: int = 0
 	for item in prepared.get("incoming", []):
 		var card: CardData = item["card"]
@@ -541,7 +541,7 @@ func import_package_as_new_deck(package: Dictionary, deck_name: String) -> Dicti
 			final_cards = ordered_cards
 	var final_name := deck_name.strip_edges()
 	if final_name == "":
-		final_name = "导入卡组"
+		final_name = Locale.t("share.import_deck_name")
 	var deck := {"id": make_id("deck"), "name": final_name, "cards": final_cards}
 	deck_library.append(deck)
 	current_deck_id = deck.get("id", "")
@@ -708,7 +708,7 @@ func save_net_art(bytes: PackedByteArray, ext: String) -> String:
 
 func add_card_to_library(card_data: CardData):
 	if current_deck_id == "" and deck_library.is_empty():
-		create_deck("默认卡组")
+		create_deck(Locale.t("deck.default_name") if Engine.has_singleton("Locale") else "默认卡组")
 	add_card_copy_to_deck(current_deck_id, card_data, true)
 	rebuild_card_library_cache()
 	save_library()
@@ -825,6 +825,8 @@ func load_card_to_draft(card: CardData):
 		card_draft["skill1"] = card.skills[0].duplicate(true)
 	if card.skills.size() >= 2:
 		card_draft["skill2"] = card.skills[1].duplicate(true)
+	if card.skills.size() >= 3:
+		card_draft["skill3"] = card.skills[2].duplicate(true)
 
 
 func card_to_draft(card: CardData) -> Dictionary:
@@ -837,12 +839,15 @@ func card_to_draft(card: CardData) -> Dictionary:
 		"card_type": card.card_type,
 		"art_path": card.art_path,
 		"skill1": {},
-		"skill2": {}
+		"skill2": {},
+		"skill3": {}
 	}
 	if card.skills.size() >= 1:
 		draft["skill1"] = SpellRules.normalize_spell_skill(card, card.skills[0]) if card.is_spell() else card.skills[0].duplicate(true)
 	if card.skills.size() >= 2 and not card.is_spell():
 		draft["skill2"] = card.skills[1].duplicate(true)
+	if card.skills.size() >= 3 and not card.is_spell():
+		draft["skill3"] = card.skills[2].duplicate(true)
 	return draft
 
 
@@ -865,6 +870,8 @@ func build_card_from_draft() -> CardData:
 		skills.append(skill1)
 	if not card_draft.get("skill2", {}).is_empty() and not is_spell and not is_parasite:
 		skills.append(card_draft["skill2"].duplicate(true))
+	if not card_draft.get("skill3", {}).is_empty() and not is_spell and not is_parasite:
+		skills.append(card_draft["skill3"].duplicate(true))
 
 	var card := CardData.new(
 		card_name,

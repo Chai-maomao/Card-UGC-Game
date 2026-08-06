@@ -6,8 +6,6 @@ const TARGET_SIDES := "target_sides"
 const TARGET_SELF := "self"
 const TARGET_SELF_SIDES := "self_sides"
 const TARGET_ALL := "all"
-const TARGET_ALL_ENEMIES := "all_enemies"
-const TARGET_ALL_ALLIES := "all_allies"
 const TARGET_MALE := "target_male"
 const TARGET_FEMALE := "target_female"
 const TARGET_NONHUMAN := "target_nonhuman"
@@ -25,21 +23,24 @@ static func is_directed_target(target_str: String) -> bool:
 
 
 static func default_target_side(target_str: String) -> String:
-	match target_str:
-		TARGET_ALL_ENEMIES:
-			return TARGET_SIDE_ENEMY
-		TARGET_ALL_ALLIES:
-			return TARGET_SIDE_ALLY
+	# Legacy save compat: old cards may store the pre-combined "all_enemies" /
+	# "all_allies" targets; map them to their implicit side.
+	if target_str == "all_enemies":
+		return TARGET_SIDE_ENEMY
+	if target_str == "all_allies":
+		return TARGET_SIDE_ALLY
 	return TARGET_SIDE_ALL
 
 
 static func normalize_effect_target(eff: Dictionary) -> Dictionary:
 	var normalized := eff.duplicate(true)
 	var target_str: String = normalized.get("target", TARGET_SINGLE)
-	if target_str == TARGET_ALL_ENEMIES:
+	# Legacy save compat: split the old pre-combined "all_enemies"/"all_allies"
+	# targets into the two-dimensional side + target form.
+	if target_str == "all_enemies":
 		normalized["target"] = TARGET_ALL
 		normalized["target_side"] = TARGET_SIDE_ENEMY
-	elif target_str == TARGET_ALL_ALLIES:
+	elif target_str == "all_allies":
 		normalized["target"] = TARGET_ALL
 		normalized["target_side"] = TARGET_SIDE_ALLY
 	elif not normalized.has("target_side"):
@@ -57,9 +58,11 @@ static func resolve_targets(target_str: String, source_card: CardData, context: 
 			return _resolve_directed_target(source_card, context, true, target_side)
 		TARGET_SELF_SIDES:
 			return _resolve_self_adjacent(source_card, context)
-		TARGET_ALL_ENEMIES:
+		# Legacy save compat: un-normalized old cards may still carry the
+		# pre-combined "all_enemies"/"all_allies" targets.
+		"all_enemies":
 			return _resolve_cards_by_side(source_card, context, TARGET_SIDE_ENEMY)
-		TARGET_ALL_ALLIES:
+		"all_allies":
 			return _resolve_cards_by_side(source_card, context, TARGET_SIDE_ALLY)
 		TARGET_ALL:
 			return _resolve_cards_by_side(source_card, context, target_side)

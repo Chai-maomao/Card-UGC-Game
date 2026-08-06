@@ -3,67 +3,19 @@ extends RefCounted
 
 const ParasiteRules = preload("res://ParasiteRules.gd")
 
-const EFFECT_DAMAGE := "damage"
-const EFFECT_HEAL := "heal"
-const EFFECT_ADD_BUFF := "add_buff"
-const EFFECT_DRAW_CARDS := "draw_cards"
-const EFFECT_SHIELD := "shield"
-const EFFECT_CHARM := "charm"
-const EFFECT_LIFESTEAL_DAMAGE := "lifesteal_damage"
-const EFFECT_EXECUTE := "execute"
-const EFFECT_CLEANSE := "cleanse"
-const EFFECT_DISPEL := "dispel"
-const EFFECT_GAIN_MANA := "gain_mana"
-const EFFECT_GAIN_ATTACK := "gain_attack"
-const EFFECT_GAIN_MAX_HP := "gain_max_hp"
-const EFFECT_VIEW_DISCARD := "view_discard_select"
-const EFFECT_VIEW_DECK := "view_deck_select"
-const EFFECT_ZERO_COST := "make_zero_cost"
-
-const NEGATIVE_BUFFS := ["silence", "misfortune"]
-const POSITIVE_BUFFS := ["atk_boost", "regen", "mana_refund", "thorns", "damage_reduction", "taunt", "immune_lethal"]
-
 # ============================================
 # Skill effect application
 # ============================================
 
 static func apply_effect(effect_str: String, target: CardData, value: int, skill: Dictionary, context: Dictionary) -> void:
-	match effect_str:
-		EFFECT_DAMAGE:
-			_apply_damage(target, value, context)
-		EFFECT_HEAL:
-			_apply_heal(target, value)
-		EFFECT_DRAW_CARDS:
-			_apply_draw_cards(value, context)
-		EFFECT_SHIELD:
-			_apply_shield(target, value)
-		EFFECT_CHARM:
-			_apply_charm(target, context)
-		EFFECT_ADD_BUFF:
-			_apply_buff(target, value, skill, context)
-		EFFECT_LIFESTEAL_DAMAGE:
-			_apply_lifesteal_damage(target, value, context)
-		EFFECT_EXECUTE:
-			_apply_execute(target, value)
-		EFFECT_CLEANSE:
-			_apply_remove_statuses(target, NEGATIVE_BUFFS, "cleanse")
-		EFFECT_DISPEL:
-			_apply_remove_statuses(target, POSITIVE_BUFFS, "dispel")
-		EFFECT_GAIN_MANA:
-			_apply_gain_mana(value, context)
-		EFFECT_GAIN_ATTACK:
-			_apply_gain_attack(target, value)
-		EFFECT_GAIN_MAX_HP:
-			_apply_gain_max_hp(target, value)
-		EFFECT_VIEW_DISCARD:
-			_apply_view_discard_select(value, context)
-		EFFECT_VIEW_DECK:
-			_apply_view_deck_select(value, context)
-		EFFECT_ZERO_COST:
-			_apply_make_zero_cost(value, skill, context)
+	var handler_name: String = str(SkillRegistry.effect_meta(effect_str).get("handler", ""))
+	if handler_name == "":
+		push_error("[SkillEffectApplier] No handler registered for effect '%s'" % effect_str)
+		return
+	Callable(SkillEffectApplier, handler_name).call(target, value, skill, context)
 
 
-static func _apply_damage(target: CardData, value: int, context: Dictionary) -> void:
+static func _apply_damage(target: CardData, value: int, _skill: Dictionary, context: Dictionary) -> void:
 	var source: CardData = context.get("source_card")
 	var declared := value
 	var reduction_pct: int = target.get_damage_reduction()
@@ -79,26 +31,39 @@ static func _apply_damage(target: CardData, value: int, context: Dictionary) -> 
 	var actual := target.take_damage_without_reduction(value)
 	EventBus.damage_resolved.emit(source, target, declared, actual, reduction_pct, temp_hp_before, "skill")
 	EventBus.hp_changed.emit(target, -actual, target.hp)
-	if target.is_alive():
-		SkillEngine.trigger_skills(SkillEngine.TRIGGER_ON_DAMAGED, target, context)
-		ParasiteRules.trigger_host_passives(SkillEngine.TRIGGER_ON_DAMAGED, target, context)
+	_trigger_damaged_safe(target, context)
 	print("  -> %s takes %d dmg (HP: %d)" % [target.card_name, actual, target.hp])
 
 
-static func _apply_heal(target: CardData, value: int) -> void:
+static func _trigger_damaged_safe(target: CardData, context: Dictionary) -> void:
+	# On-damaged triggers only fire for non-lethal damage (target still alive).
+	if target == null or not target.is_alive():
+		return
+	SkillEngine.trigger_skills(SkillEngine.TRIGGER_ON_DAMAGED, target, context)
+	ParasiteRules.trigger_host_passives(SkillEngine.TRIGGER_ON_DAMAGED, target, context)
+
+
+static func _trigger_healed_safe(target: CardData, context: Dictionary) -> void:
+	if target == null:
+		return
+	SkillEngine.trigger_skills(SkillEngine.TRIGGER_ON_HEALED, target, context)
+
+
+static func _apply_heal(target: CardData, value: int, _skill: Dictionary, context: Dictionary) -> void:
 	target.heal(value)
 	EventBus.hp_changed.emit(target, value, target.hp)
+	_trigger_healed_safe(target, context)
 	print("  -> %s healed %d (HP: %d)" % [target.card_name, value, target.hp])
 
 
-static func _apply_draw_cards(value: int, context: Dictionary) -> void:
+static func _apply_draw_cards(_target: CardData, value: int, _skill: Dictionary, context: Dictionary) -> void:
 	var cb: Callable = context.get("draw_callable", Callable())
 	if cb.is_valid():
 		cb.call(value)
 	print("  -> Draw %d cards" % value)
 
 
-static func _apply_shield(target: CardData, value: int) -> void:
+static func _apply_shield(target: CardData, value: int, _skill: Dictionary, _context: Dictionary) -> void:
 	target.temp_hp += value
 	print("  -> %s gains %d temp HP (total: %d)" % [target.card_name, value, target.temp_hp])
 
@@ -112,7 +77,7 @@ static func _apply_buff(target: CardData, value: int, skill: Dictionary, context
 			target.immune_lethal = true
 
 
-static func _apply_lifesteal_damage(target: CardData, value: int, context: Dictionary) -> void:
+static func _apply_lifesteal_damage(target: CardData, value: int, _skill: Dictionary, context: Dictionary) -> void:
 	var source: CardData = context.get("source_card")
 	var declared := value
 	var reduction_pct: int = target.get_damage_reduction()
@@ -128,17 +93,17 @@ static func _apply_lifesteal_damage(target: CardData, value: int, context: Dicti
 	var actual := target.take_damage_without_reduction(value)
 	EventBus.damage_resolved.emit(source, target, declared, actual, reduction_pct, temp_hp_before, "lifesteal")
 	EventBus.hp_changed.emit(target, -actual, target.hp)
-	SkillEngine.trigger_skills(SkillEngine.TRIGGER_ON_DAMAGED, target, context)
-	ParasiteRules.trigger_host_passives(SkillEngine.TRIGGER_ON_DAMAGED, target, context)
+	_trigger_damaged_safe(target, context)
 	if source != null and actual > 0 and source.is_alive():
 		source.heal(actual)
 		EventBus.hp_changed.emit(source, actual, source.hp)
+		_trigger_healed_safe(source, context)
 		print("  -> %s takes %d lifesteal dmg; %s heals %d (HP: %d)" % [target.card_name, actual, source.card_name, actual, source.hp])
 	else:
 		print("  -> %s takes %d lifesteal dmg" % [target.card_name, actual])
 
 
-static func _apply_execute(target: CardData, value: int) -> void:
+static func _apply_execute(target: CardData, value: int, _skill: Dictionary, _context: Dictionary) -> void:
 	if target.hp <= value:
 		var actual := target.hp
 		if target.immune_lethal:
@@ -163,7 +128,15 @@ static func _apply_remove_statuses(target: CardData, buff_ids: Array, label: Str
 	print("  -> %s %s removed %d status(es)" % [target.card_name, label, removed])
 
 
-static func _apply_gain_mana(value: int, context: Dictionary) -> void:
+static func _apply_cleanse(target: CardData, _value: int, _skill: Dictionary, _context: Dictionary) -> void:
+	_apply_remove_statuses(target, SkillRegistry.negative_buffs(), "cleanse")
+
+
+static func _apply_dispel(target: CardData, _value: int, _skill: Dictionary, _context: Dictionary) -> void:
+	_apply_remove_statuses(target, SkillRegistry.positive_buffs(), "dispel")
+
+
+static func _apply_gain_mana(_target: CardData, value: int, _skill: Dictionary, context: Dictionary) -> void:
 	var field: BattleField = context.get("player_field")
 	if field == null:
 		return
@@ -176,12 +149,12 @@ static func _apply_gain_mana(value: int, context: Dictionary) -> void:
 	print("  -> Gain %d mana (%d -> %d)" % [value, before, field.current_mana])
 
 
-static func _apply_gain_attack(target: CardData, value: int) -> void:
+static func _apply_gain_attack(target: CardData, value: int, _skill: Dictionary, _context: Dictionary) -> void:
 	target.field_atk_bonus += value
 	print("  -> %s gains %d permanent attack (effective ATK: %d)" % [target.card_name, value, target.effective_atk()])
 
 
-static func _apply_gain_max_hp(target: CardData, value: int) -> void:
+static func _apply_gain_max_hp(target: CardData, value: int, _skill: Dictionary, _context: Dictionary) -> void:
 	target.max_hp += value
 	target.base_max_hp += value
 	if value >= 0:
@@ -200,7 +173,7 @@ static func _should_parasite_absorb(target: CardData, context: Dictionary) -> bo
 	return skill_target in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES]
 
 
-static func _apply_charm(target: CardData, context: Dictionary) -> void:
+static func _apply_charm(target: CardData, _value: int, _skill: Dictionary, context: Dictionary) -> void:
 	var enemy_field: BattleField = context.get("enemy_field")
 	var player_field: BattleField = context.get("player_field")
 	var hand: Array = context.get("active_hand", [])
@@ -239,7 +212,7 @@ static func _apply_charm(target: CardData, context: Dictionary) -> void:
 # New effect handlers
 # ============================================
 
-static func _apply_view_discard_select(value: int, context: Dictionary) -> void:
+static func _apply_view_discard_select(_target: CardData, value: int, _skill: Dictionary, context: Dictionary) -> void:
 	var discard_pile: Array = context.get("discard_pile", [])
 	if discard_pile.is_empty():
 		print("[SkillEffect] View discard: discard pile is empty")
@@ -250,7 +223,7 @@ static func _apply_view_discard_select(value: int, context: Dictionary) -> void:
 	print("  -> View discard pile and select up to %d card(s) from %d drawn" % [count, draw_count])
 
 
-static func _apply_view_deck_select(value: int, context: Dictionary) -> void:
+static func _apply_view_deck_select(_target: CardData, value: int, _skill: Dictionary, context: Dictionary) -> void:
 	var deck: Array = context.get("shared_deck", [])
 	if deck.is_empty():
 		var discard_pile: Array = context.get("discard_pile", [])
@@ -265,13 +238,13 @@ static func _apply_view_deck_select(value: int, context: Dictionary) -> void:
 	print("  -> View deck top cards and select up to %d card(s) from %d drawn" % [count, draw_count])
 
 
-static func _apply_make_zero_cost(value: int, eff_dict: Dictionary, context: Dictionary) -> void:
+static func _apply_make_zero_cost(_target: CardData, value: int, skill: Dictionary, context: Dictionary) -> void:
 	var hand: Array = context.get("active_hand", [])
 	if hand.is_empty():
 		print("[SkillEffect] Make zero cost: hand is empty")
 		return
-	var target_str: String = eff_dict.get("target", SkillEngine.TARGET_SELF)
-	var random_count: int = int(eff_dict.get("random_count", 0))
+	var target_str: String = skill.get("target", SkillEngine.TARGET_SELF)
+	var random_count: int = int(skill.get("random_count", 0))
 
 	# Gather eligible candidates (cost > 0, not already zero-cost)
 	var candidates: Array = []
@@ -303,3 +276,70 @@ static func _apply_make_zero_cost(value: int, eff_dict: Dictionary, context: Dic
 	var count: int = value if value > 0 else 1
 	EventBus.make_zero_cost_select.emit(count, context.get("current_player", 0), hand, target_str, random_count)
 	print("  -> Make up to %d card(s) cost 0 until deployed (target=%s)" % [count, target_str])
+
+
+# ============================================
+# Extended effects (user-editable expansion)
+# ============================================
+
+static func _apply_mana_drain(_target: CardData, value: int, _skill: Dictionary, context: Dictionary) -> void:
+	var pf: BattleField = context.get("player_field")
+	var ef: BattleField = context.get("enemy_field")
+	# Only siphon what the enemy actually has: draining 5 from an enemy with
+	# 1 mana must give you 1, not 5 (previously the self side gained the full
+	# requested amount regardless of how much was available).
+	var drained: int = 0
+	if ef != null:
+		drained = min(value, ef.current_mana)
+		ef.current_mana = max(0, ef.current_mana - drained)
+		print("  -> Enemy loses %d mana (%d)" % [drained, ef.current_mana])
+	if pf != null:
+		pf.add_mana(drained)
+		print("  -> Self gains %d mana (%d)" % [drained, pf.current_mana])
+
+
+static func _apply_swap_attack(target: CardData, _value: int, _skill: Dictionary, context: Dictionary) -> void:
+	var source: CardData = context.get("source_card")
+	if target == null or source == null or target == source:
+		return
+	var tmp_atk: int = target.atk
+	var tmp_base: int = target.base_atk
+	target.atk = source.atk
+	target.base_atk = source.base_atk
+	source.atk = tmp_atk
+	source.base_atk = tmp_base
+	print("  -> %s and %s swap attack (%d <-> %d)" % [source.card_name, target.card_name, source.atk, target.atk])
+
+
+static func _apply_discard_hand(_target: CardData, value: int, _skill: Dictionary, context: Dictionary) -> void:
+	var enemy_hand: Array = context.get("enemy_hand", [])
+	if enemy_hand == null or enemy_hand.is_empty():
+		print("[SkillEffect] Discard hand: enemy hand is empty")
+		return
+	var rng = context.get("rng", null)
+	var discard_pile: Array = context.get("discard_pile", [])
+	var count: int = min(value, enemy_hand.size())
+	for _i in range(count):
+		var idx: int = rng.randi_range(0, enemy_hand.size() - 1) if rng is RandomNumberGenerator else randi_range(0, enemy_hand.size() - 1)
+		var card: CardData = enemy_hand[idx]
+		enemy_hand.remove_at(idx)
+		if card != null:
+			card.reset_to_base()
+			discard_pile.append(card)
+	print("  -> Enemy discards %d card(s)" % count)
+
+
+static func _apply_copy_hand(_target: CardData, value: int, _skill: Dictionary, context: Dictionary) -> void:
+	var hand: Array = context.get("active_hand", [])
+	if hand == null or hand.is_empty():
+		print("[SkillEffect] Copy hand: hand is empty")
+		return
+	var rng = context.get("rng", null)
+	var space: int = max(0, SkillEngine.MAX_HAND_SIZE - hand.size())
+	var count: int = min(value, space)
+	for _i in range(count):
+		var idx: int = rng.randi_range(0, hand.size() - 1) if rng is RandomNumberGenerator else randi_range(0, hand.size() - 1)
+		var copy: CardData = hand[idx].duplicate_card()
+		copy.instance_id = "copy_%d" % Time.get_ticks_usec()
+		hand.append(copy)
+	print("  -> Copy %d hand card(s)" % count)

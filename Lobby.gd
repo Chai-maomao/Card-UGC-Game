@@ -187,6 +187,7 @@ func _ready():
 	NetworkManager.lobby_connection_failed.connect(_on_lobby_connection_failed)
 	NetworkManager.game_connection_failed.connect(_on_game_connection_failed)
 	NetworkManager.reconnect_failed.connect(_on_reconnect_failed)
+	NetworkManager.opponent_disconnected.connect(_on_opponent_disconnected)
 	EventBus.rpc_ready_received.connect(_on_rpc_ready)
 	NetworkManager.game_started.connect(_on_battle_start)
 	EventBus.rpc_card_art_received.connect(_on_card_art_received)
@@ -276,6 +277,13 @@ func _on_reconnect_failed(_reason: String) -> void:
 	_on_game_connection_failed()
 
 
+func _on_opponent_disconnected(_player: int) -> void:
+	# In the waiting room an opponent leaving means nobody will ever show up —
+	# surface it instead of sitting on "waiting for opponent..." forever.
+	if waiting_ui:
+		_mark_waiting_room_failed(Locale.t("lobby.opponent_left_waiting"))
+
+
 func _mark_waiting_room_failed(message: String) -> void:
 	NetworkManager.close_connection()
 	_art_wait_deadline = 0.0
@@ -337,6 +345,8 @@ func _on_lobby_response_create(data: Dictionary):
 		if server_ip == "": server_ip = "127.0.0.1"
 		status_label.text = Locale.t("lobby.room_created", [_pending_room_code])
 		await get_tree().create_timer(0.3).timeout
+		if not is_inside_tree():
+			return
 		var err = NetworkManager.connect_to_game_room(server_ip, port, player, _pending_room_code, token)
 		if err != OK:
 			status_label.text = Locale.t("lobby.failed_join_room", [err])
@@ -395,6 +405,8 @@ func _on_lobby_response_join(data: Dictionary):
 		if server_ip == "": server_ip = "127.0.0.1"
 		status_label.text = Locale.t("lobby.joined_room", [_pending_room_code])
 		await get_tree().create_timer(0.3).timeout
+		if not is_inside_tree():
+			return
 		var err = NetworkManager.connect_to_game_room(server_ip, port, player, _pending_room_code, token)
 		if err != OK:
 			status_label.text = Locale.t("lobby.failed_join_room", [err])
@@ -456,6 +468,8 @@ func _on_opponent_joined():
 		return
 	status_label.text = Locale.t("lobby.opponent_connected")
 	await get_tree().create_timer(0.5).timeout
+	if not is_inside_tree():
+		return
 	_show_waiting_room()
 
 

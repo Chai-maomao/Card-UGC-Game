@@ -5,3 +5,6 @@
 # Trae/Qwen assistant
 .qwen/
 .trae/
+
+# Server build output
+server-build/

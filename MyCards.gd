@@ -72,10 +72,10 @@ func _clear_grid() -> void:
 		child.queue_free()
 
 
-func _add_top_button(text: String, callback: Callable) -> Button:
+func _add_top_button(text: String, callback: Callable, variant: String = "secondary") -> Button:
 	var btn := Button.new()
 	btn.text = text
-	UITheme.apply_button(btn, "primary" if text == Locale.t("mycards.create_new") or text == Locale.t("deck.new") else "secondary")
+	UITheme.apply_button(btn, variant)
 	btn.pressed.connect(callback)
 	top_bar.add_child(btn)
 	return btn
@@ -103,7 +103,7 @@ func _show_deck_manager() -> void:
 	_clear_grid()
 	_set_title(Locale.t("deck.manager_title"))
 	_add_spacer()
-	_add_top_button(Locale.t("deck.new"), _on_create_deck_pressed)
+	_add_top_button(Locale.t("deck.new"), _on_create_deck_pressed, "primary")
 	_add_top_button(Locale.t("share.import_deck"), _on_import_deck_pressed)
 	_add_top_button(Locale.t("common.back"), _on_back_to_menu_pressed)
 	card_grid.columns = 2
@@ -122,7 +122,7 @@ func _show_deck_cards(deck_id: String) -> void:
 	var deck := PlayerData.get_deck(deck_id)
 	_set_title(Locale.t("deck.cards_title") % deck.get("name", Locale.t("deck.default_name")))
 	_add_spacer()
-	_add_top_button(Locale.t("mycards.create_new"), _on_create_new_pressed)
+	_add_top_button(Locale.t("mycards.create_new"), _on_create_new_pressed, "primary")
 	_add_top_button(Locale.t("share.export_selected"), _on_export_selected_pressed)
 	_add_top_button(Locale.t("deck.copy_to"), _on_copy_selected_pressed)
 	_add_top_button(Locale.t("share.export_deck"), _on_export_current_deck_pressed)
@@ -164,14 +164,14 @@ func _add_deck_slot(deck: Dictionary) -> void:
 	_add_row_button(row, Locale.t("deck.open"), func(): _show_deck_cards(deck.get("id", "")))
 	_add_row_button(row, Locale.t("deck.rename"), func(): _show_rename_deck_popup(deck))
 	_add_row_button(row, Locale.t("share.export_deck"), func(): _export_deck(deck))
-	_add_row_button(row, Locale.t("mycards.delete"), func(): _delete_deck(deck.get("id", "")))
+	_add_row_button(row, Locale.t("mycards.delete"), func(): _delete_deck(deck.get("id", "")), "danger")
 
 
-func _add_row_button(row: HBoxContainer, text: String, callback: Callable) -> Button:
+func _add_row_button(row: HBoxContainer, text: String, callback: Callable, variant: String = "secondary") -> Button:
 	var btn := Button.new()
 	btn.text = text
 	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	UITheme.apply_button(btn, "danger" if text == Locale.t("mycards.delete") or text == "X" else "secondary")
+	UITheme.apply_button(btn, variant)
 	btn.pressed.connect(callback)
 	row.add_child(btn)
 	return btn
@@ -437,6 +437,13 @@ func _show_copy_to_decks_popup() -> void:
 	UITheme.apply_title(title, 20)
 	box.add_child(title)
 	var target_ids: Dictionary = {}
+	var deck_scroll := ScrollContainer.new()
+	deck_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	box.add_child(deck_scroll)
+	var deck_box := VBoxContainer.new()
+	deck_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	deck_box.add_theme_constant_override("separation", 6)
+	deck_scroll.add_child(deck_box)
 	for deck in PlayerData.deck_library:
 		var deck_id: String = deck.get("id", "")
 		if deck_id == selected_deck_id:
@@ -450,7 +457,7 @@ func _show_copy_to_decks_popup() -> void:
 			else:
 				target_ids.erase(deck_id)
 		)
-		box.add_child(check)
+		deck_box.add_child(check)
 	var row := HBoxContainer.new()
 	box.add_child(row)
 	_add_row_button(row, Locale.t("battle.confirm"), func():
@@ -730,7 +737,7 @@ func _show_message(text: String) -> void:
 	UITheme.apply_label(label)
 	box.add_child(label)
 	var ok := Button.new()
-	ok.text = "OK"
+	ok.text = Locale.t("skill_editor.ok")
 	ok.custom_minimum_size = Vector2(160, 36)
 	UITheme.apply_button(ok, "primary")
 	ok.pressed.connect(layer.queue_free)

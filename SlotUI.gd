@@ -14,6 +14,7 @@ var card_ui_scene = preload("res://CardUI.tscn")
 var current_card_ui = null
 var current_card_data: CardData = null
 var ui_scale: float = 1.0
+var visual_variant: String = "player"
 
 
 func apply_ui_scale(scale_value: float) -> void:
@@ -27,8 +28,18 @@ func apply_ui_scale(scale_value: float) -> void:
 
 
 func _ready():
-	text = "[ ]"
+	text = ""
+	_refresh_visual()
 	apply_ui_scale(ui_scale)
+
+
+func set_visual_variant(variant: String) -> void:
+	visual_variant = variant
+	_refresh_visual()
+
+
+func _refresh_visual() -> void:
+	UITheme.apply_slot(self, visual_variant, current_card_data != null)
 
 
 func set_card(card_data: CardData):
@@ -41,7 +52,8 @@ func set_card(card_data: CardData):
 	clear_card()
 
 	if card_data == null:
-		text = "[ ]"
+		text = ""
+		_refresh_visual()
 		return
 
 	current_card_data = card_data
@@ -61,15 +73,17 @@ func set_card(card_data: CardData):
 	add_child(card_ui)
 	card_ui.set_card(card_data)
 	current_card_ui = card_ui
+	_refresh_visual()
 	apply_ui_scale(ui_scale)
 
 
 func clear_card():
-	text = "[ ]"
+	text = ""
 	if current_card_ui and is_instance_valid(current_card_ui):
 		current_card_ui.queue_free()
 	current_card_ui = null
 	current_card_data = null
+	_refresh_visual()
 
 
 func _can_drop_data(_position: Vector2, data) -> bool:

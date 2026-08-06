@@ -9,6 +9,9 @@ signal skill2_requested
 signal skill3_requested
 
 @onready var background_panel = $Background
+@onready var card_surface = $CardSurface
+@onready var type_accent = $TypeAccent
+@onready var type_label = $TypeLabel
 @onready var name_label = $NameLabel
 @onready var cost_label = $CostLabel
 @onready var gender_label = $GenderLabel
@@ -25,6 +28,9 @@ var buff_dots: HBoxContainer
 var silence_label: Label
 var ui_scale: float = 1.0
 var _is_layout_applying: bool = false
+# Intent behind action_buttons visibility (true = show in battle): silence
+# temporarily overrides it, and set_card restores it once the silence expires.
+var _actions_visible: bool = true
 
 
 func _scaled_rect(left: float, top: float, right: float, bottom: float) -> void:
@@ -53,6 +59,9 @@ func apply_ui_scale(scale_value: float) -> void:
 		background_panel.custom_minimum_size = custom_minimum_size
 		background_panel.size = custom_minimum_size
 	_scale_child_rect($Background, 0, 0, 120, 160)
+	_scale_child_rect(card_surface, 0, 0, 120, 160)
+	_scale_child_rect(type_accent, 6, 27, 114, 29)
+	_scale_child_rect(type_label, 62, 26, 114, 40)
 	var is_special_card := current_card_data != null and (current_card_data.is_spell() or current_card_data.is_parasite())
 	if is_special_card:
 		_scale_child_rect(name_label, 6, 4, 114, 22)
@@ -60,24 +69,28 @@ func apply_ui_scale(scale_value: float) -> void:
 		_scale_child_rect(gender_label, 72, 24, 114, 40)
 		_scale_child_rect(hp_label, 6, 42, 94, 72)
 		_scale_child_rect(atk_label, 6, 58, 94, 72)
-		_scale_child_rect(action_buttons, 6, 82, 114, 154)
+		_scale_child_rect(action_buttons, 6, 82, 114, 158)
 	else:
 		_scale_child_rect(name_label, 6, 4, 114, 22)
 		_scale_child_rect(cost_label, 6, 26, 58, 40)
 		_scale_child_rect(gender_label, 72, 24, 114, 40)
 		_scale_child_rect(hp_label, 6, 42, 94, 56)
 		_scale_child_rect(atk_label, 6, 58, 94, 72)
-		_scale_child_rect(action_buttons, 6, 82, 114, 154)
+		_scale_child_rect(action_buttons, 6, 82, 114, 158)
 	if name_label:
 		name_label.add_theme_font_size_override("font_size", max(10, int(13 * ui_scale)))
 	if gender_label:
 		gender_label.add_theme_font_size_override("font_size", max(8, int(10 * ui_scale)))
+	if type_label:
+		type_label.add_theme_font_size_override("font_size", max(7, int(8 * ui_scale)))
 	for label in [cost_label, hp_label, atk_label]:
 		if label:
 			label.add_theme_font_size_override("font_size", max(9, int(11 * ui_scale)))
+	# Action buttons are compact chips; a slightly smaller font keeps 4 stacked
+	# buttons (basic attack + 3 skills) inside the ~76px action column.
 	for button in [normal_atk_btn, skill1_btn, skill2_btn, skill3_btn]:
 		if button:
-			button.add_theme_font_size_override("font_size", max(9, int(11 * ui_scale)))
+			button.add_theme_font_size_override("font_size", max(9, int(10 * ui_scale)))
 	if action_buttons:
 		action_buttons.add_theme_constant_override("separation", max(1, int(2 * ui_scale)))
 	if buff_dots:
@@ -93,12 +106,8 @@ func apply_ui_scale(scale_value: float) -> void:
 
 func _apply_card_visual_style() -> void:
 	if background_panel:
-		var style := StyleBoxFlat.new()
-		style.bg_color = Color(0.11, 0.12, 0.16)
-		style.border_color = Color(0.48, 0.43, 0.32)
-		style.set_border_width_all(max(1, int(2 * ui_scale)))
-		style.set_corner_radius_all(max(3, int(7 * ui_scale)))
-		background_panel.add_theme_stylebox_override("panel", style)
+		var card_type := current_card_data.card_type if current_card_data != null else "minion"
+		UITheme.apply_card_surface(background_panel, card_type, ui_scale)
 	for label in [name_label, cost_label, hp_label, atk_label]:
 		if label:
 			label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.75))
@@ -114,6 +123,32 @@ func _apply_card_visual_style() -> void:
 		gender_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.75))
 		gender_label.add_theme_constant_override("shadow_offset_x", max(1, int(1 * ui_scale)))
 		gender_label.add_theme_constant_override("shadow_offset_y", max(1, int(1 * ui_scale)))
+	if type_accent:
+		var accent := UITheme.COLOR_GOLD
+		if current_card_data != null and current_card_data.is_spell():
+			accent = UITheme.COLOR_ARCANE
+		elif current_card_data != null and current_card_data.is_parasite():
+			accent = Color(0.68, 0.38, 0.78)
+		type_accent.color = accent
+	if type_label:
+		UITheme.apply_label(type_label, true)
+	if normal_atk_btn:
+		UITheme.apply_button(normal_atk_btn, "primary")
+	for button in [skill1_btn, skill2_btn, skill3_btn]:
+		if button:
+			UITheme.apply_button(button)
+	# Action buttons are compact chips stacked in a fixed-height column. Shrink
+	# their vertical padding so up to 4 buttons (basic attack + 3 skills) fit
+	# the ~76px action area without pushing any button past the card bounds.
+	var chip_margin: int = max(1, int(1 * ui_scale))
+	for button in [normal_atk_btn, skill1_btn, skill2_btn, skill3_btn]:
+		if button == null:
+			continue
+		for style_name in ["normal", "hover", "pressed", "disabled"]:
+			var style := button.get_theme_stylebox(style_name) as StyleBoxFlat
+			if style != null:
+				style.content_margin_top = chip_margin
+				style.content_margin_bottom = chip_margin
 
 
 func _ready():
@@ -168,7 +203,9 @@ func set_card(card_data: CardData):
 	if name_label:
 		name_label.text = card_data.card_name
 	if gender_label:
-		gender_label.text = _gender_text(card_data.gender)
+		gender_label.text = ""
+	if type_label:
+		type_label.text = _card_type_text(card_data)
 	if card_data.is_charmed():
 		if cost_label:
 			cost_label.text = Locale.t("card.cost_charmed")
@@ -188,15 +225,11 @@ func set_card(card_data: CardData):
 
 	# ATK: show effective, plus bonus — hidden for spell cards (no body)
 	if card_data.is_spell():
-		if gender_label:
-			gender_label.text = Locale.t("card.spell")
 		if hp_label:
 			hp_label.text = ""
 		if atk_label:
 			atk_label.text = ""
 	elif card_data.is_parasite():
-		if gender_label:
-			gender_label.text = Locale.t("card.parasite")
 		if hp_label:
 			hp_label.text = Locale.t("card.parasite_hp", [card_data.hp, card_data.max_hp])
 		if atk_label:
@@ -223,8 +256,8 @@ func set_card(card_data: CardData):
 		tooltip_text = _parasite_tooltip(card_data)
 	if silence_label:
 		silence_label.visible = card_data.is_silenced()
-	if action_buttons and card_data.is_silenced():
-		action_buttons.visible = false
+	if action_buttons:
+		action_buttons.visible = _actions_visible and not card_data.is_silenced()
 	self.modulate = Color(0.5, 0.5, 0.5) if card_data.is_silenced() else Color.WHITE
 	_auto_hide_if_enemy()
 
@@ -232,7 +265,7 @@ func set_card(card_data: CardData):
 func _update_card_layout_for_type() -> void:
 	var is_special_card := current_card_data != null and (current_card_data.is_spell() or current_card_data.is_parasite())
 	if gender_label:
-		gender_label.visible = true
+		gender_label.visible = false
 		gender_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	if hp_label:
 		hp_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART if is_special_card else TextServer.AUTOWRAP_OFF
@@ -246,6 +279,14 @@ func _update_card_layout_for_type() -> void:
 		skill3_btn.visible = false
 	if not _is_layout_applying:
 		apply_ui_scale(ui_scale)
+
+
+func _card_type_text(card_data: CardData) -> String:
+	if card_data.is_spell():
+		return Locale.t("card.spell")
+	if card_data.is_parasite():
+		return Locale.t("card.parasite")
+	return _gender_text(card_data.gender)
 
 
 func _clear_buff_dots():
@@ -273,6 +314,10 @@ func _update_buff_dots():
 			dot.color = Color(0.2, 0.8, 1.0)
 		elif eff.get("buff_id", "") == SkillEngine.BUFF_MISFORTUNE:
 			dot.color = Color(0.3, 0.3, 0.3)  # dark grey for misfortune
+		elif eff.get("buff_id", "") == SkillEngine.BUFF_POISON:
+			dot.color = Color(0.7, 0.4, 0.85)  # purple for poison
+		elif eff.get("buff_id", "") == SkillEngine.BUFF_STUN:
+			dot.color = Color(0.95, 0.9, 0.35)  # yellow for stun
 		else:
 			dot.color = Color.GREEN
 		dot.tooltip_text = _format_buff_tooltip(eff)
@@ -304,7 +349,7 @@ func _format_buff_tooltip(eff: Dictionary) -> String:
 	var dur: int = eff.get("duration", 0)
 	var name: String = Locale.term("buff", bid)
 	var detail := SkillEngine.format_buff_value(bid, str(val))
-	return "%s：%s，剩余 %d 回合" % [name, detail, dur] if Locale.language == "zh" else "%s: %s, %d turn(s) left" % [name, detail, dur]
+	return Locale.t("card.buff_tooltip_detail", [name, detail, dur])
 
 
 func _parasite_tooltip(card_data: CardData) -> String:
@@ -335,7 +380,7 @@ func _update_skill_buttons():
 			if current_card_data.skills.size() >= 1:
 				var s: Dictionary = current_card_data.skills[0]
 				var sname: String = s.get("skill_name", "")
-				skill1_btn.text = sname if sname != "" else "S1"
+				skill1_btn.text = sname if sname != "" else Locale.t("mycards.skill_fallback", [1])
 				skill1_btn.tooltip_text = _TextFormatter.format_skill_tooltip(s)
 				skill1_btn.visible = true
 			else:
@@ -355,7 +400,7 @@ func _update_skill_buttons():
 			if current_card_data.is_spell():
 				skill1_btn.text = Locale.t("card.spell_cast")
 			else:
-				skill1_btn.text = sname if sname != "" else "S1"
+				skill1_btn.text = sname if sname != "" else Locale.t("mycards.skill_fallback", [1])
 			skill1_btn.tooltip_text = _TextFormatter.format_skill_tooltip(s)
 			skill1_btn.visible = true
 			_apply_skill_button_state(skill1_btn, s, 0)
@@ -369,7 +414,7 @@ func _update_skill_buttons():
 			if current_card_data.is_spell():
 				skill2_btn.text = Locale.t("card.spell_cast")
 			else:
-				skill2_btn.text = sname if sname != "" else "S2"
+				skill2_btn.text = sname if sname != "" else Locale.t("mycards.skill_fallback", [2])
 			skill2_btn.tooltip_text = _TextFormatter.format_skill_tooltip(s)
 			skill2_btn.visible = true
 			_apply_skill_button_state(skill2_btn, s, 1)
@@ -382,7 +427,7 @@ func _update_skill_buttons():
 		if current_card_data.skills.size() >= 3 and not current_card_data.is_spell():
 			var s: Dictionary = current_card_data.skills[2]
 			var sname: String = s.get("skill_name", "")
-			skill3_btn.text = sname if sname != "" else "S3"
+			skill3_btn.text = sname if sname != "" else Locale.t("mycards.skill_fallback", [3])
 			skill3_btn.tooltip_text = _TextFormatter.format_skill_tooltip(s)
 			skill3_btn.visible = true
 			_apply_skill_button_state(skill3_btn, s, 2)
@@ -391,12 +436,25 @@ func _update_skill_buttons():
 		if current_card_data.is_spell():
 			skill3_btn.visible = false
 
-	# Silence: grey out all skill buttons and normal attack
+	# Silence: grey out all skill buttons and normal attack. When silence
+	# expires the next set_card re-runs this method with silenced=false and
+	# restores each button's proper state (see the else branch below).
 	if silenced:
 		for btn in [skill1_btn, skill2_btn, skill3_btn, normal_atk_btn]:
 			if btn and btn.visible:
 				btn.disabled = true
 				btn.modulate = Color(0.5, 0.5, 0.5)
+	else:
+		if normal_atk_btn:
+			normal_atk_btn.disabled = false
+			normal_atk_btn.modulate = Color.WHITE
+		if skill1_btn and skill1_btn.visible and current_card_data.skills.size() >= 1:
+			var s1: Dictionary = SpellRules.spell_skill(current_card_data) if current_card_data.is_spell() else current_card_data.skills[0]
+			_apply_skill_button_state(skill1_btn, s1, 0)
+		if skill2_btn and skill2_btn.visible and current_card_data.skills.size() >= 2:
+			_apply_skill_button_state(skill2_btn, current_card_data.skills[1], 1)
+		if skill3_btn and skill3_btn.visible and current_card_data.skills.size() >= 3:
+			_apply_skill_button_state(skill3_btn, current_card_data.skills[2], 2)
 
 
 # Grey out + disable a skill button when its skill can't be activated now:
@@ -420,11 +478,13 @@ func _auto_hide_if_enemy():
 
 
 func set_actions_visible(visible: bool):
+	_actions_visible = visible
 	if action_buttons:
 		action_buttons.visible = visible
 
 
 func set_skill_preview_visible(visible: bool):
+	_actions_visible = visible
 	if action_buttons:
 		action_buttons.visible = visible
 	if normal_atk_btn:

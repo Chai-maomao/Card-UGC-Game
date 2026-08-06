@@ -178,6 +178,7 @@ func make_skill_context_for_player(player: int, source_slot: int = -1, target_sl
 	var player_field_for_context = player_field if player == 1 else player2_field
 	var enemy_field_for_context = player2_field if player == 1 else player_field
 	var active_hand_for_context = player_hand if player == 1 else player2_hand
+	var enemy_hand_for_context = player2_hand if player == 1 else player_hand
 	return {
 		"player_field": player_field_for_context,
 		"enemy_field": enemy_field_for_context,
@@ -187,6 +188,7 @@ func make_skill_context_for_player(player: int, source_slot: int = -1, target_sl
 		"draw_callable": Callable(self, "draw_cards_for_player").bind(player),
 		"current_player": player,
 		"active_hand": active_hand_for_context,
+		"enemy_hand": enemy_hand_for_context,
 		"discard_pile": shared_discard,
 		"shared_deck": shared_deck,
 		"rng": game_rng,
@@ -274,7 +276,7 @@ func attach_parasite(hand_index: int, target_player: int, target_slot: int) -> b
 	var card: CardData = hand[hand_index]
 	var target_field := player_field if target_player == 1 else player2_field
 	var target: CardData = target_field.slots[target_slot] if target_slot >= 0 and target_slot < target_field.slots.size() else null
-	var attach_check: Dictionary = ParasiteRules.can_attach(card, target, active_field().current_mana)
+	var attach_check: Dictionary = ParasiteRules.can_attach(card, target, active_field().get_total_mana())
 	if not attach_check.get("ok", false):
 		return false
 	active_field().spend_mana(card.cost)
@@ -291,7 +293,7 @@ func cast_spell(hand_index: int, skill_index: int = SpellRules.CAST_SKILL_INDEX,
 	if hand_index < 0 or hand_index >= hand.size():
 		return false
 	var card: CardData = hand[hand_index]
-	var cast_check: Dictionary = SpellRules.can_cast(card, active_field().current_mana, skill_index)
+	var cast_check: Dictionary = SpellRules.can_cast(card, active_field().get_total_mana(), skill_index)
 	if not cast_check.get("ok", false):
 		return false
 
@@ -356,6 +358,9 @@ func execute_attack(atk_slot: int, def_slot: int) -> Dictionary:
 	var victim: CardData = opponent_field().slots[def_slot]
 	if attacker == null or victim == null:
 		return {}
+	if attacker.has_acted:
+		print("%s already acted this turn!" % attacker.card_name)
+		return {}
 	if attacker.is_silenced() and not attacker.attack_ignores_silence:
 		print("%s is silenced and cannot attack!" % attacker.card_name)
 		return {}
@@ -376,8 +381,10 @@ func execute_attack(atk_slot: int, def_slot: int) -> Dictionary:
 	EventBus.damage_resolved.emit(attacker, victim, declared_dmg, actual_dmg, reduction_pct, temp_hp_before, "attack")
 	EventBus.hp_changed.emit(victim, -actual_dmg, victim.hp)
 	if victim.is_alive():
-		SkillEngine.trigger_skills(SkillEngine.TRIGGER_ON_DAMAGED, victim, make_skill_context_for_player(3 - current_player, def_slot, atk_slot))
-		ParasiteRules.trigger_host_passives(SkillEngine.TRIGGER_ON_DAMAGED, victim, make_skill_context_for_player(3 - current_player, def_slot, atk_slot))
+		var victim_ctx := make_skill_context_for_player(3 - current_player, def_slot, atk_slot)
+		SkillEngine.trigger_skills(SkillEngine.TRIGGER_ON_DAMAGED, victim, victim_ctx)
+		SkillEngine.trigger_skills(SkillEngine.TRIGGER_ON_ATTACKED, victim, victim_ctx)
+		ParasiteRules.trigger_host_passives(SkillEngine.TRIGGER_ON_DAMAGED, victim, victim_ctx)
 	attacker.has_acted = true
 	attacker.has_attacked = true
 	if not victim.is_alive():
@@ -462,6 +469,13 @@ func end_player_turn() -> Dictionary:
 	if refund_total > 0:
 		active_field().add_mana(refund_total)
 		print("[Mana+] P%d gains %d mana at turn end (%d/%d)" % [current_player, refund_total, active_field().current_mana, active_field().max_mana])
+
+	# On-turn-end passives for the current player's field.
+	var ending_board: BattleField = player_field if current_player == 1 else player2_field
+	for i in range(ending_board.slots.size()):
+		var card: CardData = ending_board.slots[i]
+		if card != null and card.is_alive():
+			SkillEngine.trigger_skills(SkillEngine.TRIGGER_ON_TURN_END, card, make_skill_context_for_player(current_player, i, -1))
 
 	# Tick buffs owned by the next player, then clear that player's old shields.
 	# Shields gained this turn stay through the opponent's turn and expire when
@@ -578,6 +592,19 @@ func start_new_turn() -> void:
 
 	if current_player == 1:
 		turn_number += 1
+
+	# Stun: stunned cards skip their actions this turn (buff consumed once).
+	var active_board: BattleField = player_field if current_player == 1 else player2_field
+	for slot in active_board.slots:
+		if slot != null and slot.has_stun():
+			slot.has_acted = true
+			slot.consume_stun()
+
+	# On-turn-start passives for the current player's field.
+	for i in range(active_board.slots.size()):
+		var card: CardData = active_board.slots[i]
+		if card != null and card.is_alive():
+			SkillEngine.trigger_skills(SkillEngine.TRIGGER_ON_TURN_START, card, make_skill_context_for_player(current_player, i, -1))
 
 	if draw_callable.is_valid():
 		draw_callable.call(draw_amount)

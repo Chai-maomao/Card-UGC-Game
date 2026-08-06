@@ -1,0 +1,186 @@
+class_name TargetSlot
+extends PanelContainer
+
+# ============================================
+# Scratch-style target selector slot.
+# Sits at the "target" position of an effect sentence ("对 [友方/敌方]
+# [目标] 造成 …"): two independent dimensions — side (enemy/ally/all) and
+# target (single/sides/all/self/self_sides).
+# Each slot renders as an oval chip showing the current value; clicking it
+# opens a picker, and a matching palette reporter (target_block / side_block)
+# can be dropped in to set it. Dragging the chip back onto the palette
+# restores the default value.
+# Data contract (bound dictionary, shared reference):
+#   side   : data["target_side"] = side_id
+#   target : data["target"]      = target_id
+# ============================================
+
+const _TargetResolver = preload("res://SkillTargetResolver.gd")
+
+signal changed
+
+var data: Dictionary
+var kind: String = "target"   # "target" | "side"
+
+
+func setup(p_data: Dictionary, p_kind: String) -> void:
+	data = p_data
+	kind = p_kind
+	_apply_slot_style()
+	_rebuild()
+
+
+func _apply_slot_style() -> void:
+	var st := StyleBoxFlat.new()
+	var tint := _tint_color()
+	st.bg_color = Color(tint.r, tint.g, tint.b, 0.30)
+	st.border_color = Color(tint.r, tint.g, tint.b, 0.85)
+	st.set_border_width_all(1)
+	st.set_corner_radius_all(10)
+	st.content_margin_left = 4
+	st.content_margin_right = 4
+	st.content_margin_top = 2
+	st.content_margin_bottom = 2
+	add_theme_stylebox_override("panel", st)
+	custom_minimum_size = Vector2(64, 26)
+	mouse_filter = Control.MOUSE_FILTER_PASS
+	set_drag_forwarding(
+		Callable(self, "_slot_get_drag_data"),
+		Callable(self, "_can_drop_var"),
+		Callable(self, "_drop_var"),
+	)
+
+
+func _tint_color() -> Color:
+	return Color(0.30, 0.50, 0.80) if kind == "target" else Color(0.62, 0.52, 0.30)
+
+
+func _field() -> String:
+	return "target_side" if kind == "side" else "target"
+
+
+func _default_value() -> String:
+	if kind == "side":
+		return _TargetResolver.default_target_side(str(data.get("target", SkillEngine.TARGET_SINGLE)))
+	return SkillEngine.TARGET_SINGLE
+
+
+func _current_value() -> String:
+	return str(data.get(_field(), _default_value()))
+
+
+func _ids() -> Array:
+	return SkillRegistry.TARGET_SIDE_IDS if kind == "side" else SkillRegistry.TARGET_IDS
+
+
+func _value_label(value: String) -> String:
+	return Locale.term("target_side", value) if kind == "side" else Locale.term("target", value)
+
+
+func _rebuild() -> void:
+	for child in get_children():
+		child.queue_free()
+	var btn := Button.new()
+	btn.text = ValueSlot._clamp_chip(_value_label(_current_value()), 8)
+	# No clip_text: it drops the text from the minimum-size calculation and
+	# collapses the chip; _clamp_chip already keeps the label bounded.
+	btn.add_theme_font_size_override("font_size", 12)
+	btn.add_theme_color_override("font_color", Color(1, 1, 1, 0.97))
+	var st := StyleBoxFlat.new()
+	var tint := _tint_color()
+	st.bg_color = Color(tint.r, tint.g, tint.b, 0.65)
+	st.border_color = tint
+	st.set_border_width_all(1)
+	st.set_corner_radius_all(12)
+	st.content_margin_left = 8
+	st.content_margin_right = 8
+	st.content_margin_top = 1
+	st.content_margin_bottom = 1
+	btn.add_theme_stylebox_override("normal", st)
+	var hover: StyleBoxFlat = st.duplicate()
+	hover.bg_color = Color(tint.r, tint.g, tint.b, 0.85)
+	btn.add_theme_stylebox_override("hover", hover)
+	btn.add_theme_stylebox_override("pressed", hover)
+	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	btn.pressed.connect(func(): _open_menu(btn))
+	_set_param_pass(btn)
+	add_child(btn)
+
+
+func _open_menu(anchor: Control) -> void:
+	var menu := PopupMenu.new()
+	var ids: Array = _ids()
+	for i in range(ids.size()):
+		menu.add_item(_value_label(str(ids[i])), i)
+	menu.id_pressed.connect(func(id: int):
+		var value: String = str(ids[id])
+		data[_field()] = value
+		_rebuild()
+		changed.emit()
+	)
+	add_child(menu)
+	menu.position = Vector2i(anchor.get_global_rect().position + Vector2(0, anchor.size.y))
+	menu.popup()
+
+
+func _slot_get_drag_data(_pos: Vector2):
+	var value := _current_value()
+	if value == "":
+		return null
+	var lbl := Label.new()
+	lbl.text = _value_label(value)
+	lbl.add_theme_font_size_override("font_size", 13)
+	lbl.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
+	var st := StyleBoxFlat.new()
+	var tint := _tint_color()
+	st.bg_color = Color(tint.r, tint.g, tint.b, 0.85)
+	st.border_color = tint
+	st.set_border_width_all(1)
+	st.set_corner_radius_all(12)
+	st.content_margin_left = 8
+	st.content_margin_right = 8
+	st.content_margin_top = 3
+	st.content_margin_bottom = 3
+	lbl.add_theme_stylebox_override("normal", st)
+	var wrap := Control.new()
+	wrap.add_child(lbl)
+	set_drag_preview(wrap)
+	return {
+		"type": "target_block" if kind == "target" else "side_block",
+		"value": value,
+		"from_slot": self,
+	}
+
+
+func _can_drop_var(_pos: Vector2, payload) -> bool:
+	if not (payload is Dictionary):
+		return false
+	var t: String = str(payload.get("type", ""))
+	return t == ("target_block" if kind == "target" else "side_block")
+
+
+func _drop_var(_pos: Vector2, payload) -> void:
+	# Move semantics: if the reporter came from another slot, reset that slot.
+	var src: Object = payload.get("from_slot", null)
+	if src != null and src != self and is_instance_valid(src) and src.has_method("clear_to_number"):
+		src.call("clear_to_number")
+	var value: String = str(payload.get("value", ""))
+	if value == "":
+		return
+	data[_field()] = value
+	_rebuild()
+	changed.emit()
+
+
+# Restore the slot to its default value. Also used when the chip is dragged
+# onto the palette (drop-to-discard for target / side reporters).
+func clear_to_number() -> void:
+	data[_field()] = _default_value()
+	_rebuild()
+	changed.emit()
+
+
+# Inline parameter controls keep mouse_filter PASS so drag-drop resolution can
+# walk through them to the enclosing block; STOP controls swallow the drop.
+func _set_param_pass(c: Control) -> void:
+	c.mouse_filter = Control.MOUSE_FILTER_PASS

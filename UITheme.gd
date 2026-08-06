@@ -18,6 +18,12 @@ const COLOR_PRIMARY := Color(0.40, 0.31, 0.14)
 const COLOR_PRIMARY_HOVER := Color(0.55, 0.42, 0.18)
 const COLOR_PRIMARY_PRESSED := Color(0.25, 0.19, 0.09)
 const COLOR_SHADOW := Color(0.0, 0.0, 0.0, 0.35)
+const COLOR_ARCANE := Color(0.20, 0.72, 0.84)
+const COLOR_ARCANE_SOFT := Color(0.12, 0.24, 0.32, 0.94)
+const COLOR_ENEMY := Color(0.48, 0.20, 0.36)
+const COLOR_PLAYER := Color(0.16, 0.46, 0.64)
+const COLOR_SUCCESS := Color(0.42, 0.76, 0.58)
+const COLOR_WARNING := Color(0.95, 0.58, 0.25)
 
 
 static func apply_app_background(control: Control) -> void:
@@ -53,11 +59,35 @@ static func apply_panel(panel: Control, variant: String = "normal") -> void:
 			shadow = Color(0.0, 0.0, 0.0, 0.45)
 			shadow_size = 6
 		"slot":
-			fill = Color(0.08, 0.095, 0.125, 0.88)
-			border = Color(0.26, 0.30, 0.38)
+			fill = Color(0.055, 0.09, 0.13, 0.94)
+			border = Color(0.22, 0.42, 0.56)
 			radius = 8
-			shadow = Color(0.0, 0.0, 0.0, 0.20)
-			shadow_size = 2
+			shadow = Color(0.02, 0.28, 0.40, 0.22)
+			shadow_size = 4
+		"battle":
+			fill = Color(0.035, 0.055, 0.085, 0.98)
+			border = Color(0.16, 0.28, 0.38)
+			radius = 0
+			shadow = Color(0.0, 0.0, 0.0, 0.0)
+			shadow_size = 0
+		"hand":
+			fill = Color(0.035, 0.07, 0.10, 0.94)
+			border = Color(0.24, 0.50, 0.62, 0.66)
+			radius = 14
+			shadow = Color(0.0, 0.0, 0.0, 0.48)
+			shadow_size = 8
+		"enemy_slot":
+			fill = Color(0.13, 0.055, 0.10, 0.92)
+			border = COLOR_ENEMY
+			radius = 8
+			shadow = Color(0.35, 0.04, 0.18, 0.22)
+			shadow_size = 4
+		"player_slot":
+			fill = Color(0.035, 0.11, 0.16, 0.94)
+			border = COLOR_PLAYER
+			radius = 8
+			shadow = Color(0.02, 0.28, 0.40, 0.26)
+			shadow_size = 4
 	panel.add_theme_stylebox_override("panel", panel_style(fill, border, width, radius, shadow, shadow_size))
 
 
@@ -92,6 +122,38 @@ static func apply_button(button: BaseButton, variant: String = "secondary") -> v
 	button.add_theme_color_override("font_hover_color", Color(1.0, 0.94, 0.72))
 	button.add_theme_color_override("font_pressed_color", Color(0.94, 0.82, 0.50))
 	button.add_theme_color_override("font_disabled_color", Color(0.44, 0.46, 0.50))
+
+
+static func apply_card_surface(panel: Panel, card_type: String, scale: float = 1.0) -> void:
+	if panel == null:
+		return
+	var border := COLOR_GOLD_SOFT
+	var fill := Color(0.02, 0.03, 0.05, 1.0)
+	if card_type == "spell":
+		border = COLOR_ARCANE
+		fill = Color(0.045, 0.12, 0.17, 0.98)
+	elif card_type == "parasite":
+		border = Color(0.56, 0.30, 0.66)
+		fill = Color(0.11, 0.055, 0.14, 0.98)
+	var style := panel_style(fill, border, max(1, int(scale)), max(3, int(6 * scale)), Color(border.r, border.g, border.b, 0.16), max(1, int(3 * scale)))
+	panel.add_theme_stylebox_override("panel", style)
+
+
+static func apply_slot(button: Button, variant: String = "player", occupied: bool = false) -> void:
+	if button == null:
+		return
+	var fill := Color(0.035, 0.11, 0.16, 0.94)
+	var border := COLOR_PLAYER
+	if variant == "enemy":
+		fill = Color(0.13, 0.055, 0.10, 0.92)
+		border = COLOR_ENEMY
+	if occupied:
+		fill = Color(0.035, 0.045, 0.065, 0.46)
+		border = border.darkened(0.25)
+	button.add_theme_stylebox_override("normal", panel_style(fill, border, 1 if occupied else 2, 8, Color(border.r, border.g, border.b, 0.18), 4 if not occupied else 2))
+	button.add_theme_stylebox_override("hover", panel_style(fill.lightened(0.08), border.lightened(0.28), 2, 8, Color(border.r, border.g, border.b, 0.34), 7))
+	button.add_theme_stylebox_override("pressed", panel_style(fill.darkened(0.12), border, 2, 8))
+	button.add_theme_color_override("font_color", Color(0, 0, 0, 0))
 
 
 static func apply_title(label: Label, size: int = 24) -> void:

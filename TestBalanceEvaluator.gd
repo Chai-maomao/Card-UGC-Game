@@ -46,11 +46,11 @@ func _test_target_side_signs() -> void:
 func _test_random_target_cap_and_conditions() -> void:
 	var broad: Dictionary = BalanceEvaluator.evaluate_values(1, 0, 1, [{
 		"trigger": SkillEngine.TRIGGER_ON_CAST,
-		"effects": [{"target": SkillEngine.TARGET_ALL_ENEMIES, "effect": SkillEngine.EFFECT_DAMAGE, "value": 2, "random_count": 0}],
+		"effects": [{"target": SkillEngine.TARGET_ALL, "target_side": SkillEngine.TARGET_SIDE_ENEMY, "effect": SkillEngine.EFFECT_DAMAGE, "value": 2, "random_count": 0}],
 	}])
 	var limited_conditional: Dictionary = BalanceEvaluator.evaluate_values(1, 0, 1, [{
 		"trigger": SkillEngine.TRIGGER_ON_CAST,
-		"effects": [{"target": SkillEngine.TARGET_ALL_ENEMIES, "effect": SkillEngine.EFFECT_DAMAGE, "value": 2, "random_count": 1, "condition_type": SkillEngine.CONDITION_TARGET_HP_PCT, "condition_op": SkillEngine.CONDITION_OP_LTE, "condition_value": 50}],
+		"effects": [{"target": SkillEngine.TARGET_ALL, "target_side": SkillEngine.TARGET_SIDE_ENEMY, "effect": SkillEngine.EFFECT_DAMAGE, "value": 2, "random_count": 1, "condition_type": SkillEngine.CONDITION_TARGET_HP_PCT, "condition_op": SkillEngine.CONDITION_OP_LTE, "condition_value": 50}],
 	}])
 	if float(limited_conditional.get("score", 0.0)) >= float(broad.get("score", 0.0)):
 		_fail("random target cap and condition should reduce score")

@@ -192,31 +192,31 @@ func _show_battle_config_popup(cards: Array) -> void:
 	box.add_theme_constant_override("separation", 8)
 	margin.add_child(box)
 	var title := Label.new()
-	title.text = "战斗参数设置"
+	title.text = Locale.t("battle_config.title")
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	UITheme.apply_title(title, 20)
 	box.add_child(title)
 
 	# Row: Mana per turn
-	var mana_row := _make_config_spin_row(box, "每回合回费:", PlayerData.battle_config.get("mana_per_turn", 2), 0, 10)
+	var mana_row := _make_config_spin_row(box, Locale.t("battle_config.mana_per_turn"), PlayerData.battle_config.get("mana_per_turn", 2), 0, 10)
 
 	# Row: Draw per turn
-	var draw_row := _make_config_spin_row(box, "每回合抽牌:", PlayerData.battle_config.get("draw_per_turn", 2), 1, 6)
+	var draw_row := _make_config_spin_row(box, Locale.t("battle_config.draw_per_turn"), PlayerData.battle_config.get("draw_per_turn", 2), 1, 6)
 
 	# Row: Starting HP
-	var hp_row := _make_config_spin_row(box, "初始血量:", PlayerData.battle_config.get("starting_hp", 30), 1, 99)
+	var hp_row := _make_config_spin_row(box, Locale.t("battle_config.starting_hp"), PlayerData.battle_config.get("starting_hp", 30), 1, 99)
 
 	# Row: Second player extra cards
-	var extra_cards_row := _make_config_spin_row(box, "后手额外卡牌:", PlayerData.battle_config.get("second_extra_cards", 0), 0, 5)
+	var extra_cards_row := _make_config_spin_row(box, Locale.t("battle_config.second_extra_cards"), PlayerData.battle_config.get("second_extra_cards", 0), 0, 5)
 
 	# Row: Second player extra mana
-	var extra_mana_row := _make_config_spin_row(box, "后手额外圣水:", PlayerData.battle_config.get("second_extra_mana", 0), 0, 10)
+	var extra_mana_row := _make_config_spin_row(box, Locale.t("battle_config.second_extra_mana"), PlayerData.battle_config.get("second_extra_mana", 0), 0, 10)
 
 	# Row: Death compensation
-	var death_comp_check := _make_config_check_row(box, "战败补偿(卡牌死亡抽1张):", PlayerData.battle_config.get("death_compensation", false))
+	var death_comp_check := _make_config_check_row(box, Locale.t("battle_config.death_compensation"), PlayerData.battle_config.get("death_compensation", false))
 
 	# Row: Face damage compensation
-	var face_comp_check := _make_config_check_row(box, "本体伤害补偿(临时圣水):", PlayerData.battle_config.get("face_damage_compensation", false))
+	var face_comp_check := _make_config_check_row(box, Locale.t("battle_config.face_damage_compensation"), PlayerData.battle_config.get("face_damage_compensation", false))
 
 	var btn_row := HBoxContainer.new()
 	btn_row.add_theme_constant_override("separation", 10)
@@ -224,7 +224,7 @@ func _show_battle_config_popup(cards: Array) -> void:
 	box.add_child(btn_row)
 
 	var start_btn := Button.new()
-	start_btn.text = "开始战斗"
+	start_btn.text = Locale.t("battle_config.start_battle")
 	start_btn.custom_minimum_size = Vector2(140, 36)
 	UITheme.apply_button(start_btn, "primary")
 	start_btn.pressed.connect(func():
@@ -319,7 +319,7 @@ func _show_message(text: String) -> void:
 	UITheme.apply_label(label)
 	box.add_child(label)
 	var ok := Button.new()
-	ok.text = "OK"
+	ok.text = Locale.t("skill_editor.ok")
 	ok.custom_minimum_size = Vector2(160, 36)
 	UITheme.apply_button(ok, "primary")
 	ok.pressed.connect(layer.queue_free)

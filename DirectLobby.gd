@@ -168,6 +168,7 @@ func _ready():
 	back_btn.pressed.connect(_on_back_pressed)
 	NetworkManager.connected.connect(_on_opponent_joined)
 	NetworkManager.game_connection_failed.connect(_on_game_connection_failed)
+	NetworkManager.opponent_disconnected.connect(_on_opponent_disconnected)
 	EventBus.rpc_ready_received.connect(_on_rpc_ready)
 	EventBus.rpc_card_art_received.connect(_on_card_art_received)
 	EventBus.rpc_card_art_manifest_received.connect(_on_card_art_manifest)
@@ -222,6 +223,8 @@ func _on_opponent_joined():
 		return
 	status_label.text = Locale.t("lobby.opponent_connected")
 	await get_tree().create_timer(0.5).timeout
+	if not is_inside_tree():
+		return
 	_show_waiting_room()
 
 
@@ -239,6 +242,23 @@ func _on_game_connection_failed():
 	host_btn.disabled = false
 	join_btn.disabled = false
 	_resize_panel_to_content.call_deferred(_ui_scale())
+
+
+func _on_opponent_disconnected(_player: int) -> void:
+	# In the waiting room an opponent leaving means the game can never start —
+	# return to the lobby with a clear message instead of waiting forever.
+	if waiting_ui:
+		NetworkManager.close_connection()
+		_art_wait_deadline = 0.0
+		set_process(false)
+		waiting_ui.queue_free()
+		waiting_ui = null
+		lobby_panel.visible = true
+		back_btn.visible = true
+		status_label.text = Locale.t("lobby.opponent_left_waiting")
+		host_btn.disabled = false
+		join_btn.disabled = false
+		_resize_panel_to_content.call_deferred(_ui_scale())
 
 
 func _show_waiting_room(initial_message: String = ""):
@@ -537,6 +557,8 @@ func _begin_start() -> void:
 	if start_now_btn != null:
 		start_now_btn.disabled = true
 	await get_tree().create_timer(0.3).timeout
+	if not is_inside_tree():
+		return
 	_start_battle()
 
 

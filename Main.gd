@@ -86,8 +86,9 @@ func _scale_control(control: Control, base_size: Vector2) -> void:
 
 
 func _apply_theme() -> void:
-	UITheme.apply_app_background($CanvasLayer/MainBackground)
+	UITheme.apply_panel($CanvasLayer/MainBackground, "battle")
 	UITheme.apply_panel($CanvasLayer/MainBackground/MainLayout/MiddleInfoBar, "gold")
+	UITheme.apply_panel($CanvasLayer/MainBackground/MainLayout/HandArea/HandBackdrop, "hand")
 	UITheme.apply_panel(discard_zone, "dark")
 	UITheme.apply_panel(splash_panel, "gold")
 	UITheme.apply_label(mana_label)
@@ -375,6 +376,8 @@ func _ready():
 	var e_slots = enemy_side_ui.get_children()
 
 	for i in range(p_slots.size()):
+		p_slots[i].set_visual_variant("player")
+		e_slots[i].set_visual_variant("enemy")
 		p_slots[i].pressed.connect(_on_player_slot_clicked.bind(i))
 		if p_slots[i].has_signal("slot_attack_requested"):
 			p_slots[i].slot_attack_requested.connect(_on_attack_requested.bind(i))
@@ -509,14 +512,6 @@ func _show_toast(key: String, args := []) -> void:
 	toast_tween.tween_property(toast_label, "modulate:a", 0.0, 0.4)
 
 
-func _build_combat_broadcast() -> void:
-	_build_toast()
-
-
-func _scale_combat_broadcast() -> void:
-	_scale_toast()
-
-
 func _show_combat_broadcast(text: String) -> void:
 	if text.strip_edges() == "":
 		return
@@ -595,10 +590,6 @@ func _on_skill_roll_failed(source: CardData, skill_name: String, misfortune: int
 		"misfortune": misfortune,
 		"final_probability": final_probability,
 	})
-
-
-func _spawn_floating_text(pos: Vector2, delta: int) -> void:
-	_spawn_combat_text(pos, delta)
 
 
 func _spawn_combat_text(pos: Vector2, delta: int, strong: bool = false) -> void:
@@ -920,11 +911,22 @@ func _format_action_broadcast(event: Dictionary) -> String:
 		"attack":
 			return _format_attack_broadcast(subject, target, hp_events, damage_events, parasite_events, int(event.get("base_damage", 0)), int(event.get("effective_damage", event.get("base_damage", 0))), int(event.get("target_player", _opponent_of_player(player))), int(event.get("target_slot", -1)), bool(event.get("kill_mana", false)))
 		"skill", "summon_skill":
-			var skill_name: String = event.get("skill", "技能")
+			var skill_name: String = event.get("skill", Locale.t("battle.log.skill_word"))
 			return _format_skill_broadcast(subject, skill_name, hp_events, damage_events, parasite_events, failed_events)
 		"cast":
-			return _format_skill_broadcast(subject, "施放", hp_events, damage_events, parasite_events, failed_events)
+			return _format_skill_broadcast(subject, Locale.t("battle.log.cast_word"), hp_events, damage_events, parasite_events, failed_events)
 	return ""
+
+
+# Joins battle-broadcast segments with the punctuation of the active language
+# (CJK uses ，。; English uses ", ."). Avoids hardcoded Chinese separators
+# leaking into English builds.
+func _join_broadcast(parts: Array, with_period: bool = true) -> String:
+	var sep: String = ", " if Locale.language == "en" else "，"
+	var text := sep.join(parts)
+	if with_period:
+		text += "." if Locale.language == "en" else "。"
+	return text
 
 
 func _format_attack_broadcast(subject: String, target: String, hp_events: Array, damage_events: Array, parasite_events: Array, base_damage: int, effective_damage: int, target_player: int, target_slot: int, kill_mana: bool = false) -> String:
@@ -950,33 +952,33 @@ func _format_attack_broadcast(subject: String, target: String, hp_events: Array,
 				other_damage += damage
 				other_count += 1
 		elif delta > 0:
-			heals.append("%s恢复了%d点生命" % [ev.get("card", "单位"), delta])
+			heals.append(Locale.t("battle.log.heal", [ev.get("card", Locale.t("battle.log.unit")), delta]))
 	var target_detail := _damage_detail_for(damage_events, target_player, target_slot)
 	if target_damage == 0 and not target_detail.is_empty():
 		target_damage = int(target_detail.get("actual", 0))
 	var target_declared: int = base_damage if effective_damage != base_damage else int(target_detail.get("declared", effective_damage))
 	var parts := []
-	var intro := "%s攻击了%s%s" % [subject, _side_text(target_player), target]
+	var intro := Locale.t("battle.log.attack_intro", [subject, _side_text(target_player), target])
 	if target_declared > 0 and (target_damage > 0 or target_declared != target_damage):
 		if target_declared != target_damage:
-			parts.append("%s，原本造成%d点伤害，但因为一些原因，实际造成%d点伤害" % [intro, target_declared, target_damage])
+			parts.append(Locale.t("battle.log.damage_reduced", [intro, target_declared, target_damage]))
 		else:
-			parts.append("%s，造成%d点伤害" % [intro, target_damage])
+			parts.append(Locale.t("battle.log.damage_plain", [intro, target_damage]))
 	else:
 		parts.append(intro)
 	if adjacent_damage > 0:
-		parts.append("并且对%s两边的%d个单位共造成%d点溅射伤害" % [target, adjacent_count, adjacent_damage])
+		parts.append(Locale.t("battle.log.splash", [target, adjacent_count, adjacent_damage]))
 	if other_damage > 0:
-		parts.append("并且对其他%d个单位共造成%d点伤害" % [other_count, other_damage])
+		parts.append(Locale.t("battle.log.other_damage", [other_count, other_damage]))
 	if kill_mana:
-		parts.append("击杀目标，圣水+1")
+		parts.append(Locale.t("battle.log.kill_mana"))
 	parts.append_array(_format_parasite_broadcast_parts(parasite_events))
 	parts.append_array(heals)
-	return "，".join(parts) + "。"
+	return _join_broadcast(parts)
 
 
 func _format_skill_broadcast(subject: String, action_name: String, hp_events: Array, damage_events: Array, parasite_events: Array, failed_events: Array) -> String:
-	var parts := ["%s使用了%s" % [subject, action_name]]
+	var parts := [Locale.t("battle.log.skill_use", [subject, action_name])]
 	var has_result := not damage_events.is_empty()
 	for ev in hp_events:
 		if int(ev.get("delta", 0)) > 0:
@@ -984,32 +986,32 @@ func _format_skill_broadcast(subject: String, action_name: String, hp_events: Ar
 	for fail in failed_events:
 		var misfortune: int = int(fail.get("misfortune", 0))
 		if misfortune > 0 and not has_result:
-			parts.append("但由于霉运%d%%状态，技能无效" % misfortune)
+			parts.append(Locale.t("battle.log.skill_misfortune", [misfortune]))
 		elif has_result:
-			parts.append("但有部分概率触发的效果没有生效")
+			parts.append(Locale.t("battle.log.skill_partial"))
 		else:
-			parts.append("但技能没有生效")
+			parts.append(Locale.t("battle.log.skill_failed"))
 	for dmg in damage_events:
 		var actual: int = int(dmg.get("actual", 0))
 		var declared: int = int(dmg.get("declared", actual))
 		if declared <= 0:
 			continue
-		var target_name: String = dmg.get("target", "单位")
+		var target_name: String = dmg.get("target", Locale.t("battle.log.unit"))
 		var player: int = int(dmg.get("player", 0))
 		if declared != actual:
-			parts.append("对%s%s原本造成%d点伤害，但因为一些原因，实际造成%d点伤害" % [_side_text(player), target_name, declared, actual])
+			parts.append(Locale.t("battle.log.damage_target_reduced", [_side_text(player), target_name, declared, actual]))
 		else:
-			parts.append("对%s%s造成%d点伤害" % [_side_text(player), target_name, actual])
+			parts.append(Locale.t("battle.log.damage_target_plain", [_side_text(player), target_name, actual]))
 	var heal_by_card := {}
 	for ev in hp_events:
-		var card_name: String = ev.get("card", "单位")
+		var card_name: String = ev.get("card", Locale.t("battle.log.unit"))
 		var delta: int = int(ev.get("delta", 0))
 		if delta > 0:
 			heal_by_card[card_name] = int(heal_by_card.get(card_name, 0)) + delta
 	for card_name in heal_by_card.keys():
-		parts.append("使%s%s恢复%d点生命" % [_side_text(_player_for_event_card(hp_events, card_name)), card_name, int(heal_by_card[card_name])])
+		parts.append(Locale.t("battle.log.heal_target", [_side_text(_player_for_event_card(hp_events, card_name)), card_name, int(heal_by_card[card_name])]))
 	parts.append_array(_format_parasite_broadcast_parts(parasite_events))
-	return "，".join(parts) + "。"
+	return _join_broadcast(parts)
 
 
 func _format_parasite_broadcast_parts(parasite_events: Array) -> Array:
@@ -1019,13 +1021,13 @@ func _format_parasite_broadcast_parts(parasite_events: Array) -> Array:
 		var actual: int = int(ev.get("actual", 0))
 		if declared <= 0:
 			continue
-		var parasite_name: String = ev.get("parasite", "寄生卡")
+		var parasite_name: String = ev.get("parasite", Locale.t("battle.log.parasite"))
 		if declared != actual:
-			parts.append("对寄生卡%s原本造成%d点伤害，但因为一些原因，实际造成%d点伤害" % [parasite_name, declared, actual])
+			parts.append(Locale.t("battle.log.parasite_reduced", [parasite_name, declared, actual]))
 		else:
-			parts.append("对寄生卡%s造成%d点伤害" % [parasite_name, actual])
+			parts.append(Locale.t("battle.log.parasite_plain", [parasite_name, actual]))
 		if bool(ev.get("destroyed", false)):
-			parts.append("寄生卡%s退场" % parasite_name)
+			parts.append(Locale.t("battle.log.parasite_gone", [parasite_name]))
 	return parts
 
 
@@ -1034,21 +1036,6 @@ func _damage_detail_for(damage_events: Array, player: int, slot: int) -> Diction
 		if int(ev.get("player", 0)) == player and int(ev.get("slot", -1)) == slot:
 			return ev
 	return {}
-
-
-func _damage_modifier_text(damage_event: Dictionary) -> String:
-	if damage_event.is_empty():
-		return ""
-	var parts := []
-	var reduction_pct: int = int(damage_event.get("reduction_pct", 0))
-	if reduction_pct > 0:
-		parts.append("由于目标的减伤%d%%状态" % reduction_pct)
-	var temp_hp_before: int = int(damage_event.get("temp_hp_before", 0))
-	if temp_hp_before > 0:
-		parts.append("由于目标的护盾吸收")
-	if parts.is_empty():
-		return ""
-	return "，" + "，".join(parts)
 
 
 func _player_for_event_card(events: Array, card_name: String) -> int:
@@ -1060,9 +1047,9 @@ func _player_for_event_card(events: Array, card_name: String) -> int:
 
 func _side_text(player: int) -> String:
 	if player == _view_player():
-		return "己方"
+		return Locale.t("battle.log.friendly")
 	if player == _opponent_player():
-		return "对方"
+		return Locale.t("battle.log.enemy")
 	return ""
 
 
@@ -1129,6 +1116,8 @@ func _manual_target_card_for_skill(skill: Dictionary, target_slot: int) -> CardD
 # ============================================
 
 func _show_splash(card: CardData) -> void:
+	if card == null:
+		return
 	if splash_tween and splash_tween.is_valid():
 		splash_tween.kill()
 	splash_name.text = card.card_name
@@ -1229,6 +1218,9 @@ func _on_card_drag_summoned(card_data, origin_ui, slot_index: int):
 
 # Called when a spell or parasite card's skill button is clicked in hand.
 func _on_hand_card_skill_activated(hand_index: int, skill_index: int = SpellRules.CAST_SKILL_INDEX) -> void:
+	if not is_my_turn():
+		return
+	cancel_attack()
 	var hand := _my_hand()
 	if hand_index < 0 or hand_index >= hand.size():
 		return
@@ -1242,6 +1234,7 @@ func _on_hand_card_skill_activated(hand_index: int, skill_index: int = SpellRule
 func _start_parasite_attach_from_hand(hand_index: int) -> void:
 	if not is_my_turn():
 		return
+	cancel_attack()
 	var hand := _my_hand()
 	if hand_index < 0 or hand_index >= hand.size():
 		return
@@ -1269,6 +1262,7 @@ func _first_available_parasite_target() -> CardData:
 func _start_spell_cast_from_hand(hand_index: int, skill_index: int = SpellRules.CAST_SKILL_INDEX) -> void:
 	if not is_my_turn():
 		return
+	cancel_attack()
 	var hand := _my_hand()
 	if hand_index < 0 or hand_index >= hand.size():
 		return
@@ -1445,7 +1439,7 @@ func _on_skill_activated(slot_index: int, skill_index: int):
 					NetworkManager.rpc_intent_activate_skill.rpc(slot_index, skill_index, -1, game.current_player)
 			return
 		card.skills_used.append(skill_index)
-		_begin_action_broadcast("summon_skill" if is_summon else "skill", game.current_player, card.card_name, "", {"skill": skill.get("skill_name", "技能")})
+		_begin_action_broadcast("summon_skill" if is_summon else "skill", game.current_player, card.card_name, "", {"skill": skill.get("skill_name", Locale.t("battle.log.skill_word"))})
 		if is_summon:
 			game.trigger_summon_skills(slot_index, -1, skill_index)
 		else:
@@ -1539,8 +1533,13 @@ func _apply_summon_skill_target(target_player: int, target_slot: int) -> void:
 			NetworkManager.rpc_intent_summon_skill.rpc(summon_source_slot, summon_skill_idx, target_slot, game.current_player)
 		cancel_attack()
 		return
+	# The source card may have left the field while the aim was active
+	# (dragged to the discard / died); abort cleanly instead of crashing.
+	if source_card == null:
+		cancel_attack()
+		return
 	source_card.skills_used.append(summon_skill_idx)
-	_begin_action_broadcast("summon_skill", game.current_player, source_card.card_name if source_card != null else "单位", target_card.card_name if target_card != null else "", {"skill": summon_skill.get("skill_name", "技能")})
+	_begin_action_broadcast("summon_skill", game.current_player, source_card.card_name if source_card != null else Locale.t("battle.log.unit"), target_card.card_name if target_card != null else "", {"skill": summon_skill.get("skill_name", Locale.t("battle.log.skill_word"))})
 	game.trigger_summon_skills(summon_source_slot, target_slot, summon_skill_idx, target_player)
 	_finish_action_broadcast()
 	_play_skill_cast_feedback(game.current_player, summon_source_slot)
@@ -1564,8 +1563,11 @@ func _apply_activate_skill_target(target_player: int, target_slot: int) -> void:
 			NetworkManager.rpc_intent_activate_skill.rpc(activate_source_slot, activate_skill_idx, target_slot, game.current_player)
 		cancel_attack()
 		return
+	if source_card == null:
+		cancel_attack()
+		return
 	source_card.skills_used.append(activate_skill_idx)
-	_begin_action_broadcast("skill", game.current_player, source_card.card_name if source_card != null else "单位", target_card.card_name if target_card != null else "", {"skill": activate_skill.get("skill_name", "技能")})
+	_begin_action_broadcast("skill", game.current_player, source_card.card_name if source_card != null else Locale.t("battle.log.unit"), target_card.card_name if target_card != null else "", {"skill": activate_skill.get("skill_name", Locale.t("battle.log.skill_word"))})
 	game.trigger_activate_skills(activate_source_slot, target_slot, activate_skill_idx, target_player)
 	_finish_action_broadcast()
 	_play_skill_cast_feedback(game.current_player, activate_source_slot)
@@ -1642,10 +1644,13 @@ func _on_opponent_slot_clicked(index: int):
 				NetworkManager.rpc_intent_summon_skill.rpc(summon_source_slot, summon_skill_idx, index, game.current_player)
 			cancel_attack()
 			return
-		_my_field().slots[summon_source_slot].skills_used.append(summon_skill_idx)
 		var summon_card: CardData = _my_field().slots[summon_source_slot]
-		var summon_skill: Dictionary = summon_card.skills[summon_skill_idx] if summon_card != null and summon_skill_idx < summon_card.skills.size() else {}
-		_begin_action_broadcast("summon_skill", game.current_player, summon_card.card_name if summon_card != null else "单位", _their_field().slots[index].card_name, {"skill": summon_skill.get("skill_name", "技能")})
+		if summon_card == null:
+			cancel_attack()
+			return
+		summon_card.skills_used.append(summon_skill_idx)
+		var summon_skill: Dictionary = summon_card.skills[summon_skill_idx] if summon_skill_idx < summon_card.skills.size() else {}
+		_begin_action_broadcast("summon_skill", game.current_player, summon_card.card_name, _their_field().slots[index].card_name, {"skill": summon_skill.get("skill_name", Locale.t("battle.log.skill_word"))})
 		game.trigger_summon_skills(summon_source_slot, index, summon_skill_idx)
 		_finish_action_broadcast()
 		_play_skill_cast_feedback(game.current_player, summon_source_slot)
@@ -1680,10 +1685,13 @@ func _on_opponent_slot_clicked(index: int):
 				NetworkManager.rpc_intent_activate_skill.rpc(activate_source_slot, activate_skill_idx, index, game.current_player)
 			cancel_attack()
 			return
-		_my_field().slots[activate_source_slot].skills_used.append(activate_skill_idx)
 		var card: CardData = _my_field().slots[activate_source_slot]
-		var activate_skill: Dictionary = card.skills[activate_skill_idx] if card != null and activate_skill_idx < card.skills.size() else {}
-		_begin_action_broadcast("skill", game.current_player, card.card_name if card != null else "单位", _their_field().slots[index].card_name, {"skill": activate_skill.get("skill_name", "技能")})
+		if card == null:
+			cancel_attack()
+			return
+		card.skills_used.append(activate_skill_idx)
+		var activate_skill: Dictionary = card.skills[activate_skill_idx] if activate_skill_idx < card.skills.size() else {}
+		_begin_action_broadcast("skill", game.current_player, card.card_name, _their_field().slots[index].card_name, {"skill": activate_skill.get("skill_name", Locale.t("battle.log.skill_word"))})
 		game.trigger_activate_skills(activate_source_slot, index, activate_skill_idx)
 		_finish_action_broadcast()
 		_play_skill_cast_feedback(game.current_player, activate_source_slot)
@@ -1750,7 +1758,7 @@ func _on_opponent_slot_clicked(index: int):
 	var attacker_card: CardData = _my_field().slots[attacker_slot]
 	var base_damage: int = attacker_card.atk if attacker_card != null else 0
 	var effective_damage: int = attacker_card.effective_atk() if attacker_card != null else 0
-	_begin_action_broadcast("attack", game.current_player, attacker_card.card_name if attacker_card != null else "单位", victim.card_name if victim != null else "单位", {"base_damage": base_damage, "effective_damage": effective_damage, "target_player": _opponent_player(), "target_slot": index})
+	_begin_action_broadcast("attack", game.current_player, attacker_card.card_name if attacker_card != null else Locale.t("battle.log.unit"), victim.card_name if victim != null else Locale.t("battle.log.unit"), {"base_damage": base_damage, "effective_damage": effective_damage, "target_player": _opponent_player(), "target_slot": index})
 	game.execute_attack(attacker_slot, index)
 	if victim != null and not victim.is_alive():
 		_action_broadcast["kill_mana"] = true
@@ -1814,6 +1822,8 @@ func _run_local_end_turn() -> void:
 		return
 	await get_tree().create_timer(0.5).timeout
 	game.start_new_turn()
+	if game.current_player == _view_player() and _my_hand().size() >= SkillEngine.MAX_HAND_SIZE:
+		_show_toast("tip.hand_full", [SkillEngine.MAX_HAND_SIZE])
 	_refresh_hand_ui()
 	end_turn_button.disabled = false
 	update_entire_screen()
@@ -2282,7 +2292,8 @@ func _show_pile_selection_popup(cards: Array, count: int, source: String, hand: 
 	margin.add_child(box)
 	var title := Label.new()
 	var max_slots := SkillEngine.MAX_HAND_SIZE - hand.size()
-	title.text = Locale.t("battle.choose_keep") + (" (%s)" % source)
+	var source_label: String = Locale.t("battle.draw_pile") if source == "deck" else Locale.t("battle.discard_pile")
+	title.text = Locale.t("battle.choose_keep") + (" (%s)" % source_label)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	UITheme.apply_title(title, 18)
 	box.add_child(title)
@@ -2387,9 +2398,9 @@ func _show_zero_cost_selection_popup(candidates: Array, count: int, hand: Array 
 	var include_sides: bool = target in [SkillEngine.TARGET_SIDES, SkillEngine.TARGET_SELF_SIDES]
 	var title := Label.new()
 	if include_sides:
-		title.text = "选择一张卡牌降为0费（自动包含相邻卡牌，部署后恢复原费用）" if Locale.language == "zh" else "Choose a card to reduce to 0 cost (neighbors included, restored after deploy)"
+		title.text = Locale.t("battle.zero_cost_title_sides")
 	else:
-		title.text = "选择要降为0费的卡牌（部署后恢复原费用）" if Locale.language == "zh" else "Choose cards to reduce to 0 cost (restored after deploy)"
+		title.text = Locale.t("battle.zero_cost_title")
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	UITheme.apply_title(title, 16)
 	box.add_child(title)
@@ -2893,7 +2904,7 @@ func _on_opponent_disconnected(_player: int) -> void:
 	remote_arrow_target = -1
 	if attack_arrow:
 		attack_arrow.visible = false
-	_show_combat_broadcast("对手已断开连接！" if Locale.language == "zh" else "Opponent disconnected!")
+	_show_combat_broadcast(Locale.t("battle.opponent_disconnected"))
 	if mana_label:
 		mana_label.text = "[ %s ]" % Locale.t("result.connection_lost_title")
 	if end_turn_button:
@@ -3066,7 +3077,7 @@ func _host_apply_summon_skill(slot_index: int, skill_index: int, target_slot: in
 	var source_card: CardData = _field_for_player(player).slots[slot_index]
 	var target_card: CardData = _field_for_player(_opponent_of_player(player)).slots[target_slot] if target_slot >= 0 else null
 	var skill: Dictionary = source_card.skills[skill_index] if source_card != null and skill_index < source_card.skills.size() else {}
-	_begin_action_broadcast("summon_skill", player, source_card.card_name if source_card != null else "单位", target_card.card_name if target_card != null else "", {"skill": skill.get("skill_name", "技能")})
+	_begin_action_broadcast("summon_skill", player, source_card.card_name if source_card != null else Locale.t("battle.log.unit"), target_card.card_name if target_card != null else "", {"skill": skill.get("skill_name", Locale.t("battle.log.skill_word"))})
 	var saved = game.current_player
 	game.current_player = player
 	var card: CardData = game.active_field().slots[slot_index]
@@ -3095,7 +3106,7 @@ func _host_apply_attack(source_slot: int, target_slot: int, player: int) -> void
 	var victim: CardData = _field_for_player(_opponent_of_player(player)).slots[target_slot]
 	var base_damage: int = attacker.atk if attacker != null else 0
 	var effective_damage: int = attacker.effective_atk() if attacker != null else 0
-	_begin_action_broadcast("attack", player, attacker.card_name if attacker != null else "单位", victim.card_name if victim != null else "单位", {"base_damage": base_damage, "effective_damage": effective_damage, "target_player": _opponent_of_player(player), "target_slot": target_slot})
+	_begin_action_broadcast("attack", player, attacker.card_name if attacker != null else Locale.t("battle.log.unit"), victim.card_name if victim != null else Locale.t("battle.log.unit"), {"base_damage": base_damage, "effective_damage": effective_damage, "target_player": _opponent_of_player(player), "target_slot": target_slot})
 	var saved = game.current_player
 	game.current_player = player
 	var result: Dictionary = game.execute_attack(source_slot, target_slot)
@@ -3123,7 +3134,7 @@ func _host_apply_skill(slot_index: int, skill_index: int, target_slot: int, play
 	var source_card: CardData = _field_for_player(player).slots[slot_index]
 	var target_card: CardData = _field_for_player(_opponent_of_player(player)).slots[target_slot] if target_slot >= 0 else null
 	var skill: Dictionary = source_card.skills[skill_index] if source_card != null and skill_index < source_card.skills.size() else {}
-	_begin_action_broadcast("skill", player, source_card.card_name if source_card != null else "单位", target_card.card_name if target_card != null else "", {"skill": skill.get("skill_name", "技能")})
+	_begin_action_broadcast("skill", player, source_card.card_name if source_card != null else Locale.t("battle.log.unit"), target_card.card_name if target_card != null else "", {"skill": skill.get("skill_name", Locale.t("battle.log.skill_word"))})
 	var saved = game.current_player
 	game.current_player = player
 	var card: CardData = game.active_field().slots[slot_index]
@@ -3152,7 +3163,7 @@ func _host_apply_parasite(hand_index: int, target_player: int, target_slot: int,
 	var parasite_card: CardData = hand[hand_index] if hand_index >= 0 and hand_index < hand.size() else null
 	var target_field := _field_for_player(target_player)
 	var target_card: CardData = target_field.slots[target_slot] if target_slot >= 0 and target_slot < target_field.slots.size() else null
-	_begin_action_broadcast("parasite", player, parasite_card.card_name if parasite_card != null else "寄生", target_card.card_name if target_card != null else "")
+	_begin_action_broadcast("parasite", player, parasite_card.card_name if parasite_card != null else Locale.t("battle.log.parasite"), target_card.card_name if target_card != null else "")
 	var saved = game.current_player
 	game.current_player = player
 	var attach_ok: bool = game.attach_parasite(hand_index, target_player, target_slot)
@@ -3172,7 +3183,7 @@ func _host_apply_cast(hand_index: int, skill_index: int, target_slot: int, playe
 		return
 	var hand := _hand_for_player(player)
 	var spell_card: CardData = hand[hand_index] if hand_index >= 0 and hand_index < hand.size() else null
-	_begin_action_broadcast("cast", player, spell_card.card_name if spell_card != null else "法术", "")
+	_begin_action_broadcast("cast", player, spell_card.card_name if spell_card != null else Locale.t("battle.log.spell_word"), "")
 	var saved = game.current_player
 	game.current_player = player
 	var cast_ok: bool = game.cast_spell(hand_index, skill_index, target_slot)

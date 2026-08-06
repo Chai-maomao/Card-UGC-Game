@@ -267,9 +267,7 @@ func _handle_lobby_request(sender_id: int, json_str: String) -> void:
 
 
 func _spawn_room(code: String, port: int, p1_token: String, p2_token: String) -> int:
-	# Launch a dedicated relay subprocess for this room. Exported Godot builds
-	# cannot override the scene path on the command line, so the same server
-	# main scene switches into room mode via --room-server.
+	# Launch a dedicated relay subprocess for this room.
 	var exe := OS.get_executable_path()
 	var args := PackedStringArray([
 		"--headless",

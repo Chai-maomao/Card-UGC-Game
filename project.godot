@@ -22,6 +22,15 @@ PlayerData="*uid://bluk0ihmmqv4x"
 EventBus="*uid://duavhufhthawd"
 NetworkManager="*res://NetworkManager.gd"
 Locale="*res://Locale.gd"
+WindowSizeController="*res://WindowSizeController.gd"
+AppVersion="*res://AppVersion.gd"
+
+[display]
+
+window/size/resizable=false
+window/size/window_width_override=1152
+window/size/window_height_override=648
+window/stretch/mode="canvas_items"
 
 [physics]
 

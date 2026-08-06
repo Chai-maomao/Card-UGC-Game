@@ -67,14 +67,14 @@ static func starter_library() -> Array:
 		# --- 炮术师: 主动随机轰击 2 个敌人，每个造成 1-3 点伤害 ---
 		CardData.new("炮术师", 4, 4, 2, [
 			_fx_skill("随机炮击", SkillEngine.TRIGGER_ON_ACTIVATE, [
-				_fx_random(SkillEngine.TARGET_ALL_ENEMIES, SkillEngine.EFFECT_DAMAGE, 1, 3, "", 0, 2),
+				_fx_random(SkillEngine.TARGET_ALL, SkillEngine.EFFECT_DAMAGE, 1, 3, "", 0, 2, 100, SkillEngine.TARGET_SIDE_ENEMY),
 			]),
 		]),
 
 		# --- 军旗手: 召唤时根据我方场上随从数量为全体友方加护盾 ---
 		CardData.new("军旗手", 3, 4, 1, [
 			_fx_skill("列阵护卫", SkillEngine.TRIGGER_ON_SUMMON, [
-				_fx_var(SkillEngine.TARGET_ALL_ALLIES, SkillEngine.EFFECT_SHIELD, SkillEngine.VAR_FIELD_ALLY),
+				_fx_var(SkillEngine.TARGET_ALL, SkillEngine.EFFECT_SHIELD, SkillEngine.VAR_FIELD_ALLY, 0, "", 0, 0, 100, SkillEngine.TARGET_SIDE_ALLY),
 			]),
 		]),
 

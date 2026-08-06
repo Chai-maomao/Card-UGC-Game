@@ -36,13 +36,19 @@ var pending_save_popup_layer: CanvasLayer = null
 @onready var balance_summary = $Panel/MarginContainer/ScrollContainer/VBoxContainer/BalanceSummary
 @onready var art_path_label = $Panel/MarginContainer/ScrollContainer/VBoxContainer/ArtRow/ArtPathLabel
 @onready var art_dialog = $ArtFileDialog
+@onready var card_preview_panel = $CardPreviewPanel
+@onready var preview_title = $CardPreviewPanel/PreviewBox/PreviewTitle
+@onready var preview_card = $CardPreviewPanel/PreviewBox/PreviewCenter/PreviewCard
 
 @onready var skill1_label = $Panel/MarginContainer/ScrollContainer/VBoxContainer/Skill1Label
 @onready var skill1_summary = $Panel/MarginContainer/ScrollContainer/VBoxContainer/Skill1Summary
 @onready var skill2_label = $Panel/MarginContainer/ScrollContainer/VBoxContainer/Skill2Label
 @onready var skill2_summary = $Panel/MarginContainer/ScrollContainer/VBoxContainer/Skill2Summary
+@onready var skill3_label = $Panel/MarginContainer/ScrollContainer/VBoxContainer/Skill3Label
+@onready var skill3_summary = $Panel/MarginContainer/ScrollContainer/VBoxContainer/Skill3Summary
 @onready var edit_skill1_btn = $Panel/MarginContainer/ScrollContainer/VBoxContainer/EditSkill1Button
 @onready var edit_skill2_btn = $Panel/MarginContainer/ScrollContainer/VBoxContainer/EditSkill2Button
+@onready var edit_skill3_btn = $Panel/MarginContainer/ScrollContainer/VBoxContainer/EditSkill3Button
 @onready var save_button = $Panel/MarginContainer/ScrollContainer/VBoxContainer/SaveButton
 @onready var back_button = $BackButton
 
@@ -52,7 +58,7 @@ signal card_created(new_card_data: CardData)
 func _apply_texts() -> void:
 	title_label.text = Locale.t("editor.title")
 	template_button.text = Locale.t("editor.use_template")
-	art_label.text = Locale.t("editor.card_art")
+	art_label.text = Locale.t("editor.art_label")
 	browse_button.text = Locale.t("editor.browse")
 	name_label.text = Locale.t("editor.name")
 	cost_label.text = Locale.t("editor.cost")
@@ -87,9 +93,12 @@ func _apply_texts() -> void:
 
 	skill2_label.text = Locale.t("editor.skill_2")
 	edit_skill2_btn.text = Locale.t("editor.edit_skill_2")
+	skill3_label.text = Locale.t("editor.skill_3")
+	edit_skill3_btn.text = Locale.t("editor.edit_skill_3")
 	save_button.text = Locale.t("editor.update_card") if PlayerData.editing_index >= 0 else Locale.t("editor.save_card")
 	back_button.text = Locale.t("common.back")
 	art_dialog.title = Locale.t("editor.select_art")
+	preview_title.text = Locale.t("editor.preview_title")
 
 
 func _ui_scale() -> float:
@@ -105,7 +114,7 @@ func _apply_responsive_layout() -> void:
 	# MarginContainer
 	var margin := $Panel/MarginContainer
 	margin.add_theme_constant_override("margin_left", int(120 * s))
-	margin.add_theme_constant_override("margin_right", int(120 * s))
+	margin.add_theme_constant_override("margin_right", int(330 * s))
 	margin.add_theme_constant_override("margin_top", int(40 * s))
 	margin.add_theme_constant_override("margin_bottom", int(40 * s))
 
@@ -113,6 +122,12 @@ func _apply_responsive_layout() -> void:
 	var back_btn := $BackButton
 	back_btn.position = Vector2(8, 8) * s
 	back_btn.add_theme_font_size_override("font_size", max(10, int(14 * s)))
+	if card_preview_panel:
+		card_preview_panel.position = Vector2(-294 * s, 72 * s)
+		card_preview_panel.size = Vector2(266 * s, 270 * s)
+		preview_title.add_theme_font_size_override("font_size", max(10, int(14 * s)))
+		if preview_card:
+			preview_card.apply_ui_scale(max(0.9, 1.35 * s))
 
 	# VBox container
 	var vbox := $Panel/MarginContainer/ScrollContainer/VBoxContainer
@@ -142,13 +157,15 @@ func _apply_theme() -> void:
 	UITheme.apply_app_background($Panel)
 	UITheme.apply_panel($Panel, "dark")
 	UITheme.apply_title(title_label, max(18, int(22 * _ui_scale())))
-	for label in [art_label, name_label, cost_label, hp_label, atk_label, gender_label, balance_label, balance_summary, skill1_label, skill1_summary, skill2_label, skill2_summary]:
-		UITheme.apply_label(label, label == balance_summary or label == skill1_summary or label == skill2_summary)
+	for label in [art_label, name_label, cost_label, hp_label, atk_label, gender_label, balance_label, balance_summary, skill1_label, skill1_summary, skill2_label, skill2_summary, skill3_label, skill3_summary]:
+		UITheme.apply_label(label, label == balance_summary or label == skill1_summary or label == skill2_summary or label == skill3_summary)
 	for input in [name_input, cost_input, hp_input, atk_input, gender_select]:
 		UITheme.apply_input(input)
-	for btn in [template_button, browse_button, clear_art_button, edit_skill1_btn, edit_skill2_btn, save_button, back_button]:
+	for btn in [template_button, browse_button, clear_art_button, edit_skill1_btn, edit_skill2_btn, edit_skill3_btn, save_button, back_button]:
 		UITheme.apply_button(btn, "primary" if btn == save_button or btn == template_button else "secondary")
 	UITheme.apply_label(art_path_label, true)
+	UITheme.apply_panel(card_preview_panel, "gold")
+	UITheme.apply_title(preview_title, 14)
 
 
 func _ready():
@@ -173,6 +190,7 @@ func _ready():
 	_restore_form_from_draft()
 	_update_skill_labels()
 	_update_balance_summary()
+	_refresh_card_preview()
 	_connect_live_balance_updates()
 	_apply_responsive_layout()
 	get_viewport().size_changed.connect(_on_viewport_size_changed)
@@ -223,6 +241,14 @@ func _save_form_to_draft():
 	PlayerData.card_draft["gender"] = genders[gender_select.selected]
 
 
+func _refresh_card_preview() -> void:
+	if preview_card == null:
+		return
+	var preview_data: CardData = PlayerData.build_card_from_draft()
+	preview_card.set_card(preview_data)
+	preview_card.set_actions_visible(false)
+
+
 func _connect_live_balance_updates() -> void:
 	name_input.text_changed.connect(func(_text: String): _update_balance_from_form())
 	cost_input.value_changed.connect(func(_value: float): _update_balance_from_form())
@@ -234,13 +260,14 @@ func _connect_live_balance_updates() -> void:
 func _update_balance_from_form() -> void:
 	_save_form_to_draft()
 	_update_balance_summary()
+	_refresh_card_preview()
 
 
 func _update_balance_summary() -> void:
 	if balance_summary == null:
 		return
 	var skills: Array = []
-	for key in ["skill1", "skill2"]:
+	for key in ["skill1", "skill2", "skill3"]:
 		var skill: Dictionary = PlayerData.card_draft.get(key, {})
 		if not skill.is_empty():
 			skills.append(skill)
@@ -327,12 +354,18 @@ func _update_skill_labels():
 	var is_parasite: bool = card_type == "parasite"
 	skill1_summary.text = _format_skill_short(PlayerData.card_draft.get("skill1", {}))
 	skill2_summary.text = _format_skill_short(PlayerData.card_draft.get("skill2", {}))
+	skill3_summary.text = _format_skill_short(PlayerData.card_draft.get("skill3", {}))
 	var has_skill2: bool = not PlayerData.card_draft.get("skill2", {}).is_empty()
+	var has_skill3: bool = not PlayerData.card_draft.get("skill3", {}).is_empty()
 	# Spell cards only have one skill; parasite cards currently expose one passive skill slot.
 	skill2_label.visible = not is_spell and not is_parasite
 	skill2_summary.visible = not is_spell and not is_parasite
+	skill3_label.visible = not is_spell and not is_parasite
+	skill3_summary.visible = not is_spell and not is_parasite
 	edit_skill1_btn.visible = true
 	edit_skill2_btn.visible = (not is_spell and not is_parasite) or has_skill2
+	edit_skill3_btn.visible = (not is_spell and not is_parasite) or has_skill3
+	_refresh_card_preview()
 
 
 func _format_skill_short(skill: Dictionary) -> String:
@@ -351,10 +384,7 @@ func _format_skill_short(skill: Dictionary) -> String:
 		result += "%s " % Locale.t("skill.chance", [sp])
 
 	# Effects (backward compat)
-	var effects: Array = skill.get("effects", [])
-	if effects.is_empty() and not skill.get("effect", "").is_empty():
-		effects = [{"target": skill.get("target", ""), "target_side": skill.get("target_side", SkillEngine.TARGET_SIDE_ALL), "effect": skill.get("effect", ""),
-			"value": skill.get("value", 1), "buff_id": skill.get("buff_id", ""), "duration": skill.get("duration", 0)}]
+	var effects: Array = SkillEngine.legacy_skill_effects(skill)
 
 	if effects.is_empty():
 		result += Locale.t("editor.no_fx")
@@ -448,7 +478,7 @@ func _template_draft(template_id: String) -> Dictionary:
 			return {
 				"name": Locale.t("editor.template_healer"), "cost": 3, "hp": 5, "atk": 1, "gender": "female", "card_type": "minion", "art_path": "",
 				"skill1": {"skill_name": Locale.t("editor.template_healer_skill"), "trigger": SkillEngine.TRIGGER_ON_SUMMON, "probability": 100, "effects": [
-					_TargetResolver.normalize_effect_target({"target": SkillEngine.TARGET_ALL_ALLIES, "effect": SkillEngine.EFFECT_HEAL, "value": 2})
+					_TargetResolver.normalize_effect_target({"target": SkillEngine.TARGET_ALL, "target_side": SkillEngine.TARGET_SIDE_ALLY, "effect": SkillEngine.EFFECT_HEAL, "value": 2})
 				]},
 				"skill2": {}
 			}
@@ -465,7 +495,7 @@ func _template_draft(template_id: String) -> Dictionary:
 			return {
 				"name": Locale.t("editor.template_gunner"), "cost": 4, "hp": 4, "atk": 2, "gender": "nonhuman", "card_type": "minion", "art_path": "",
 				"skill1": {"skill_name": Locale.t("editor.template_gunner_skill"), "trigger": SkillEngine.TRIGGER_ON_ACTIVATE, "probability": 100, "effects": [
-					_TargetResolver.normalize_effect_target({"target": SkillEngine.TARGET_ALL_ENEMIES, "effect": SkillEngine.EFFECT_DAMAGE, "value_min": 1, "value_max": 3, "random_count": 2})
+					_TargetResolver.normalize_effect_target({"target": SkillEngine.TARGET_ALL, "target_side": SkillEngine.TARGET_SIDE_ENEMY, "effect": SkillEngine.EFFECT_DAMAGE, "value_min": 1, "value_max": 3, "random_count": 2})
 				]},
 				"skill2": {}
 			}
@@ -497,6 +527,12 @@ func _on_edit_skill1_pressed():
 func _on_edit_skill2_pressed():
 	_save_form_to_draft()
 	PlayerData.editing_skill_index = 1
+	get_tree().change_scene_to_file("res://SkillEditor.tscn")
+
+
+func _on_edit_skill3_pressed():
+	_save_form_to_draft()
+	PlayerData.editing_skill_index = 2
 	get_tree().change_scene_to_file("res://SkillEditor.tscn")
 
 
@@ -550,16 +586,23 @@ func _show_sync_edit_popup(new_card: CardData) -> void:
 	box.add_theme_constant_override("separation", 8)
 	margin.add_child(box)
 	var title := Label.new()
-	title.text = "同步修改同名卡牌" if Locale.language == "zh" else "Sync same-name cards"
+	title.text = Locale.t("editor.sync_title")
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	UITheme.apply_title(title, 20)
 	box.add_child(title)
 	var hint := Label.new()
-	hint.text = "请选择要同步更新的卡组，默认全部选中。" if Locale.language == "zh" else "Choose decks to update. All matching decks are selected by default."
+	hint.text = Locale.t("editor.sync_hint")
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	UITheme.apply_label(hint)
 	box.add_child(hint)
 	var selected_ids: Dictionary = target_deck_ids.duplicate()
+	var deck_scroll := ScrollContainer.new()
+	deck_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	box.add_child(deck_scroll)
+	var deck_box := VBoxContainer.new()
+	deck_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	deck_box.add_theme_constant_override("separation", 6)
+	deck_scroll.add_child(deck_box)
 	for deck in PlayerData.deck_library:
 		var deck_id: String = deck.get("id", "")
 		if not target_deck_ids.has(deck_id):
@@ -575,7 +618,7 @@ func _show_sync_edit_popup(new_card: CardData) -> void:
 			else:
 				selected_ids.erase(deck_id)
 		)
-		box.add_child(check)
+		deck_box.add_child(check)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	box.add_child(row)
@@ -585,7 +628,7 @@ func _show_sync_edit_popup(new_card: CardData) -> void:
 	UITheme.apply_button(save_btn, "primary")
 	save_btn.pressed.connect(func():
 		if not selected_ids.has(PlayerData.editing_deck_id):
-			_show_message("必须保留当前编辑卡组。" if Locale.language == "zh" else "The current deck must be updated.")
+			_show_message(Locale.t("editor.sync_keep_deck"))
 			return
 		_apply_synced_edit(new_card, original.card_name, selected_ids.keys())
 		popup_layer.queue_free()
@@ -604,7 +647,7 @@ func _apply_synced_edit(new_card: CardData, original_name: String, target_deck_i
 		var deck_id: String = deck_id_variant
 		for card in PlayerData.get_cards_for_deck(deck_id):
 			if card.card_name == new_card.card_name and card.card_name != original_name:
-				_show_message("所选卡组已有同名的其他卡牌，请先修改名称。" if Locale.language == "zh" else "A selected deck already has another card with this name. Rename the card first.")
+				_show_message(Locale.t("editor.sync_name_conflict"))
 				return
 	var saved_card: CardData = null
 	for deck_id_variant in target_deck_ids:
@@ -656,6 +699,13 @@ func _show_save_targets_popup(new_card: CardData) -> void:
 	box.add_child(title)
 	var target_ids: Dictionary = {}
 	var default_deck_id := PlayerData.editing_deck_id if PlayerData.editing_deck_id != "" else PlayerData.current_deck_id
+	var deck_scroll := ScrollContainer.new()
+	deck_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	box.add_child(deck_scroll)
+	var deck_box := VBoxContainer.new()
+	deck_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	deck_box.add_theme_constant_override("separation", 6)
+	deck_scroll.add_child(deck_box)
 	for deck in PlayerData.deck_library:
 		var deck_id: String = deck.get("id", "")
 		var check := CheckBox.new()
@@ -670,7 +720,7 @@ func _show_save_targets_popup(new_card: CardData) -> void:
 			else:
 				target_ids.erase(deck_id)
 		)
-		box.add_child(check)
+		deck_box.add_child(check)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	box.add_child(row)
@@ -800,7 +850,8 @@ func _show_save_conflict_popup(deck_id: String, local_card: CardData, new_card: 
 	rename_local.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	UITheme.apply_button(rename_local, "secondary")
 	rename_local.pressed.connect(func():
-		local_card.card_name = input.text.strip_edges()
+		var new_name := input.text.strip_edges()
+		local_card.card_name = new_name if new_name != "" else Locale.t("editor.unnamed")
 		PlayerData.save_library()
 		popup_layer.queue_free()
 		if pending_save_card != null:
@@ -816,7 +867,8 @@ func _show_save_conflict_popup(deck_id: String, local_card: CardData, new_card: 
 	rename_new.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	UITheme.apply_button(rename_new, "secondary")
 	rename_new.pressed.connect(func():
-		new_card.card_name = input.text.strip_edges()
+		var new_name := input.text.strip_edges()
+		new_card.card_name = new_name if new_name != "" else Locale.t("editor.unnamed")
 		popup_layer.queue_free()
 		if pending_save_card != null:
 			pending_save_card.card_name = new_card.card_name
@@ -874,7 +926,7 @@ func _show_message(text: String) -> void:
 	UITheme.apply_label(label)
 	box.add_child(label)
 	var ok := Button.new()
-	ok.text = "OK"
+	ok.text = Locale.t("skill_editor.ok")
 	ok.custom_minimum_size = Vector2(160, 36)
 	UITheme.apply_button(ok, "primary")
 	ok.pressed.connect(popup_layer.queue_free)

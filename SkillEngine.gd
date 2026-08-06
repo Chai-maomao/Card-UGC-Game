@@ -1,5 +1,5 @@
 class_name SkillEngine
-extends RefCounted
+extends SkillRegistry
 
 const _TargetResolver = preload("res://SkillTargetResolver.gd")
 const _EffectApplier = preload("res://SkillEffectApplier.gd")
@@ -10,93 +10,11 @@ const MAX_HAND_SIZE = 6
 # ============================================
 # Skill execution engine
 # ============================================
-
-const TRIGGER_ON_ATTACK   := "on_attack"
-const TRIGGER_ON_ACTIVATE := "on_activate"
-const TRIGGER_ON_SUMMON   := "on_summon"
-const TRIGGER_ON_DEATH    := "on_death"
-const TRIGGER_ON_DAMAGED  := "on_damaged"
-const TRIGGER_ON_CAST     := "on_cast"
-
-# Skill type: "normal" (blockable by silence) or "talent" (天赋, never blocked)
-const SKILL_TYPE_NORMAL  := "normal"
-const SKILL_TYPE_TALENT  := "talent"
-
-const TARGET_SINGLE       := "target_single"
-const TARGET_SIDES        := "target_sides"
-const TARGET_SELF         := "self"
-const TARGET_SELF_SIDES   := "self_sides"
-const TARGET_ALL          := "all"
-const TARGET_ALL_ENEMIES  := "all_enemies"
-const TARGET_ALL_ALLIES   := "all_allies"
-const TARGET_MALE         := "target_male"
-const TARGET_FEMALE       := "target_female"
-const TARGET_NONHUMAN     := "target_nonhuman"
-
-const TARGET_SIDE_ENEMY   := "enemy"
-const TARGET_SIDE_ALLY    := "ally"
-const TARGET_SIDE_ALL     := "all"
-
-const EFFECT_DAMAGE       := "damage"
-const EFFECT_HEAL         := "heal"
-const EFFECT_ADD_BUFF     := "add_buff"
-const EFFECT_DRAW_CARDS   := "draw_cards"
-const EFFECT_SHIELD       := "shield"
-const EFFECT_CHARM        := "charm"
-const EFFECT_LIFESTEAL_DAMAGE := "lifesteal_damage"
-const EFFECT_EXECUTE      := "execute"
-const EFFECT_CLEANSE      := "cleanse"
-const EFFECT_DISPEL       := "dispel"
-const EFFECT_GAIN_MANA    := "gain_mana"
-const EFFECT_GAIN_ATTACK  := "gain_attack"
-const EFFECT_GAIN_MAX_HP  := "gain_max_hp"
-const EFFECT_VIEW_DISCARD := "view_discard_select"
-const EFFECT_VIEW_DECK    := "view_deck_select"
-const EFFECT_ZERO_COST    := "make_zero_cost"
-const BUFF_SILENCE        := "silence"
-const BUFF_MISFORTUNE     := "misfortune"
-
-const BUFF_ATK_BOOST        := "atk_boost"
-const BUFF_REGEN            := "regen"
-const BUFF_MANA_REFUND      := "mana_refund"
-const BUFF_THORNS           := "thorns"
-const BUFF_DAMAGE_REDUCTION := "damage_reduction"
-const BUFF_TAUNT            := "taunt"
-const BUFF_IMMUNE_LETHAL   := "immune_lethal"
-
-# Dynamic value variables (resolved at execution time from skill context).
-const VAR_FIELD_TOTAL   := "field_total"
-const VAR_FIELD_ALLY    := "field_ally"
-const VAR_FIELD_ENEMY   := "field_enemy"
-const VAR_EMPTY_ALLY    := "empty_ally"
-const VAR_EMPTY_ENEMY   := "empty_enemy"
-const VAR_HAND_COUNT    := "hand_count"
-const VAR_MANA_CURRENT  := "mana_current"
-
-const VALUE_VARS := [
-	VAR_FIELD_TOTAL, VAR_FIELD_ALLY, VAR_FIELD_ENEMY,
-	VAR_EMPTY_ALLY, VAR_EMPTY_ENEMY, VAR_HAND_COUNT, VAR_MANA_CURRENT,
-]
-
-const CONDITION_NONE            := "none"
-const CONDITION_SOURCE_HP_PCT   := "source_hp_pct"
-const CONDITION_TARGET_HP_PCT   := "target_hp_pct"
-const CONDITION_FIELD_ALLY      := "field_ally_count"
-const CONDITION_FIELD_ENEMY     := "field_enemy_count"
-const CONDITION_HAND_COUNT      := "hand_count"
-const CONDITION_MANA_CURRENT    := "mana_current"
-const CONDITION_TARGET_HAS_BUFF := "target_has_buff"
-
-const CONDITION_OP_GTE := ">="
-const CONDITION_OP_LTE := "<="
-const CONDITION_OP_EQ  := "=="
-
-const CONDITION_TYPES := [
-	CONDITION_NONE, CONDITION_SOURCE_HP_PCT, CONDITION_TARGET_HP_PCT,
-	CONDITION_FIELD_ALLY, CONDITION_FIELD_ENEMY, CONDITION_HAND_COUNT,
-	CONDITION_MANA_CURRENT, CONDITION_TARGET_HAS_BUFF,
-]
-const CONDITION_OPS := [CONDITION_OP_GTE, CONDITION_OP_LTE, CONDITION_OP_EQ]
+# SkillEngine inherits from SkillRegistry, so every identifier constant
+# (TRIGGER_*, TARGET_*, EFFECT_*, BUFF_*, VAR_*, CONDITION_*) is available as
+# SkillEngine.* directly — adding a new effect only touches SkillRegistry.
+# Metadata (editor lists, handlers, templates, balance weights) lives there
+# too; the engine below only handles execution flow.
 
 
 # ============================================
@@ -171,8 +89,23 @@ static func trigger_external_skill(skill: Dictionary, source_card: CardData, con
 
 static func _execute_skill(skill: Dictionary, source_card: CardData, context: Dictionary) -> void:
 	var skill_name: String = skill.get("skill_name", "???")
-	for eff in _effects_for_skill(skill):
+	_execute_effects(legacy_skill_effects(skill), source_card, context, skill_name)
+
+
+static func _execute_effects(effects: Array, source_card: CardData, context: Dictionary, skill_name: String) -> void:
+	for eff in effects:
 		var eff_dict: Dictionary = eff
+		if str(eff_dict.get("effect", "")) in [EFFECT_IF_ELSE, EFFECT_IF]:
+			_execute_if_else(eff_dict, source_card, context, skill_name)
+			continue
+		if str(eff_dict.get("effect", "")) == EFFECT_REPEAT:
+			_execute_repeat(eff_dict, source_card, context, skill_name)
+			continue
+		if str(eff_dict.get("effect", "")) == EFFECT_STOP:
+			# Stop block: halts the remaining effects of the current block
+			# (top-level skill, or the current then/else branch).
+			print("[SkillEngine] %s: stop — halting current block" % skill_name)
+			return
 		if not _passes_effect_roll(eff_dict, source_card, context):
 			continue
 
@@ -185,7 +118,7 @@ static func _execute_skill(skill: Dictionary, source_card: CardData, context: Di
 
 		# Effects that don't need a live battlefield target (draw, mana, zero_cost, etc.)
 		# operate on the hand/deck — skip the turn-1 enemy filter for them.
-		var needs_live_target: bool = not _effect_can_apply_without_live_target(effect_str)
+		var needs_live_target: bool = not SkillRegistry.is_hand_effect(effect_str)
 		if needs_live_target and _is_enemy_effect_blocked_on_turn_one(targets, source_card, context):
 			print("[SkillEngine] Turn 1: '%s' enemy-targeting effect skipped" % skill_name)
 			continue
@@ -196,10 +129,14 @@ static func _execute_skill(skill: Dictionary, source_card: CardData, context: Di
 		effect_context["effect_target"] = target_str
 		effect_context["random_count"] = int(eff_dict.get("random_count", 0))
 		if not needs_live_target:
+			# Hand/deck effects still honor conditions, evaluated against the source
+			# card as the pseudo-target (e.g. "if hand count >= N").
+			if not _passes_effect_condition(eff_dict, source_card, source_card, context):
+				continue
 			_EffectApplier.apply_effect(effect_str, source_card, value, eff_dict, effect_context)
 			continue
 		for target_card in targets:
-			var allow_dead_source: bool = target_card == source_card and context.get("trigger", "") in [TRIGGER_ON_DAMAGED, TRIGGER_ON_DEATH]
+			var allow_dead_source: bool = target_card == source_card and context.get("trigger", "") == TRIGGER_ON_DEATH
 			if target_card == null or (not target_card.is_alive() and not allow_dead_source):
 				continue
 			if not _passes_effect_condition(eff_dict, source_card, target_card, context):
@@ -207,14 +144,58 @@ static func _execute_skill(skill: Dictionary, source_card: CardData, context: Di
 			_EffectApplier.apply_effect(effect_str, target_card, value, eff_dict, effect_context)
 
 
-static func _effect_can_apply_without_live_target(effect_str: String) -> bool:
-	return effect_str in [EFFECT_DRAW_CARDS, EFFECT_GAIN_MANA, EFFECT_VIEW_DISCARD, EFFECT_VIEW_DECK, EFFECT_ZERO_COST]
+# Control block: evaluates its condition against the source card and runs the
+# matching then/else sub-effects recursively. Supports both "if () then" and
+# "if () then else" control blocks (else_effects stays empty for the former).
+static func _execute_if_else(eff: Dictionary, source_card: CardData, context: Dictionary, skill_name: String) -> void:
+	var cond := _condition_dict(eff)
+	var take_then: bool = _passes_effect_condition(cond, source_card, source_card, context)
+	print("[SkillEngine] %s: if -> %s" % [skill_name, "then" if take_then else "else"])
+	if take_then:
+		_execute_effects(eff.get("then_effects", []), source_card, context, skill_name)
+	else:
+		_execute_effects(eff.get("else_effects", []), source_card, context, skill_name)
 
 
-static func _effects_for_skill(skill: Dictionary) -> Array:
+# Control block: repeats its then-effects N times (Scratch-style "repeat N"
+# C-shaped block). N may be a plain number or a variable reporter oval.
+# A stop block inside the body halts the current iteration only; subsequent
+# iterations still run.
+static func _execute_repeat(eff: Dictionary, source_card: CardData, context: Dictionary, skill_name: String) -> void:
+	var times: int = _repeat_count(eff, source_card, context)
+	print("[SkillEngine] %s: repeat x%d" % [skill_name, times])
+	for _i in range(times):
+		_execute_effects(eff.get("then_effects", []), source_card, context, skill_name)
+
+
+static func _repeat_count(eff: Dictionary, source_card: CardData, context: Dictionary) -> int:
+	if eff.has("repeat_expr"):
+		return maxi(0, _eval_operand(eff.get("repeat_expr", {}), source_card, null, context))
+	var var_id: String = eff.get("repeat_var", "")
+	if var_id != "":
+		return maxi(0, _var_value(var_id, source_card, null, context))
+	return maxi(0, int(eff.get("repeat_count", 2)))
+
+
+# The if-block condition may live in a nested "condition" reporter dictionary
+# (block editor) or directly on the effect (legacy format). Returns whichever
+# holds the condition fields.
+static func _condition_dict(eff: Dictionary) -> Dictionary:
+	var c: Variant = eff.get("condition", {})
+	if c is Dictionary and not c.is_empty():
+		return c
+	return eff
+
+
+# Legacy single-effect skill format ("effect"/"value"/"buff_id"/"duration" at
+# the skill root) normalized to the standard effects array. Single shared
+# implementation used by the engine, tooltips and both editors.
+static func legacy_skill_effects(skill: Dictionary) -> Array:
 	var effects: Array = skill.get("effects", [])
 	if not effects.is_empty():
 		return effects
+	if skill.get("effect", "").is_empty():
+		return []
 	return [{
 		"target": skill.get("target", TARGET_SINGLE),
 		"target_side": skill.get("target_side", TARGET_SIDE_ALL),
@@ -255,6 +236,15 @@ static func _passes_effect_roll(eff: Dictionary, source_card: CardData, context:
 
 
 static func _passes_effect_condition(eff: Dictionary, source_card: CardData, target_card: CardData, context: Dictionary) -> bool:
+	# Scratch-style boolean block, stored either in a nested "condition" dict
+	# (same shape as if blocks, e.g. {op, lhs, rhs} or {logic, lhs, rhs}) or
+	# directly on the effect dict for legacy data.
+	var cond: Dictionary = eff
+	var nested: Variant = eff.get("condition", null)
+	if nested is Dictionary and not (nested as Dictionary).is_empty():
+		cond = nested
+	if cond.has("lhs") or cond.has("logic"):
+		return _eval_boolean(cond, source_card, target_card, context)
 	var condition_type: String = eff.get("condition_type", CONDITION_NONE)
 	if condition_type == "" or condition_type == CONDITION_NONE:
 		return true
@@ -265,6 +255,62 @@ static func _passes_effect_condition(eff: Dictionary, source_card: CardData, tar
 	var actual: int = _condition_value(condition_type, source_card, target_card, context)
 	var expected: int = int(eff.get("condition_value", 0))
 	return _compare_condition(actual, expected, op)
+
+
+# Evaluates a Scratch-style boolean reporter block. The comparison form is
+# "[operand] [op] [operand]" where each operand is a number, a variable oval
+# or a math expression; the special "has" form is "[target] has [buff]";
+# and "and"/"or"/"not" combine sub-reports (each a full boolean block).
+static func _eval_boolean(cond: Dictionary, source_card: CardData, target_card: CardData, context: Dictionary) -> bool:
+	if cond.has("logic"):
+		var logic: String = str(cond.get("logic", "and"))
+		if logic == "not":
+			return not _eval_boolean(cond.get("child", {}), source_card, target_card, context)
+		var a := _eval_boolean(cond.get("lhs", {}), source_card, target_card, context)
+		var b := _eval_boolean(cond.get("rhs", {}), source_card, target_card, context)
+		if logic == "or":
+			return a or b
+		return a and b
+	var op: String = str(cond.get("op", CONDITION_OP_GTE))
+	if op == "has":
+		var rhs: Dictionary = cond.get("rhs", {})
+		var buff_id: String = str(rhs.get("buff_id", ""))
+		return buff_id != "" and _card_has_buff(target_card, buff_id)
+	var actual: int = _eval_operand(cond.get("lhs", {}), source_card, target_card, context)
+	var expected: int = _eval_operand(cond.get("rhs", {}), source_card, target_card, context)
+	return _compare_condition(actual, expected, op)
+
+
+# Resolves one side of a comparison (or a value expression): a fixed number,
+# a variable reporter, or a nested math expression like "(hand+2)*3".
+static func _eval_operand(opd: Dictionary, source_card: CardData, target_card: CardData, context: Dictionary) -> int:
+	var kind: String = str(opd.get("kind", "num"))
+	match kind:
+		"var":
+			return _var_value(str(opd.get("var_id", "")), source_card, target_card, context)
+		"expr":
+			var op: String = str(opd.get("op", "+"))
+			var a := _eval_operand(opd.get("a", {}), source_card, target_card, context)
+			var b := _eval_operand(opd.get("b", {}), source_card, target_card, context)
+			match op:
+				"-":
+					return a - b
+				"*":
+					return a * b
+				"/":
+					return int(floor(float(a) / float(b))) if b != 0 else 0
+				"rand":
+					if b < a:
+						var t: int = a
+						a = b
+						b = t
+					var rng = context.get("rng", null)
+					if rng is RandomNumberGenerator:
+						return rng.randi_range(a, b)
+					return randi_range(a, b)
+				_:
+					return a + b
+	return int(opd.get("value", 0))
 
 
 static func _condition_value(condition_type: String, source_card: CardData, target_card: CardData, context: Dictionary) -> int:
@@ -283,6 +329,18 @@ static func _condition_value(condition_type: String, source_card: CardData, targ
 		CONDITION_MANA_CURRENT:
 			var pf: BattleField = context.get("player_field")
 			return pf.current_mana if pf != null else 0
+		CONDITION_TARGET_ATK:
+			return target_card.effective_atk() if target_card != null else 0
+		CONDITION_TARGET_COST:
+			return target_card.cost if target_card != null else 0
+		CONDITION_ENEMY_HAND_COUNT:
+			var enemy_hand: Array = context.get("enemy_hand", [])
+			return enemy_hand.size() if enemy_hand != null else 0
+		CONDITION_TURN_NUMBER:
+			return int(context.get("turn_number", 0))
+		CONDITION_DECK_COUNT:
+			var deck: Array = context.get("shared_deck", [])
+			return deck.size() if deck != null else 0
 	return 0
 
 
@@ -346,15 +404,20 @@ static func _shuffle_targets(targets: Array, context: Dictionary) -> void:
 # ============================================
 
 static func _resolve_value(eff: Dictionary, source_card: CardData, context: Dictionary) -> int:
+	# A dropped math-expression reporter (e.g. (hand+2)*3) drives the value.
+	if eff.has("value_expr"):
+		return _eval_operand(eff.get("value_expr", {}), source_card, source_card, context)
 	var var_id: String = eff.get("value_var", "")
 	if var_id != "":
 		var offset: int = int(eff.get("value_offset", 0))
-		return _var_value(var_id, source_card, context) + offset
+		# Value reporters never depend on a single target (battlefield / hand /
+		# mana stats); target-relative reporters fall back to the source card.
+		return _var_value(var_id, source_card, source_card, context) + offset
 	if eff.has("value_min") and eff.has("value_max"):
 		var vmin: int = int(eff.get("value_min", 1))
 		var vmax: int = int(eff.get("value_max", 1))
 		if vmax < vmin:
-			var t := vmin
+			var t: int = vmin
 			vmin = vmax
 			vmax = t
 		var rng = context.get("rng", null)
@@ -364,10 +427,11 @@ static func _resolve_value(eff: Dictionary, source_card: CardData, context: Dict
 	return int(eff.get("value", 1))
 
 
-static func _var_value(var_id: String, _source_card: CardData, context: Dictionary) -> int:
+static func _var_value(var_id: String, source_card: CardData, target_card: CardData, context: Dictionary) -> int:
 	var pf: BattleField = context.get("player_field")
 	var ef: BattleField = context.get("enemy_field")
 	var hand: Array = context.get("active_hand", [])
+	var enemy_hand: Array = context.get("enemy_hand", [])
 	match var_id:
 		VAR_FIELD_TOTAL:
 			return _count_cards(pf) + _count_cards(ef)
@@ -383,6 +447,23 @@ static func _var_value(var_id: String, _source_card: CardData, context: Dictiona
 			return hand.size() if hand != null else 0
 		VAR_MANA_CURRENT:
 			return pf.current_mana if pf != null else 0
+		VAR_ENEMY_HAND_COUNT:
+			return enemy_hand.size() if enemy_hand != null else 0
+		VAR_TURN_NUMBER:
+			return int(context.get("turn_number", 0))
+		VAR_DECK_COUNT:
+			var deck: Array = context.get("shared_deck", [])
+			return deck.size() if deck != null else 0
+		VAR_ENEMY_MANA:
+			return ef.current_mana if ef != null else 0
+		VAR_SOURCE_HP_PCT:
+			return _hp_percent(source_card)
+		VAR_TARGET_HP_PCT:
+			return _hp_percent(target_card)
+		VAR_TARGET_ATK:
+			return target_card.effective_atk() if target_card != null else 0
+		VAR_TARGET_COST:
+			return target_card.cost if target_card != null else 0
 	return 0
 
 

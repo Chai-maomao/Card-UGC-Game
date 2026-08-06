@@ -1,7 +1,10 @@
 extends Control
 
 # ============================================
-# Skill Editor — popup effect editor with blur
+# Skill Editor — Scratch-style block editor.
+# Left palette (trigger hats + effect blocks grouped by category), right
+# script area (trigger hat + stacked effect blocks). Click palette blocks to
+# add them; ⚙ on a block opens the SkillEffectForm advanced popup.
 # ============================================
 
 const BASE_VIEWPORT_SIZE := Vector2(1152, 648)
@@ -9,61 +12,153 @@ const UITheme = preload("res://UITheme.gd")
 const _TargetResolver = preload("res://SkillTargetResolver.gd")
 const _TextFormatter = preload("res://SkillTextFormatter.gd")
 
-@onready var title_label = $Panel/MarginContainer/ScrollContainer/VBoxContainer/TitleLabel
-@onready var help_label = $Panel/MarginContainer/ScrollContainer/VBoxContainer/HelpLabel
-@onready var skill_name_input = $Panel/MarginContainer/ScrollContainer/VBoxContainer/SkillNameInput
-@onready var trigger_hint_label = $Panel/MarginContainer/ScrollContainer/VBoxContainer/TriggerHintLabel
-@onready var trigger_select = $Panel/MarginContainer/ScrollContainer/VBoxContainer/TriggerSelect
-@onready var trigger_preview_label = $Panel/MarginContainer/ScrollContainer/VBoxContainer/TriggerPreviewLabel
-@onready var effects_hint_label = $Panel/MarginContainer/ScrollContainer/VBoxContainer/EffectsHintLabel
-@onready var effects_list = $Panel/MarginContainer/ScrollContainer/VBoxContainer/EffectsList
-@onready var add_effect_btn = $Panel/MarginContainer/ScrollContainer/VBoxContainer/AddEffectButton
-@onready var preview_label = $Panel/MarginContainer/ScrollContainer/VBoxContainer/PreviewLabel
-@onready var skill_summary = $Panel/MarginContainer/ScrollContainer/VBoxContainer/SkillSummary
-@onready var save_button = $Panel/MarginContainer/ScrollContainer/VBoxContainer/ButtonRow/SaveButton
-@onready var cancel_button = $Panel/MarginContainer/ScrollContainer/VBoxContainer/ButtonRow/CancelButton
+@onready var title_label = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/TitleLabel
+@onready var help_label = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/HelpLabel
+@onready var skill_name_input = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/SkillNameInput
+@onready var skill_name_label = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/SkillNameLabel
+@onready var trigger_label = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/TriggerLabel
+@onready var trigger_preview_label = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/TriggerPreviewLabel
+@onready var settings_label = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/SettingsLabel
+@onready var settings_row = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/SettingsRow
+@onready var effects_label = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/EffectsLabel
+@onready var effects_list = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/EffectsList
+@onready var preview_label = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/PreviewLabel
+@onready var skill_summary = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/SkillSummary
+@onready var save_button = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/ButtonRow/SaveButton
+@onready var cancel_button = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/ButtonRow/CancelButton
+@onready var palette_title = $Panel/Margin/HBox/PalettePanel/Margin/VBox/PaletteTitle
+@onready var palette_vbox = $Panel/Margin/HBox/PalettePanel/Margin/VBox/PaletteScroll/PaletteVBox
 
-var effect_data: Array = []        # [{target, effect, value, buff_id, duration}, ...]
-var editing_effect_idx: int = -1   # -1 = new, 0+ = editing existing
-var popup_layer: CanvasLayer
-var popup_form: Dictionary = {}    # refs to popup controls
+var effect_data: Array = []        # [{target, effect, value, buff_id, duration, ...}, ...]
+var editing_effect_path: Array = [] # [] = none; last element -1 = append to the list at path
+var current_trigger_key: String = SkillEngine.TRIGGER_ON_ATTACK
 var skill_prob_spin: SpinBox       # skill-level probability
 var max_uses_spin: SpinBox         # max uses per game (限定技)
 var skill_type_select: OptionButton # normal or talent
 var skill_type_row: HBoxContainer   # row containing skill_type_select (hidden for active skills)
 
+# Undo / redo history (Scratch-style edit history) — delegated to a dedicated
+# manager so the editor only forwards its effect_data.
+var _undo_mgr := SkillUndoManager.new()
+var _palette_builder := SkillPaletteBuilder.new()
+var _undo_btn: Button
+var _redo_btn: Button
+
+
+# ============================================
+# Undo / redo (delegated to SkillUndoManager)
+# ============================================
+
+func _editor_state() -> Dictionary:
+	# Full editing state (trigger + effects + skill metadata) so undo/redo
+	# restore settings-level edits too, not just the block list.
+	return {
+		"trigger": current_trigger_key,
+		"effects": effect_data.duplicate(true),
+		"probability": int(skill_prob_spin.value) if skill_prob_spin != null else 100,
+		"max_uses": int(max_uses_spin.value) if max_uses_spin != null else 0,
+		"skill_type": int(skill_type_select.selected) if skill_type_select != null else 0,
+	}
+
+
+func _apply_state(s: Dictionary) -> void:
+	current_trigger_key = str(s.get("trigger", current_trigger_key))
+	effect_data = (s.get("effects", []) as Array).duplicate(true)
+	if skill_prob_spin != null:
+		skill_prob_spin.set_value_no_signal(float(s.get("probability", 100)))
+	if max_uses_spin != null:
+		max_uses_spin.set_value_no_signal(float(s.get("max_uses", 0)))
+	if skill_type_select != null:
+		skill_type_select.select(int(s.get("skill_type", 0)))
+	_update_trigger_preview()
+	_update_skill_type_visibility()
+	_refresh_script()
+	_update_summary()
+	_refresh_undo_buttons()
+
+
+func _maybe_snapshot() -> void:
+	_undo_mgr.maybe_snapshot(_editor_state())
+	_refresh_undo_buttons()
+
+
+func _undo() -> void:
+	var undid: Variant = _undo_mgr.undo(_editor_state())
+	_apply_state(undid)
+
+
+func _redo() -> void:
+	_apply_state(_undo_mgr.redo(_editor_state()))
+
+
+func _reset_undo_history() -> void:
+	_undo_mgr.init_from(_editor_state())
+	_refresh_undo_buttons()
+
+
+func _refresh_undo_buttons() -> void:
+	if _undo_btn:
+		_undo_btn.disabled = not _undo_mgr.can_undo()
+	if _redo_btn:
+		_redo_btn.disabled = not _undo_mgr.can_redo()
+
+
+func _deep_equal(a: Variant, b: Variant) -> bool:
+	return SkillUndoManager.deep_equal(a, b)
+
+
+func _unhandled_key_input(event: InputEvent) -> void:
+	var key_ev := event as InputEventKey
+	if key_ev == null or not key_ev.pressed or key_ev.echo:
+		return
+	if not key_ev.ctrl_pressed:
+		return
+	if key_ev.keycode == Key.KEY_Z:
+		if key_ev.shift_pressed:
+			_redo()
+		else:
+			_undo()
+		accept_event()
+	elif key_ev.keycode == Key.KEY_Y:
+		_redo()
+		accept_event()
+
+
+func _is_spell() -> bool:
+	return PlayerData.card_draft.get("card_type", "minion") == "spell"
+
+
+func _is_parasite() -> bool:
+	return PlayerData.card_draft.get("card_type", "minion") == "parasite"
+
 
 func _apply_texts() -> void:
 	var skill_index: int = PlayerData.editing_skill_index
-	var is_spell: bool = PlayerData.card_draft.get("card_type", "minion") == "spell"
+	var is_spell := _is_spell()
 	title_label.text = Locale.t("skill_editor.title_spell") if is_spell else Locale.t("skill_editor.title", [skill_index + 1])
 	help_label.text = Locale.t("skill_editor.help_spell" if is_spell else "skill_editor.help")
-
-	# Spell skills don't have a name or trigger — hide those rows.
-	$Panel/MarginContainer/ScrollContainer/VBoxContainer/SkillNameLabel.visible = not is_spell
-	skill_name_input.visible = not is_spell
-	$Panel/MarginContainer/ScrollContainer/VBoxContainer/TriggerLabel.visible = not is_spell
-	$Panel/MarginContainer/ScrollContainer/VBoxContainer/TriggerHintLabel.visible = not is_spell
-	trigger_preview_label.visible = not is_spell
-
-	if is_spell:
-		# Lock trigger to on_cast (silently) — no visual trigger section.
-		pass
-	else:
-		$Panel/MarginContainer/ScrollContainer/VBoxContainer/SkillNameLabel.text = Locale.t("skill_editor.name")
-		skill_name_input.placeholder_text = Locale.t("skill_editor.name_placeholder")
-		$Panel/MarginContainer/ScrollContainer/VBoxContainer/TriggerLabel.text = Locale.t("skill_editor.trigger")
-		$Panel/MarginContainer/ScrollContainer/VBoxContainer/TriggerHintLabel.text = Locale.t("skill_editor.trigger_hint")
-
-	$Panel/MarginContainer/ScrollContainer/VBoxContainer/EffectsLabel.text = Locale.t("skill_editor.effects" if not is_spell else "skill_editor.spell_effects")
-	$Panel/MarginContainer/ScrollContainer/VBoxContainer/EffectsHintLabel.text = Locale.t("skill_editor.effects_hint_spell" if is_spell else "skill_editor.effects_hint")
-	add_effect_btn.text = Locale.t("skill_editor.add_effect")
+	palette_title.text = Locale.t("skill_editor.palette_title")
+	effects_label.text = Locale.t("skill_editor.effects" if not is_spell else "skill_editor.spell_effects")
+	settings_label.text = Locale.t("skill_editor.settings")
 	preview_label.text = Locale.t("skill_editor.preview" if not is_spell else "skill_editor.spell_preview")
 	save_button.text = Locale.t("skill_editor.save")
 	cancel_button.text = Locale.t("skill_editor.cancel")
-	if not is_spell:
-		_update_trigger_preview()
 
+	# Spell skills have no name / trigger — hide those rows.
+	skill_name_label.visible = not is_spell
+	skill_name_input.visible = not is_spell
+	trigger_label.visible = not is_spell
+	trigger_preview_label.visible = not is_spell
+	if not is_spell:
+		skill_name_label.text = Locale.t("skill_editor.name")
+		skill_name_input.placeholder_text = Locale.t("skill_editor.name_placeholder")
+		trigger_label.text = Locale.t("skill_editor.trigger")
+	_update_trigger_preview()
+
+
+# ============================================
+# Layout / theme
+# ============================================
 
 func _ui_scale() -> float:
 	var size := get_viewport_rect().size
@@ -74,235 +169,868 @@ func _ui_scale() -> float:
 
 func _apply_responsive_layout() -> void:
 	var s := _ui_scale()
-
-	# Panel (centered 520x640)
 	var panel := $Panel
-	panel.offset_left = -260.0 * s
+	panel.offset_left = -460.0 * s
 	panel.offset_top = -320.0 * s
-	panel.offset_right = 260.0 * s
+	panel.offset_right = 460.0 * s
 	panel.offset_bottom = 320.0 * s
-
-	# MarginContainer
-	var margin := $Panel/MarginContainer
-	margin.add_theme_constant_override("margin_left", int(12 * s))
-	margin.add_theme_constant_override("margin_top", int(8 * s))
-	margin.add_theme_constant_override("margin_right", int(12 * s))
-	margin.add_theme_constant_override("margin_bottom", int(8 * s))
-
-	# VBox
-	var vbox := $Panel/MarginContainer/ScrollContainer/VBoxContainer
-	vbox.add_theme_constant_override("separation", int(6 * s))
-
-	# Title
-	if title_label:
-		title_label.add_theme_font_size_override("font_size", max(12, int(20 * s)))
-
-	# EffectsList
-	if effects_list:
-		effects_list.add_theme_constant_override("separation", int(4 * s))
-
-	# ButtonRow
-	var button_row := vbox.get_node("ButtonRow") as HBoxContainer
-	if button_row:
-		button_row.add_theme_constant_override("separation", int(16 * s))
-
-	# Skill prob row SpinBox
+	$Panel/Margin/HBox/PalettePanel.custom_minimum_size = Vector2(250 * s, 0)
+	for label in [title_label, help_label, skill_name_label, trigger_label, trigger_preview_label,
+			settings_label, effects_label, preview_label, skill_summary, palette_title]:
+		if label:
+			var is_title: bool = label == title_label or label == palette_title
+			label.add_theme_font_size_override("font_size", max(13, int(18 * s)) if is_title else max(10, int(14 * s)))
 	if skill_prob_spin:
 		skill_prob_spin.custom_minimum_size = Vector2(60 * s, 0)
+	if max_uses_spin:
+		max_uses_spin.custom_minimum_size = Vector2(60 * s, 0)
 
-	# All labels/inputs/buttons in the VBox
-	for child in vbox.get_children():
-		if child is Label:
-			child.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-		elif child is LineEdit or child is OptionButton:
-			child.custom_minimum_size = Vector2(200 * s, 0)
-		elif child is Button and child != add_effect_btn:
-			child.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-		elif child is HBoxContainer:
-			child.add_theme_constant_override("separation", int(8 * s))
 
-	# Add effect button
-	if add_effect_btn:
-		add_effect_btn.add_theme_font_size_override("font_size", max(10, int(14 * s)))
+func _apply_theme() -> void:
+	UITheme.apply_app_background(self)
+	UITheme.apply_panel($Panel, "gold")
+	UITheme.apply_panel($Panel/Margin/HBox/PalettePanel, "dark")
+	UITheme.apply_panel($Panel/Margin/HBox/MainPanel, "dark")
+	UITheme.apply_title(title_label, max(14, int(18 * _ui_scale())))
+	UITheme.apply_title(palette_title, max(13, int(15 * _ui_scale())))
+	UITheme.apply_input(skill_name_input)
+	UITheme.apply_button(save_button, "primary")
+	UITheme.apply_button(cancel_button, "secondary")
+	for soft_label in [help_label, trigger_preview_label, skill_summary]:
+		UITheme.apply_label(soft_label, true)
+	for label in [skill_name_label, trigger_label, settings_label, effects_label, preview_label]:
+		UITheme.apply_label(label)
 
 
 func _on_viewport_size_changed() -> void:
 	_apply_responsive_layout()
 
 
-func _apply_theme() -> void:
-	UITheme.apply_app_background(self)
-	UITheme.apply_panel($Panel, "gold")
-	UITheme.apply_title(title_label, max(18, int(20 * _ui_scale())))
-	UITheme.apply_input(skill_name_input)
-	UITheme.apply_button(trigger_select, "secondary")
-	UITheme.apply_button(add_effect_btn, "primary")
-	UITheme.apply_button(save_button, "primary")
-	UITheme.apply_button(cancel_button, "secondary")
-	for soft_label in [help_label, trigger_hint_label, trigger_preview_label, effects_hint_label, skill_summary]:
-		UITheme.apply_label(soft_label, true)
-	for path in ["SkillNameLabel", "TriggerLabel", "EffectsLabel", "PreviewLabel"]:
-		var label := $Panel/MarginContainer/ScrollContainer/VBoxContainer.get_node(path) as Label
-		UITheme.apply_label(label)
+# ============================================
+# Palette (built by SkillPaletteBuilder)
+# ============================================
+
+func _build_palette() -> void:
+	_palette_builder.editor = self
+	_palette_builder.build()
 
 
-func _ready():
-	_apply_theme()
-	_setup_trigger_dropdown()
-	_setup_skill_probability_row()
-	_connect_signals()
-	_apply_texts()
-
-	var skill_index: int = PlayerData.editing_skill_index
-	var skill_key: String = "skill1" if skill_index == 0 else "skill2"
-	if PlayerData.card_draft.has(skill_key) and not PlayerData.card_draft[skill_key].is_empty():
-		_load_skill(PlayerData.card_draft[skill_key])
-
-	_refresh_effect_list()
+func _select_trigger(trigger_key: String) -> void:
+	current_trigger_key = trigger_key
+	_update_trigger_preview()
+	_update_skill_type_visibility()
+	_refresh_script()
 	_update_summary()
-	_apply_responsive_layout()
-	get_viewport().size_changed.connect(_on_viewport_size_changed)
+	_maybe_snapshot()
 
 
-func _setup_trigger_dropdown():
-	trigger_select.clear()
-	var is_spell: bool = PlayerData.card_draft.get("card_type", "minion") == "spell"
-	if is_spell:
-		# Spells have only one valid trigger: on_cast — no dropdown needed.
-		trigger_select.add_item(Locale.term("trigger", SkillEngine.TRIGGER_ON_CAST), 0)
-		trigger_select.disabled = true
-		trigger_hint_label.text = Locale.t("skill_editor.trigger_help.on_cast")
-		trigger_select.visible = false
-		trigger_hint_label.visible = true
+func _add_effect_block(effect_id: String) -> void:
+	effect_data.append(_default_effect(effect_id))
+	_refresh_script()
+	_update_summary()
+	_maybe_snapshot()
+
+
+# ============================================
+# Script area (hat + effect blocks)
+# ============================================
+
+func _refresh_script() -> void:
+	for child in effects_list.get_children():
+		child.queue_free()
+	if _is_spell():
+		# Spells are locked to on_cast and have no visible event block.
+		_render_effects(effect_data, effects_list, [], false)
 	else:
-		var trigger_keys := _trigger_keys()
-		for i in range(trigger_keys.size()):
-			trigger_select.add_item(Locale.term("trigger", trigger_keys[i]), i)
+		# The whole skill lives inside one event hat block (Scratch-style).
+		var event_block := SkillBlock.new()
+		event_block.setup_event_block(current_trigger_key)
+		effects_list.add_child(event_block)
+		_render_effects(effect_data, event_block.body_container, [], true)
+		_setup_slot_drop(event_block.body_container, [])
+	_refresh_error_banner()
+	_mark_invalid_conditions()
 
 
-func _setup_skill_probability_row():
-	var vbox = trigger_select.get_parent()
-	var idx = trigger_select.get_index()
+# ============================================
+# Compile-error hints (delegated to SkillErrorChecker)
+# ============================================
 
+var _error_checker := SkillErrorChecker.new()
+
+
+func _collect_errors() -> Array:
+	_error_checker.editor = self
+	return _error_checker.collect_errors()
+
+
+func _refresh_error_banner() -> void:
+	_error_checker.editor = self
+	_error_checker.refresh_banner()
+
+
+func _mark_invalid_conditions() -> void:
+	_error_checker.editor = self
+	_error_checker.mark_invalid_conditions()
+
+
+# Recursively renders effect blocks; if/else blocks get their then/else
+# slots filled with nested blocks (Scratch-style: add by dragging a palette
+# block into the recessed slot — no "+ 添加效果" button).
+func _render_effects(list: Array, container: VBoxContainer, base_path: Array, top_level: bool) -> void:
+	for i in range(list.size()):
+		var path: Array = base_path.duplicate()
+		path.append(i)
+		var eff: Dictionary = list[i]
+		var effect_id: String = str(eff.get("effect", ""))
+		if effect_id == SkillEngine.EFFECT_IF_ELSE or effect_id == SkillEngine.EFFECT_IF:
+			var block := SkillBlock.new()
+			block.setup_if_else(eff, path)
+			block.draggable = true
+			_connect_block_signals(block)
+			container.add_child(block)
+			var then_path: Array = path.duplicate()
+			then_path.append("then")
+			_render_effects(eff.get("then_effects", []), block.then_container, then_path, false)
+			_maybe_add_slot_hint(block.then_container)
+			_setup_slot_drop(block.then_container, then_path)
+			if block.has_else:
+				var else_path: Array = path.duplicate()
+				else_path.append("else")
+				_render_effects(eff.get("else_effects", []), block.else_container, else_path, false)
+				_maybe_add_slot_hint(block.else_container)
+				_setup_slot_drop(block.else_container, else_path)
+		elif effect_id == SkillEngine.EFFECT_REPEAT:
+			var block := SkillBlock.new()
+			block.setup_repeat_block(eff, path)
+			block.draggable = true
+			_connect_block_signals(block)
+			container.add_child(block)
+			var loop_path: Array = path.duplicate()
+			loop_path.append("then")
+			_render_effects(eff.get("then_effects", []), block.then_container, loop_path, false)
+			_maybe_add_slot_hint(block.then_container)
+			_setup_slot_drop(block.then_container, loop_path)
+		elif effect_id == SkillEngine.EFFECT_STOP:
+			var block := SkillBlock.new()
+			block.setup_stop_block(path)
+			_connect_block_signals(block)
+			container.add_child(block)
+		else:
+			var block := SkillBlock.new()
+			block.setup_effect(eff, path)
+			block.draggable = true
+			_connect_block_signals(block)
+			container.add_child(block)
+
+
+# Empty then/else slots get a faint "拖入积木" placeholder (mouse_filter IGNORE
+# so it never blocks drag-drops). It disappears once a block is dragged in.
+func _maybe_add_slot_hint(slot: VBoxContainer) -> void:
+	if slot.get_child_count() > 0:
+		return
+	var hint := Label.new()
+	hint.text = Locale.t("skill_editor.slot_hint")
+	hint.add_theme_font_size_override("font_size", 11)
+	hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.35))
+	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	slot.add_child(hint)
+
+
+func _connect_block_signals(block: SkillBlock) -> void:
+	block.edit_requested.connect(_on_block_edit_path)
+	block.delete_requested.connect(_on_block_delete_path)
+	block.move_requested.connect(_on_block_move_path)
+	block.drop_requested.connect(_on_block_drop_path)
+	block.changed.connect(_on_block_changed)
+	block.context_requested.connect(_on_block_context_requested)
+	block.condition_dropped.connect(_on_block_condition_dropped)
+	block.insertion_requested.connect(_on_block_insertion_requested)
+	block.insertion_hidden.connect(_hide_insertion_line)
+
+
+# A block is being hovered while dragging another block over it: move the
+# insertion line to the exact gap the drop would land in.
+func _on_block_insertion_requested(vbox: VBoxContainer, index: int) -> void:
+	if vbox != null:
+		_show_insertion_line(vbox, index)
+
+
+func _setup_drop_targets() -> void:
+	# The script list accepts palette drops (append) and script-internal reorders.
+	_setup_slot_drop(effects_list, [])
+	# Dragging a script block back onto the palette deletes it (Scratch-like).
+	var palette_panel: Panel = $Panel/Margin/HBox/PalettePanel
+	palette_panel.set_drag_forwarding(
+		Callable(self, "_get_drag_data_from_list"),
+		Callable(self, "_can_drop_on_palette"),
+		Callable(self, "_drop_on_palette"),
+	)
+
+
+# Registers a container as a drop target. list_path identifies which effect
+# list the slot maps to ([] = top-level, [0, "then"] = first block's then slot).
+func _setup_slot_drop(vbox: VBoxContainer, list_path: Array) -> void:
+	vbox.set_meta("list_path", list_path)
+	vbox.set_drag_forwarding(
+		Callable(self, "_get_drag_data_from_list"),
+		func(pos: Vector2, data): return _can_drop_on_slot(vbox, pos, data),
+		func(pos: Vector2, data): _drop_on_slot(vbox, pos, data),
+	)
+
+
+func _get_drag_data_from_list(_pos: Vector2):
+	return null
+
+
+# Scratch-style drop feedback: while a drag hovers a slot, show a bright
+# insertion line at the position the block would land. Cleaned up on drop and
+# by _process once the GUI drag ends.
+var _insertion_line: Control
+
+
+func _can_drop_on_slot(vbox: VBoxContainer, _pos: Vector2, data) -> bool:
+	var ok: bool = data is Dictionary and data.get("type", "") == "effect_block"
+	if ok:
+		_show_insertion_line(vbox, _insertion_index_at(vbox, _pos))
+	else:
+		_hide_insertion_line()
+	return ok
+
+
+func _show_insertion_line(vbox: VBoxContainer, index: int) -> void:
+	if _insertion_line == null:
+		_insertion_line = PanelContainer.new()
+		var st := StyleBoxFlat.new()
+		st.bg_color = Color(1.0, 0.92, 0.45)
+		st.set_corner_radius_all(2)
+		_insertion_line.add_theme_stylebox_override("panel", st)
+		_insertion_line.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_insertion_line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_insertion_line.custom_minimum_size = Vector2(40, 3)
+	if _insertion_line.get_parent() != null:
+		_insertion_line.get_parent().remove_child(_insertion_line)
+	vbox.add_child(_insertion_line)
+	# The VBox lays the line out naturally; place it before the block that
+	# would land at `index` (skipping hint labels / the line itself).
+	var child_index := 0
+	var seen := 0
+	for child in vbox.get_children():
+		if child == _insertion_line:
+			continue
+		if seen == index:
+			break
+		if child is SkillBlock:
+			seen += 1
+		child_index += 1
+	vbox.move_child(_insertion_line, child_index)
+
+
+func _hide_insertion_line() -> void:
+	if _insertion_line != null and _insertion_line.get_parent() != null:
+		_insertion_line.get_parent().remove_child(_insertion_line)
+
+
+func _process(_delta: float) -> void:
+	# A drag that ends over an invalid spot leaves the insertion line behind;
+	# once the GUI drag is finished, drop it.
+	if _insertion_line != null and _insertion_line.get_parent() != null \
+			and not get_viewport().gui_is_dragging():
+		_hide_insertion_line()
+
+
+func _can_drop_on_palette(_pos: Vector2, data) -> bool:
+	if not (data is Dictionary):
+		return false
+	var t: String = str(data.get("type", ""))
+	match t:
+		"effect_block":
+			return (data.get("from_path", []) as Array).size() > 0
+		"var_block", "expr_block", "target_block", "side_block":
+			# Only a slot-borne chip (not a fresh palette button) can be
+			# discarded here.
+			return data.has("from_slot")
+		"boolean_block", "logic_block", "condition_block":
+			return data.has("from_cond_slot")
+	return false
+
+
+func _drop_on_palette(_pos: Vector2, data) -> void:
+	var t: String = str(data.get("type", ""))
+	if t == "effect_block":
+		var from_path: Array = data.get("from_path", [])
+		if from_path.size() > 0:
+			_on_block_delete_path(from_path)
+		return
+	if data.has("from_slot"):
+		# Dragging a variable / math reporter back to the palette restores the
+		# number slot to a plain fixed number (Scratch drop-to-discard).
+		var slot: Object = data["from_slot"]
+		if slot != null and is_instance_valid(slot) and slot.has_method("clear_to_number"):
+			slot.call("clear_to_number")
+		return
+	if data.has("from_cond_slot"):
+		var block: SkillBlock = data["from_cond_slot"]
+		if block != null and is_instance_valid(block):
+			var eff := _effect_at(block.effect_path)
+			eff.erase("condition")
+			eff.erase("condition_type")
+			eff.erase("condition_op")
+			eff.erase("condition_value")
+			eff.erase("condition_buff_id")
+			_refresh_script()
+			_update_summary()
+			_maybe_snapshot()
+
+
+func _drop_on_slot(vbox: VBoxContainer, pos: Vector2, data) -> void:
+	_hide_insertion_line()
+	var list_path: Array = vbox.get_meta("list_path", [])
+	var index := _insertion_index_at(vbox, pos)
+	_apply_drop(data, list_path, index)
+
+
+# Computes the insertion index under the mouse by comparing against each
+# stacked block's vertical center (ignoring "+ 添加效果" buttons).
+func _insertion_index_at(vbox: VBoxContainer, pos: Vector2) -> int:
+	var block_idx := 0
+	for child in vbox.get_children():
+		if child is SkillBlock:
+			if pos.y < child.position.y + child.size.y * 0.5:
+				return block_idx
+			block_idx += 1
+	return block_idx
+
+
+# Unified drop handler: palette drop (insert new block) or script-internal
+# move (remove from source, insert at target), with cycle protection.
+func _apply_drop(data, list_path: Array, index: int) -> void:
+	var from_path: Array = data.get("from_path", [])
+	if from_path.size() > 0:
+		_move_effect(from_path, list_path, index)
+	else:
+		var effect_id: String = str(data.get("effect_id", ""))
+		if effect_id == "":
+			return
+		var list := _list_at(list_path)
+		var eff := _new_block_for(effect_id)
+		list.insert(clamp(index, 0, list.size()), eff)
+		_refresh_script()
+	_update_summary()
+	_maybe_snapshot()
+
+
+func _move_effect(from_path: Array, list_path: Array, index: int) -> void:
+	# Reject moving a block into its own subtree (would create a cycle).
+	if _is_path_prefix(from_path, list_path):
+		return
+	var from_parent: Array = from_path.slice(0, from_path.size() - 1)
+	var from_idx: int = from_path[from_path.size() - 1]
+	var src_list := _list_at(from_parent)
+	if from_idx < 0 or from_idx >= src_list.size():
+		return
+	var dst_list := _list_at(list_path)
+	var eff: Dictionary = src_list[from_idx]
+	src_list.remove_at(from_idx)
+	# When reordering within the same list, shifting left affects the index.
+	if from_parent == list_path and from_idx < index:
+		index -= 1
+	dst_list.insert(clamp(index, 0, dst_list.size()), eff)
+	_refresh_script()
+	_maybe_snapshot()
+
+
+# True when prefix is a strict ancestor path of path.
+func _is_path_prefix(prefix: Array, path: Array) -> bool:
+	if prefix.is_empty() or prefix.size() >= path.size():
+		return false
+	for i in range(prefix.size()):
+		if prefix[i] != path[i]:
+			return false
+	return true
+
+
+# ============================================
+# Path-based tree operations
+# ============================================
+
+# Returns the effect list identified by a list path: [] = top-level,
+# [0, "then"] = first block's then_effects, [0, "then", 1, "else"] = ...
+func _list_at(list_path: Array) -> Array:
+	if list_path.is_empty():
+		return effect_data
+	var eff: Dictionary = effect_data[list_path[0]]
+	var i := 1
+	while i + 1 < list_path.size():
+		var sub: Array = eff.get(str(list_path[i]) + "_effects", [])
+		eff = sub[list_path[i + 1]]
+		i += 2
+	return eff.get(str(list_path[list_path.size() - 1]) + "_effects", [])
+
+
+# Effect path -> its parent list path (e.g. [0, "then", 2] -> [0, "then"]).
+# Also accepts a list path directly ([0, "then"]) — the last element then
+# already names the "_effects" slot, so nothing is stripped.
+func _effect_list_at(path: Array) -> Array:
+	var list_path: Array = path.duplicate()
+	if list_path.is_empty():
+		return effect_data
+	if list_path[list_path.size() - 1] is int:
+		list_path.pop_back()
+	return _list_at(list_path)
+
+
+func _effect_at(path: Array) -> Dictionary:
+	if path.size() == 1:
+		return effect_data[path[0]]
+	var list := _effect_list_at(path)
+	return list[path[path.size() - 1]]
+
+
+func _new_block_for(effect_id: String) -> Dictionary:
+	if effect_id == SkillEngine.EFFECT_IF_ELSE:
+		return _default_if_else()
+	if effect_id == SkillEngine.EFFECT_IF:
+		return _default_if()
+	if effect_id == SkillEngine.EFFECT_REPEAT:
+		return _default_repeat()
+	if effect_id == SkillEngine.EFFECT_STOP:
+		return {"effect": SkillEngine.EFFECT_STOP}
+	return _default_effect(effect_id)
+
+
+func _on_block_edit_path(path: Array) -> void:
+	var effect_id: String = str(_effect_at(path).get("effect", ""))
+	if effect_id == SkillEngine.EFFECT_IF_ELSE or effect_id == SkillEngine.EFFECT_IF:
+		_open_if_condition_popup(path)
+	else:
+		_open_effect_popup(path)
+
+
+func _on_block_delete_path(path: Array) -> void:
+	var list := _effect_list_at(path)
+	var idx: int = path[path.size() - 1]
+	if idx < 0 or idx >= list.size():
+		return
+	list.remove_at(idx)
+	_refresh_script()
+	_update_summary()
+	_maybe_snapshot()
+
+
+func _on_block_move_path(path: Array, offset: int) -> void:
+	var list := _effect_list_at(path)
+	var idx: int = path[path.size() - 1]
+	var target := idx + offset
+	if idx < 0 or idx >= list.size() or target < 0 or target >= list.size():
+		return
+	var tmp = list[idx]
+	list[idx] = list[target]
+	list[target] = tmp
+	_refresh_script()
+	_update_summary()
+	_maybe_snapshot()
+
+
+func _on_block_drop_path(from_path: Array, to_path: Array, insert_after: bool, data) -> void:
+	var list_path: Array = to_path.slice(0, to_path.size() - 1)
+	var index: int = to_path[to_path.size() - 1] + (1 if insert_after else 0)
+	_apply_drop(data, list_path, index)
+
+
+func _on_block_changed(_path: Array) -> void:
+	# Inline parameter edits already mutated the effect data (dicts are shared
+	# references); only the summary needs refreshing, not the whole script.
+	_update_summary()
+	_maybe_snapshot()
+
+
+func _on_block_context_requested(path: Array, at: Vector2) -> void:
+	var menu := PopupMenu.new()
+	menu.add_item(Locale.t("skill_editor.duplicate"), 0)
+	menu.add_item(Locale.t("skill_editor.delete"), 1)
+	menu.id_pressed.connect(func(id: int):
+		if id == 0:
+			_duplicate_effect(path)
+		elif id == 1:
+			_on_block_delete_path(path)
+	)
+	add_child(menu)
+	menu.position = Vector2i(get_viewport().get_mouse_position())
+	menu.popup()
+
+
+func _duplicate_effect(path: Array) -> void:
+	var list := _effect_list_at(path)
+	var idx: int = path[path.size() - 1]
+	if idx < 0 or idx >= list.size():
+		return
+	var copy: Dictionary = (list[idx] as Dictionary).duplicate(true)
+	list.insert(idx + 1, copy)
+	_refresh_script()
+	_update_summary()
+	_maybe_snapshot()
+
+
+# ============================================
+# Effect popup (advanced settings via SkillEffectForm)
+# ============================================
+
+func _open_effect_popup(path: Array):
+	editing_effect_path = path.duplicate()
+	var form := SkillEffectForm.new()
+	add_child(form)
+	var existing: Dictionary = _effect_at(path)
+	form.setup(_ui_scale(), existing, _selected_trigger_key())
+	form.confirmed.connect(_on_effect_form_confirmed)
+	form.cancelled.connect(func(): editing_effect_path = [])
+
+
+func _on_effect_form_confirmed(eff: Dictionary):
+	if editing_effect_path.is_empty():
+		return
+	var path: Array = editing_effect_path.duplicate()
+	var last: int = path.pop_back()
+	var list := _effect_list_at(path)
+	if last < 0:
+		list.append(eff)
+	elif last < list.size():
+		list[last] = eff
+	editing_effect_path = []
+	_refresh_script()
+	_update_summary()
+	_maybe_snapshot()
+
+
+func _default_effect(effect_id: String) -> Dictionary:
+	var eff := {
+		"target": SkillEngine.TARGET_SELF,
+		"target_side": SkillEngine.TARGET_SIDE_ALL,
+		"effect": effect_id,
+		"value": 1,
+		"buff_id": "",
+		"duration": 0,
+		"random_count": 0,
+		"probability": 100,
+	}
+	if SkillRegistry.force_self(effect_id):
+		eff["target"] = SkillEngine.TARGET_SELF
+		eff["target_side"] = SkillEngine.TARGET_SIDE_ALL
+	elif str(SkillRegistry.effect_meta(effect_id).get("polarity", "")) == "harmful":
+		eff["target"] = SkillEngine.TARGET_SINGLE
+		eff["target_side"] = SkillEngine.TARGET_SIDE_ENEMY
+	if effect_id == SkillEngine.EFFECT_ADD_BUFF:
+		eff["buff_id"] = SkillEngine.BUFF_ATK_BOOST
+		eff["duration"] = 2
+	return _TargetResolver.normalize_effect_target(eff)
+
+
+func _default_if_else() -> Dictionary:
+	return {
+		"effect": SkillEngine.EFFECT_IF_ELSE,
+		# Empty condition: Scratch-style, the user must drop a condition
+		# reporter into the gap before the block is valid.
+		"condition": {},
+		"then_effects": [],
+		"else_effects": [],
+	}
+
+
+func _default_if() -> Dictionary:
+	return {
+		"effect": SkillEngine.EFFECT_IF,
+		"condition": {},
+		"then_effects": [],
+	}
+
+
+func _add_if_else_block() -> void:
+	effect_data.append(_default_if_else())
+	_refresh_script()
+	_update_summary()
+	_maybe_snapshot()
+
+
+func _add_if_block() -> void:
+	effect_data.append(_default_if())
+	_refresh_script()
+	_update_summary()
+	_maybe_snapshot()
+
+
+func _add_stop_block() -> void:
+	effect_data.append({"effect": SkillEngine.EFFECT_STOP})
+	_refresh_script()
+	_update_summary()
+	_maybe_snapshot()
+
+
+func _default_repeat() -> Dictionary:
+	return {
+		"effect": SkillEngine.EFFECT_REPEAT,
+		"repeat_count": 2,
+		"then_effects": [],
+	}
+
+
+func _add_repeat_block() -> void:
+	effect_data.append(_default_repeat())
+	_refresh_script()
+	_update_summary()
+	_maybe_snapshot()
+
+
+# A condition reporter was dropped into an if block's condition gap: write it
+# back as the nested "condition" dict (clearing any legacy direct fields).
+# When the reporter came from another if gap (from_path set), clear that gap
+# too — Scratch-style dragging moves the reporter instead of copying it.
+func _on_block_condition_dropped(path: Array, cond: Dictionary, from_path: Array = []) -> void:
+	if not from_path.is_empty():
+		var src_eff := _effect_at(from_path)
+		src_eff.erase("condition")
+		src_eff.erase("condition_type")
+		src_eff.erase("condition_op")
+		src_eff.erase("condition_value")
+		src_eff.erase("condition_buff_id")
+	var eff := _effect_at(path)
+	eff.erase("condition_type")
+	eff.erase("condition_op")
+	eff.erase("condition_value")
+	eff.erase("condition_buff_id")
+	eff["condition"] = cond.duplicate(true)
+	_refresh_script()
+	_update_summary()
+	_maybe_snapshot()
+
+
+# Lightweight popup that edits an if/else block's condition fields.
+func _open_if_condition_popup(path: Array):
 	var s := _ui_scale()
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", int(8 * s))
+	var popup := UITheme.make_popup_layer(self, 100)
+	var layer: CanvasLayer = popup.get("layer")
+	var size := Vector2(380, 300) * s
+	var panel := Panel.new()
+	UITheme.apply_panel(panel, "gold")
+	panel.custom_minimum_size = size
+	panel.anchor_left = 0.5
+	panel.anchor_right = 0.5
+	panel.anchor_top = 0.5
+	panel.anchor_bottom = 0.5
+	panel.offset_left = -size.x / 2.0
+	panel.offset_top = -size.y / 2.0
+	panel.offset_right = size.x / 2.0
+	panel.offset_bottom = size.y / 2.0
+	layer.add_child(panel)
 
-	var lbl := Label.new()
-	lbl.text = Locale.t("skill_editor.probability")
-	lbl.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	UITheme.apply_label(lbl)
-	row.add_child(lbl)
+	var margin := MarginContainer.new()
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	margin.add_theme_constant_override("margin_left", int(14 * s))
+	margin.add_theme_constant_override("margin_top", int(10 * s))
+	margin.add_theme_constant_override("margin_right", int(14 * s))
+	margin.add_theme_constant_override("margin_bottom", int(10 * s))
+	panel.add_child(margin)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", int(6 * s))
+	margin.add_child(vb)
 
+	var title := Label.new()
+	title.text = Locale.t("skill_editor.if_condition_title")
+	title.add_theme_font_size_override("font_size", max(13, int(16 * s)))
+	UITheme.apply_title(title, max(13, int(16 * s)))
+	vb.add_child(title)
+
+	var cond_label := Label.new()
+	cond_label.text = Locale.t("skill_editor.condition")
+	cond_label.add_theme_font_size_override("font_size", max(10, int(13 * s)))
+	UITheme.apply_label(cond_label)
+	vb.add_child(cond_label)
+	var cond_sel := OptionButton.new()
+	cond_sel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for i in range(SkillRegistry.CONDITION_IDS.size()):
+		var key: String = SkillRegistry.CONDITION_IDS[i]
+		var label := Locale.t("skill_editor.condition_none") if key == SkillEngine.CONDITION_NONE else Locale.term("condition", key)
+		cond_sel.add_item(label, i)
+	UITheme.apply_button(cond_sel, "secondary")
+	vb.add_child(cond_sel)
+
+	var detail_row := HBoxContainer.new()
+	detail_row.add_theme_constant_override("separation", int(6 * s))
+	var op_label := Label.new()
+	op_label.text = Locale.t("skill_editor.condition_op")
+	op_label.add_theme_font_size_override("font_size", max(10, int(13 * s)))
+	UITheme.apply_label(op_label)
+	detail_row.add_child(op_label)
+	var cond_op_sel := OptionButton.new()
+	for i in range(SkillRegistry.CONDITION_OP_IDS.size()):
+		cond_op_sel.add_item(Locale.term("condition_op", SkillRegistry.CONDITION_OP_IDS[i]), i)
+	UITheme.apply_button(cond_op_sel, "secondary")
+	detail_row.add_child(cond_op_sel)
+	var cond_value_spin := SpinBox.new()
+	cond_value_spin.custom_minimum_size = Vector2(60 * s, 0)
+	cond_value_spin.min_value = 0.0
+	cond_value_spin.max_value = 100.0
+	cond_value_spin.value = 1.0
+	UITheme.apply_input(cond_value_spin)
+	detail_row.add_child(cond_value_spin)
+	detail_row.visible = false
+	vb.add_child(detail_row)
+
+	var buff_row := HBoxContainer.new()
+	buff_row.add_theme_constant_override("separation", int(6 * s))
+	var buff_label := Label.new()
+	buff_label.text = Locale.t("skill_editor.condition_buff")
+	buff_label.add_theme_font_size_override("font_size", max(10, int(13 * s)))
+	UITheme.apply_label(buff_label)
+	buff_row.add_child(buff_label)
+	var cond_buff_sel := OptionButton.new()
+	cond_buff_sel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	for i in range(SkillRegistry.BUFF_IDS.size()):
+		cond_buff_sel.add_item(Locale.term("buff", SkillRegistry.BUFF_IDS[i]), i)
+	UITheme.apply_button(cond_buff_sel, "secondary")
+	buff_row.add_child(cond_buff_sel)
+	buff_row.visible = false
+	vb.add_child(buff_row)
+
+	# Backfill current condition (supports the nested "condition" reporter dict).
+	var existing: Dictionary = SkillEngine._condition_dict(_effect_at(path))
+	var cur_type: String = existing.get("condition_type", SkillEngine.CONDITION_NONE)
+	cond_sel.selected = _idx_of(cur_type, SkillRegistry.CONDITION_IDS)
+	cond_op_sel.selected = _idx_of(existing.get("condition_op", SkillEngine.CONDITION_OP_GTE), SkillRegistry.CONDITION_OP_IDS)
+	cond_value_spin.value = float(existing.get("condition_value", 1))
+	cond_buff_sel.selected = _idx_of(existing.get("condition_buff_id", SkillEngine.BUFF_ATK_BOOST), SkillRegistry.BUFF_IDS)
+	var _sync_condition = func():
+		var ctype: String = SkillRegistry.CONDITION_IDS[cond_sel.selected]
+		var uses_buff: bool = ctype == SkillEngine.CONDITION_TARGET_HAS_BUFF
+		detail_row.visible = ctype != SkillEngine.CONDITION_NONE and not uses_buff
+		buff_row.visible = uses_buff
+	_sync_condition.call()
+	cond_sel.item_selected.connect(func(_i: int): _sync_condition.call())
+
+	var btns := HBoxContainer.new()
+	btns.alignment = BoxContainer.ALIGNMENT_CENTER
+	btns.add_theme_constant_override("separation", int(16 * s))
+	var ok_btn := Button.new()
+	ok_btn.text = Locale.t("skill_editor.ok")
+	ok_btn.add_theme_font_size_override("font_size", max(10, int(14 * s)))
+	UITheme.apply_button(ok_btn, "primary")
+	ok_btn.pressed.connect(func():
+		var eff := _effect_at(path)
+		eff.erase("condition")
+		eff.erase("condition_type")
+		eff.erase("condition_op")
+		eff.erase("condition_value")
+		eff.erase("condition_buff_id")
+		var ctype: String = SkillRegistry.CONDITION_IDS[cond_sel.selected]
+		if ctype != SkillEngine.CONDITION_NONE:
+			eff["condition"] = {
+				"condition_type": ctype,
+			}
+			if ctype == SkillEngine.CONDITION_TARGET_HAS_BUFF:
+				eff["condition"]["condition_buff_id"] = SkillRegistry.BUFF_IDS[cond_buff_sel.selected]
+			else:
+				eff["condition"]["condition_op"] = SkillRegistry.CONDITION_OP_IDS[cond_op_sel.selected]
+				eff["condition"]["condition_value"] = int(cond_value_spin.value)
+		layer.queue_free()
+		_refresh_script()
+		_update_summary()
+		_maybe_snapshot()
+	)
+	btns.add_child(ok_btn)
+	var cancel_btn := Button.new()
+	cancel_btn.text = Locale.t("skill_editor.cancel")
+	cancel_btn.add_theme_font_size_override("font_size", max(10, int(14 * s)))
+	UITheme.apply_button(cancel_btn, "secondary")
+	cancel_btn.pressed.connect(func(): layer.queue_free())
+	btns.add_child(cancel_btn)
+	vb.add_child(btns)
+
+
+func _idx_of(key: String, keys: Array) -> int:
+	var i := keys.find(key)
+	return i if i >= 0 else 0
+
+
+# ============================================
+# Skill settings row (probability / max uses / talent)
+# ============================================
+
+func _build_settings_row() -> void:
+	var s := _ui_scale()
+
+	var row1 := HBoxContainer.new()
+	row1.add_theme_constant_override("separation", int(10 * s))
+	settings_row.add_child(row1)
+
+	var prob_lbl := Label.new()
+	prob_lbl.text = Locale.t("skill_editor.probability")
+	prob_lbl.add_theme_font_size_override("font_size", max(10, int(13 * s)))
+	UITheme.apply_label(prob_lbl)
+	row1.add_child(prob_lbl)
 	skill_prob_spin = SpinBox.new()
 	skill_prob_spin.custom_minimum_size = Vector2(60 * s, 0)
 	skill_prob_spin.min_value = 1.0
 	skill_prob_spin.max_value = 100.0
 	skill_prob_spin.value = 100.0
 	UITheme.apply_input(skill_prob_spin)
-	skill_prob_spin.value_changed.connect(func(_f: float): _update_summary())
-	row.add_child(skill_prob_spin)
+	skill_prob_spin.value_changed.connect(func(_f: float):
+		_update_summary()
+		_maybe_snapshot()
+	)
+	row1.add_child(skill_prob_spin)
 
-	var pct := Label.new()
-	pct.text = "%"
-	UITheme.apply_label(pct)
-	row.add_child(pct)
-
-	vbox.add_child(row)
-	vbox.move_child(row, idx + 1)
-
-	# Max uses row (限定技)
-	setup_max_uses_row(vbox, idx + 2)
-	# Skill type row (天赋/普通)
-	setup_skill_type_row(vbox, idx + 3)
-
-
-func setup_max_uses_row(vbox: VBoxContainer, target_idx: int) -> void:
-	var s := _ui_scale()
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", int(8 * s))
-
-	var lbl := Label.new()
-	lbl.text = Locale.t("skill_editor.max_uses")
-	lbl.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	UITheme.apply_label(lbl)
-	row.add_child(lbl)
-
+	var uses_lbl := Label.new()
+	uses_lbl.text = Locale.t("skill_editor.max_uses")
+	uses_lbl.add_theme_font_size_override("font_size", max(10, int(13 * s)))
+	UITheme.apply_label(uses_lbl)
+	row1.add_child(uses_lbl)
 	max_uses_spin = SpinBox.new()
 	max_uses_spin.custom_minimum_size = Vector2(60 * s, 0)
 	max_uses_spin.min_value = 0.0
 	max_uses_spin.max_value = 99.0
 	max_uses_spin.value = 0.0
 	UITheme.apply_input(max_uses_spin)
-	max_uses_spin.value_changed.connect(func(_f: float): _update_summary())
-	row.add_child(max_uses_spin)
+	max_uses_spin.value_changed.connect(func(_f: float):
+		_update_summary()
+		_maybe_snapshot()
+	)
+	row1.add_child(max_uses_spin)
 
-	vbox.add_child(row)
-	vbox.move_child(row, target_idx)
+	var row2 := HBoxContainer.new()
+	row2.add_theme_constant_override("separation", int(10 * s))
+	settings_row.add_child(row2)
 
-
-func setup_skill_type_row(vbox: VBoxContainer, target_idx: int) -> void:
-	var s := _ui_scale()
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", int(8 * s))
-
-	var lbl := Label.new()
-	lbl.text = Locale.t("skill_editor.skill_type")
-	lbl.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	UITheme.apply_label(lbl)
-	row.add_child(lbl)
-
+	var type_lbl := Label.new()
+	type_lbl.text = Locale.t("skill_editor.skill_type")
+	type_lbl.add_theme_font_size_override("font_size", max(10, int(13 * s)))
+	UITheme.apply_label(type_lbl)
+	row2.add_child(type_lbl)
 	skill_type_select = OptionButton.new()
 	skill_type_select.add_item(Locale.t("skill_editor.skill_type_normal"))
 	skill_type_select.add_item(Locale.t("skill_editor.skill_type_talent"))
 	skill_type_select.selected = 0
 	UITheme.apply_button(skill_type_select, "secondary")
-	skill_type_select.item_selected.connect(func(_i: int): _update_summary())
-	row.add_child(skill_type_select)
-
-	vbox.add_child(row)
-	vbox.move_child(row, target_idx)
-	skill_type_row = row
-	_update_skill_type_visibility()
+	skill_type_select.item_selected.connect(func(_i: int):
+		_update_summary()
+		_maybe_snapshot()
+	)
+	row2.add_child(skill_type_select)
 
 
 func _update_skill_type_visibility() -> void:
-	if skill_type_row == null:
+	if skill_type_select == null:
 		return
-	var is_spell: bool = PlayerData.card_draft.get("card_type", "minion") == "spell"
-	var trigger_key: String = _selected_trigger_key()
-	# Talent option only applies to passive skills (not on_activate, not spell).
-	var show_talent: bool = not is_spell and trigger_key != SkillEngine.TRIGGER_ON_ACTIVATE
-	skill_type_row.visible = show_talent
-	if not show_talent and skill_type_select and skill_type_select.selected != 0:
+	var show_talent: bool = not _is_spell() and SkillRegistry.trigger_is_passive(_selected_trigger_key())
+	skill_type_select.visible = show_talent
+	if not show_talent and skill_type_select.selected != 0:
 		skill_type_select.selected = 0
 
 
-func _connect_signals():
-	skill_name_input.text_changed.connect(func(_t: String): _update_summary())
-	trigger_select.item_selected.connect(func(_i: int):
-		_update_trigger_preview()
-		_update_skill_type_visibility()
-		_update_summary()
-	)
-	add_effect_btn.pressed.connect(func(): _open_effect_popup(-1))
-	save_button.pressed.connect(_on_save_pressed)
-	cancel_button.pressed.connect(_on_cancel_pressed)
-
-
-func _apply_dynamic_theme(root: Node) -> void:
-	for child in root.get_children():
-		if child is Label:
-			UITheme.apply_label(child)
-		elif child is OptionButton or child is Button:
-			UITheme.apply_button(child, "danger" if child is Button and child.text == "X" else "secondary")
-		elif child is SpinBox or child is LineEdit:
-			UITheme.apply_input(child)
-		_apply_dynamic_theme(child)
-
+# ============================================
+# Trigger helpers
+# ============================================
 
 func _trigger_keys() -> Array:
-	if PlayerData.card_draft.get("card_type", "minion") == "parasite":
+	if _is_parasite():
 		return [
 			SkillEngine.TRIGGER_ON_ATTACK,
 			SkillEngine.TRIGGER_ON_DAMAGED,
@@ -311,798 +1039,23 @@ func _trigger_keys() -> Array:
 	return [
 		SkillEngine.TRIGGER_ON_ATTACK, SkillEngine.TRIGGER_ON_ACTIVATE,
 		SkillEngine.TRIGGER_ON_SUMMON, SkillEngine.TRIGGER_ON_DEATH, SkillEngine.TRIGGER_ON_DAMAGED,
+		SkillEngine.TRIGGER_ON_TURN_START, SkillEngine.TRIGGER_ON_TURN_END,
+		SkillEngine.TRIGGER_ON_HEALED, SkillEngine.TRIGGER_ON_ATTACKED,
 	]
 
 
 func _selected_trigger_key() -> String:
-	# Spell cards are locked to on_cast — ignore the (hidden) dropdown.
-	if PlayerData.card_draft.get("card_type", "minion") == "spell":
+	# Spell cards are locked to on_cast.
+	if _is_spell():
 		return SkillEngine.TRIGGER_ON_CAST
-	var keys := _trigger_keys()
-	if trigger_select.selected < 0 or trigger_select.selected >= keys.size():
-		return SkillEngine.TRIGGER_ON_ATTACK
-	return keys[trigger_select.selected]
+	return current_trigger_key
 
 
 func _update_trigger_preview() -> void:
-	if trigger_preview_label == null or trigger_select == null:
+	if trigger_preview_label == null:
 		return
 	var trigger_key: String = _selected_trigger_key()
 	trigger_preview_label.text = Locale.t("skill_editor.trigger_help.%s" % trigger_key)
-
-
-# ============================================
-# Effect list (compact summaries)
-# ============================================
-
-func _refresh_effect_list():
-	var s := _ui_scale()
-	for child in effects_list.get_children():
-		child.queue_free()
-
-	for i in range(effect_data.size()):
-		var eff: Dictionary = effect_data[i]
-		var idx: int = i
-
-		var row := HBoxContainer.new()
-		row.add_theme_constant_override("separation", int(6 * s))
-
-		var lbl := Label.new()
-		lbl.text = _format_effect_short(eff, idx)
-		lbl.size_flags_horizontal = 3
-		lbl.clip_text = true
-		lbl.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-		row.add_child(lbl)
-
-		var edit_btn := Button.new()
-		edit_btn.text = Locale.t("skill_editor.edit")
-		edit_btn.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-		edit_btn.pressed.connect(_open_effect_popup.bind(idx))
-		row.add_child(edit_btn)
-
-		var del_btn := Button.new()
-		del_btn.text = "X"
-		del_btn.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-		del_btn.pressed.connect(_delete_effect.bind(idx))
-		row.add_child(del_btn)
-
-		effects_list.add_child(row)
-	_apply_dynamic_theme(effects_list)
-
-
-func _format_effect_short(eff: Dictionary, idx: int) -> String:
-	return "[%d] %s" % [idx + 1, _TextFormatter.format_effect_sentence(eff)]
-
-
-func _delete_effect(idx: int):
-	if idx < 0 or idx >= effect_data.size():
-		return
-	effect_data.remove_at(idx)
-	_refresh_effect_list()
-	_update_summary()
-
-
-# ============================================
-# Popup — blur overlay + effect form
-# ============================================
-
-func _open_effect_popup(idx: int):
-	editing_effect_idx = idx
-	var s := _ui_scale()
-
-	# Create blur overlay layer
-	popup_layer = CanvasLayer.new()
-	popup_layer.layer = 100
-	add_child(popup_layer)
-
-	# Blur background
-	var bg := ColorRect.new()
-	bg.anchor_right = 1.0
-	bg.anchor_bottom = 1.0
-	var mat := ShaderMaterial.new()
-	mat.shader = load("res://blur.gdshader")
-	mat.set_shader_parameter("strength", 2.5)
-	bg.material = mat
-	popup_layer.add_child(bg)
-
-	# Centered popup panel
-	var popup_size := Vector2(390, 380) * s
-	var panel := Panel.new()
-	UITheme.apply_panel(panel, "gold")
-	panel.custom_minimum_size = popup_size
-	panel.anchor_left = 0.5
-	panel.anchor_right = 0.5
-	panel.anchor_top = 0.5
-	panel.anchor_bottom = 0.5
-	panel.offset_left = -popup_size.x / 2.0
-	panel.offset_top = -popup_size.y / 2.0
-	panel.offset_right = popup_size.x / 2.0
-	panel.offset_bottom = popup_size.y / 2.0
-	popup_layer.add_child(panel)
-
-	var outer := VBoxContainer.new()
-	outer.add_theme_constant_override("separation", int(6 * s))
-	outer.set_anchors_preset(Control.PRESET_FULL_RECT)
-	outer.offset_left = 10 * s
-	outer.offset_top = 10 * s
-	outer.offset_right = -10 * s
-	outer.offset_bottom = -10 * s
-	panel.add_child(outer)
-
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	outer.add_child(scroll)
-
-	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", int(6 * s))
-	vb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	scroll.add_child(vb)
-
-	# Target dropdown
-	var target_label := Label.new()
-	target_label.text = Locale.t("skill_editor.target")
-	target_label.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	vb.add_child(target_label)
-	var target_sel := OptionButton.new()
-	target_sel.custom_minimum_size = Vector2(200 * s, 0)
-	_setup_target_dropdown(target_sel)
-	vb.add_child(target_sel)
-
-	var side_row := HBoxContainer.new()
-	side_row.add_theme_constant_override("separation", int(4 * s))
-	var side_label := Label.new()
-	side_label.text = Locale.t("skill_editor.target_side")
-	side_label.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	side_row.add_child(side_label)
-	var side_sel := OptionButton.new()
-	side_sel.size_flags_horizontal = 3
-	side_sel.custom_minimum_size = Vector2(120 * s, 0)
-	_setup_target_side_dropdown(side_sel)
-	side_row.add_child(side_sel)
-	vb.add_child(side_row)
-
-	var warning_label := Label.new()
-	warning_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	warning_label.add_theme_font_size_override("font_size", max(9, int(12 * s)))
-	UITheme.apply_label(warning_label, true)
-	vb.add_child(warning_label)
-
-	var effect_preview_label := Label.new()
-	effect_preview_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	effect_preview_label.add_theme_font_size_override("font_size", max(9, int(12 * s)))
-	UITheme.apply_label(effect_preview_label, true)
-	vb.add_child(effect_preview_label)
-
-	# Create effect_sel early so lambdas below can capture a valid reference.
-	var effect_sel := OptionButton.new()
-	_setup_effect_dropdown(effect_sel)
-
-	var _update_target_warning = func():
-		var trigger_key: String = _selected_trigger_key()
-		var target_key: String = TARGET_KEYS[target_sel.selected]
-		var effect_key: String = EFFECT_KEYS[effect_sel.selected]
-		# Zero-cost effect targets the hand — battlefield target warnings don't apply.
-		if effect_key == SkillEngine.EFFECT_ZERO_COST:
-			warning_label.text = ""
-			warning_label.visible = false
-			return
-		var msg := _target_warning_for(trigger_key, target_key, target_sel.disabled)
-		warning_label.text = msg
-		warning_label.visible = msg != ""
-
-	var _update_target_side = func():
-		var target_key: String = TARGET_KEYS[target_sel.selected]
-		var effect_key: String = EFFECT_KEYS[effect_sel.selected]
-		# Zero-cost effect always targets own hand — target_side is irrelevant.
-		var is_hand_effect: bool = effect_key == SkillEngine.EFFECT_ZERO_COST
-		var disabled: bool = target_sel.disabled or target_key in [SkillEngine.TARGET_SELF, SkillEngine.TARGET_SELF_SIDES] or is_hand_effect
-		side_sel.disabled = disabled
-		if disabled:
-			side_sel.selected = _idx_of(SkillEngine.TARGET_SIDE_ALL, TARGET_SIDE_KEYS)
-		elif target_key in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES] and TARGET_SIDE_KEYS[side_sel.selected] == SkillEngine.TARGET_SIDE_ALL:
-			side_sel.selected = _idx_of(SkillEngine.TARGET_SIDE_ENEMY, TARGET_SIDE_KEYS)
-		_update_target_warning.call()
-	target_sel.item_selected.connect(func(_i: int): _update_target_side.call())
-	side_sel.item_selected.connect(func(_i: int): _update_target_side.call())
-
-	# Effect + Value row
-	var r1 := HBoxContainer.new()
-	r1.add_theme_constant_override("separation", int(4 * s))
-	var effect_label := Label.new()
-	effect_label.text = Locale.t("skill_editor.effect")
-	effect_label.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	r1.add_child(effect_label)
-	effect_sel.size_flags_horizontal = 3
-	effect_sel.custom_minimum_size = Vector2(100 * s, 0)
-	r1.add_child(effect_sel)
-	var val_label := Label.new()
-	val_label.text = Locale.t("skill_editor.value")
-	val_label.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	r1.add_child(val_label)
-	var val_spin := SpinBox.new()
-	val_spin.custom_minimum_size = Vector2(50 * s, 0)
-	val_spin.min_value = 1.0
-	val_spin.max_value = 100.0
-	val_spin.value = 1.0
-	r1.add_child(val_spin)
-	var pct_label := Label.new()
-	pct_label.text = "%"
-	pct_label.visible = false
-	r1.add_child(pct_label)
-	vb.add_child(r1)
-
-	# Value mode dropdown: fixed / random range / variable
-	var mode_row := HBoxContainer.new()
-	mode_row.add_theme_constant_override("separation", int(4 * s))
-	var mode_label := Label.new()
-	mode_label.text = Locale.t("skill_editor.value_mode")
-	mode_label.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	mode_row.add_child(mode_label)
-	var mode_sel := OptionButton.new()
-	mode_sel.add_item(Locale.t("skill_editor.value_mode_fixed"), 0)
-	mode_sel.add_item(Locale.t("skill_editor.value_mode_random"), 1)
-	mode_sel.add_item(Locale.t("skill_editor.value_mode_var"), 2)
-	mode_sel.size_flags_horizontal = 3
-	mode_row.add_child(mode_sel)
-	vb.add_child(mode_row)
-
-	# Random range row (min / max)
-	var rand_row := HBoxContainer.new()
-	rand_row.add_theme_constant_override("separation", int(4 * s))
-	var min_label := Label.new()
-	min_label.text = Locale.t("skill_editor.value_min")
-	min_label.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	rand_row.add_child(min_label)
-	var min_spin := SpinBox.new()
-	min_spin.custom_minimum_size = Vector2(50 * s, 0)
-	min_spin.min_value = 1.0
-	min_spin.max_value = 100.0
-	min_spin.value = 1.0
-	rand_row.add_child(min_spin)
-	var max_label := Label.new()
-	max_label.text = Locale.t("skill_editor.value_max")
-	max_label.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	rand_row.add_child(max_label)
-	var max_spin := SpinBox.new()
-	max_spin.custom_minimum_size = Vector2(50 * s, 0)
-	max_spin.min_value = 1.0
-	max_spin.max_value = 100.0
-	max_spin.value = 3.0
-	rand_row.add_child(max_spin)
-	rand_row.visible = false
-	vb.add_child(rand_row)
-
-	# Variable row (variable dropdown + offset)
-	var var_row := HBoxContainer.new()
-	var_row.add_theme_constant_override("separation", int(4 * s))
-	var var_label := Label.new()
-	var_label.text = Locale.t("skill_editor.value_var")
-	var_label.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	var_row.add_child(var_label)
-	var var_sel := OptionButton.new()
-	var_sel.size_flags_horizontal = 3
-	_setup_var_dropdown(var_sel)
-	var_row.add_child(var_sel)
-	var off_label := Label.new()
-	off_label.text = Locale.t("skill_editor.value_offset")
-	off_label.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	var_row.add_child(off_label)
-	var off_spin := SpinBox.new()
-	off_spin.custom_minimum_size = Vector2(50 * s, 0)
-	off_spin.min_value = -20.0
-	off_spin.max_value = 20.0
-	off_spin.value = 0.0
-	var_row.add_child(off_spin)
-	var_row.visible = false
-	vb.add_child(var_row)
-
-	# Effect probability row
-	var prob_row := HBoxContainer.new()
-	prob_row.add_theme_constant_override("separation", int(4 * s))
-	var prob_label := Label.new()
-	prob_label.text = Locale.t("skill_editor.effect_prob")
-	prob_label.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	prob_row.add_child(prob_label)
-	var eff_prob_spin := SpinBox.new()
-	eff_prob_spin.custom_minimum_size = Vector2(55 * s, 0)
-	eff_prob_spin.min_value = 1.0
-	eff_prob_spin.max_value = 100.0
-	eff_prob_spin.value = 100.0
-	prob_row.add_child(eff_prob_spin)
-	var prob_pct := Label.new()
-	prob_pct.text = "%"
-	prob_pct.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	prob_row.add_child(prob_pct)
-	vb.add_child(prob_row)
-
-	# Random target count
-	var rcount_row := HBoxContainer.new()
-	var rcount_label := Label.new()
-	rcount_label.text = Locale.t("skill_editor.max_targets")
-	rcount_label.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	rcount_row.add_child(rcount_label)
-	var rcount_spin := SpinBox.new()
-	rcount_spin.custom_minimum_size = Vector2(50 * s, 0)
-	rcount_spin.min_value = 0.0
-	rcount_spin.max_value = 10.0
-	rcount_spin.value = 0.0
-	rcount_row.add_child(rcount_spin)
-	vb.add_child(rcount_row)
-
-	# Effect condition row
-	var condition_row := HBoxContainer.new()
-	condition_row.add_theme_constant_override("separation", int(4 * s))
-	var condition_label := Label.new()
-	condition_label.text = Locale.t("skill_editor.condition")
-	condition_label.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	condition_row.add_child(condition_label)
-	var condition_sel := OptionButton.new()
-	condition_sel.size_flags_horizontal = 3
-	_setup_condition_dropdown(condition_sel)
-	condition_row.add_child(condition_sel)
-	vb.add_child(condition_row)
-
-	var condition_detail_row := HBoxContainer.new()
-	condition_detail_row.add_theme_constant_override("separation", int(4 * s))
-	var condition_op_label := Label.new()
-	condition_op_label.text = Locale.t("skill_editor.condition_op")
-	condition_op_label.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	condition_detail_row.add_child(condition_op_label)
-	var condition_op_sel := OptionButton.new()
-	_setup_condition_op_dropdown(condition_op_sel)
-	condition_detail_row.add_child(condition_op_sel)
-	var condition_value_label := Label.new()
-	condition_value_label.text = Locale.t("skill_editor.condition_value")
-	condition_value_label.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	condition_detail_row.add_child(condition_value_label)
-	var condition_value_spin := SpinBox.new()
-	condition_value_spin.custom_minimum_size = Vector2(55 * s, 0)
-	condition_value_spin.min_value = 0.0
-	condition_value_spin.max_value = 100.0
-	condition_value_spin.value = 1.0
-	condition_detail_row.add_child(condition_value_spin)
-	condition_detail_row.visible = false
-	vb.add_child(condition_detail_row)
-
-	var condition_buff_row := HBoxContainer.new()
-	condition_buff_row.add_theme_constant_override("separation", int(4 * s))
-	var condition_buff_label := Label.new()
-	condition_buff_label.text = Locale.t("skill_editor.condition_buff")
-	condition_buff_label.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	condition_buff_row.add_child(condition_buff_label)
-	var condition_buff_sel := OptionButton.new()
-	condition_buff_sel.size_flags_horizontal = 3
-	_setup_buff_dropdown(condition_buff_sel)
-	condition_buff_row.add_child(condition_buff_sel)
-	condition_buff_row.visible = false
-	vb.add_child(condition_buff_row)
-
-	# Buff row (conditional)
-	var buff_row := HBoxContainer.new()
-	buff_row.add_theme_constant_override("separation", int(4 * s))
-	var buff_sel := OptionButton.new()
-	_setup_buff_dropdown(buff_sel)
-	buff_sel.size_flags_horizontal = 3
-	buff_sel.custom_minimum_size = Vector2(120 * s, 0)
-	buff_row.add_child(buff_sel)
-	var dur_label := Label.new()
-	dur_label.text = Locale.t("skill_editor.duration")
-	dur_label.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	buff_row.add_child(dur_label)
-	var dur_spin := SpinBox.new()
-	dur_spin.custom_minimum_size = Vector2(50 * s, 0)
-	dur_spin.min_value = 1.0
-	dur_spin.max_value = 10.0
-	dur_spin.value = 2.0
-	buff_row.add_child(dur_spin)
-	buff_row.visible = false
-	vb.add_child(buff_row)
-
-	var _update_pct = func():
-		var effect_key: String = EFFECT_KEYS[effect_sel.selected]
-		var buff_key: String = BUFF_KEYS[buff_sel.selected]
-		pct_label.visible = (effect_key == SkillEngine.EFFECT_ADD_BUFF and buff_key in [SkillEngine.BUFF_DAMAGE_REDUCTION, SkillEngine.BUFF_MISFORTUNE])
-
-	var _update_effect_labels = func():
-		var effect_key: String = EFFECT_KEYS[effect_sel.selected]
-		var is_pile_select: bool = effect_key in [SkillEngine.EFFECT_VIEW_DISCARD, SkillEngine.EFFECT_VIEW_DECK]
-		# Effects that logically support negative values
-		var allows_negative: bool = effect_key in [SkillEngine.EFFECT_GAIN_MANA, SkillEngine.EFFECT_GAIN_ATTACK, SkillEngine.EFFECT_GAIN_MAX_HP]
-		if is_pile_select:
-			val_label.text = Locale.t("skill_editor.keep_count")
-			rcount_label.text = Locale.t("skill_editor.draw_count")
-			rcount_spin.max_value = 30.0
-		else:
-			val_label.text = Locale.t("skill_editor.value")
-			rcount_label.text = Locale.t("skill_editor.max_targets")
-			rcount_spin.max_value = 10.0
-		val_spin.min_value = -100.0 if allows_negative else 1.0
-		val_spin.suffix = "%" if (effect_key == SkillEngine.EFFECT_ADD_BUFF and BUFF_KEYS[buff_sel.selected] in [SkillEngine.BUFF_DAMAGE_REDUCTION, SkillEngine.BUFF_MISFORTUNE]) else ""
-		min_spin.min_value = -100.0 if allows_negative else 1.0
-		if val_spin.value < val_spin.min_value:
-			val_spin.value = val_spin.min_value
-		if min_spin.value < min_spin.min_value:
-			min_spin.value = min_spin.min_value
-
-	# Value-mode toggle: 0=fixed (val_spin), 1=random (rand_row), 2=variable (var_row)
-	var _update_value_mode = func(m: int):
-		var effect_key: String = EFFECT_KEYS[effect_sel.selected]
-		var uses_value := not effect_key in EFFECTS_NO_VALUE
-		val_label.visible = uses_value and (m == 0)
-		val_spin.visible = uses_value and (m == 0)
-		rand_row.visible = uses_value and (m == 1)
-		var_row.visible = uses_value and (m == 2)
-		mode_row.visible = uses_value
-	mode_sel.item_selected.connect(func(m: int): _update_value_mode.call(m))
-
-	effect_sel.item_selected.connect(func(i: int):
-		var effect_key: String = EFFECT_KEYS[i]
-		buff_row.visible = (effect_key == SkillEngine.EFFECT_ADD_BUFF)
-		target_sel.disabled = effect_key in EFFECTS_FORCE_SELF
-		_update_target_side.call()
-		mode_sel.disabled = effect_key in EFFECTS_NO_VALUE
-		if effect_key != SkillEngine.EFFECT_ADD_BUFF:
-			val_spin.editable = true
-		else:
-			val_spin.editable = not BUFF_KEYS[buff_sel.selected] in [SkillEngine.BUFF_TAUNT, SkillEngine.BUFF_SILENCE]
-		_update_effect_labels.call()
-		_update_value_mode.call(mode_sel.selected)
-		_update_pct.call()
-	)
-	buff_sel.item_selected.connect(func(_i: int):
-		var buff_key: String = BUFF_KEYS[_i]
-		if buff_key in [SkillEngine.BUFF_TAUNT, SkillEngine.BUFF_SILENCE]:
-			val_spin.value = 1.0
-			val_spin.editable = false
-		else:
-			val_spin.editable = true
-		_update_pct.call()
-	)
-
-	var _update_condition_mode = func(_i: int):
-		var condition_type: String = CONDITION_KEYS[condition_sel.selected]
-		var has_condition := condition_type != SkillEngine.CONDITION_NONE
-		var uses_buff := condition_type == SkillEngine.CONDITION_TARGET_HAS_BUFF
-		condition_detail_row.visible = has_condition and not uses_buff
-		condition_buff_row.visible = uses_buff
-	condition_sel.item_selected.connect(func(i: int): _update_condition_mode.call(i))
-
-	var _preview_effect = func() -> Dictionary:
-		var preview := {
-			"target": TARGET_KEYS[target_sel.selected],
-			"target_side": TARGET_SIDE_KEYS[side_sel.selected],
-			"effect": EFFECT_KEYS[effect_sel.selected],
-			"value": float(val_spin.value),
-			"buff_id": "",
-			"duration": 0,
-			"random_count": int(rcount_spin.value),
-			"probability": int(eff_prob_spin.value),
-		}
-		var vmode: int = mode_sel.selected
-		if vmode == 1:
-			preview.value_min = int(min_spin.value)
-			preview.value_max = int(max_spin.value)
-		elif vmode == 2:
-			preview.value_var = VAR_KEYS[var_sel.selected]
-			preview.value_offset = int(off_spin.value)
-		if EFFECT_KEYS[effect_sel.selected] == SkillEngine.EFFECT_ADD_BUFF:
-			preview.buff_id = BUFF_KEYS[buff_sel.selected]
-			preview.duration = int(dur_spin.value)
-		var condition_type: String = CONDITION_KEYS[condition_sel.selected]
-		if condition_type != SkillEngine.CONDITION_NONE:
-			preview.condition_type = condition_type
-			if condition_type == SkillEngine.CONDITION_TARGET_HAS_BUFF:
-				preview.condition_buff_id = BUFF_KEYS[condition_buff_sel.selected]
-			else:
-				preview.condition_op = CONDITION_OP_KEYS[condition_op_sel.selected]
-				preview.condition_value = int(condition_value_spin.value)
-		if preview.effect in EFFECTS_FORCE_SELF:
-			preview.target = SkillEngine.TARGET_SELF
-			preview.target_side = SkillEngine.TARGET_SIDE_ALL
-		return _TargetResolver.normalize_effect_target(preview)
-
-	var _update_effect_preview = func():
-		var sentence := _TextFormatter.format_effect_sentence(_preview_effect.call())
-		effect_preview_label.text = Locale.t("skill_editor.effect_preview", [sentence])
-
-	var _connect_preview_updates = func():
-		for control in [target_sel, side_sel, effect_sel, buff_sel, mode_sel, var_sel, condition_sel, condition_op_sel, condition_buff_sel]:
-			control.item_selected.connect(func(_i: int): _update_effect_preview.call())
-		for control in [val_spin, min_spin, max_spin, off_spin, eff_prob_spin, rcount_spin, dur_spin, condition_value_spin]:
-			control.value_changed.connect(func(_value: float): _update_effect_preview.call())
-
-	# Buttons
-	var btns := HBoxContainer.new()
-	btns.alignment = BoxContainer.ALIGNMENT_CENTER
-	btns.add_theme_constant_override("separation", int(16 * s))
-	var ok_btn := Button.new()
-	ok_btn.text = Locale.t("skill_editor.ok")
-	ok_btn.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	UITheme.apply_button(ok_btn, "primary")
-	ok_btn.pressed.connect(_on_popup_ok)
-	btns.add_child(ok_btn)
-	var cls_btn := Button.new()
-	cls_btn.text = Locale.t("skill_editor.cancel")
-	cls_btn.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	UITheme.apply_button(cls_btn, "secondary")
-	cls_btn.pressed.connect(_on_popup_cancel)
-	btns.add_child(cls_btn)
-	outer.add_child(btns)
-	_apply_dynamic_theme(vb)
-	UITheme.apply_button(ok_btn, "primary")
-	UITheme.apply_button(cls_btn, "secondary")
-
-	# Store refs for reading later
-	popup_form = {
-		"target_sel": target_sel, "side_sel": side_sel, "warning_label": warning_label, "effect_sel": effect_sel, "val_spin": val_spin,
-		"buff_sel": buff_sel, "dur_spin": dur_spin, "buff_row": buff_row,
-		"rcount_spin": rcount_spin, "pct_label": pct_label,
-		"prob_spin": eff_prob_spin,
-		"mode_sel": mode_sel, "min_spin": min_spin, "max_spin": max_spin,
-		"var_sel": var_sel, "off_spin": off_spin,
-		"condition_sel": condition_sel, "condition_op_sel": condition_op_sel,
-		"condition_value_spin": condition_value_spin, "condition_buff_sel": condition_buff_sel,
-	}
-
-	# Load existing data if editing
-	if idx >= 0 and idx < effect_data.size():
-		var eff: Dictionary = _TargetResolver.normalize_effect_target(effect_data[idx])
-		target_sel.selected = _idx_of(eff.get("target", SkillEngine.TARGET_SINGLE), TARGET_KEYS)
-		side_sel.selected = _idx_of(eff.get("target_side", SkillEngine.TARGET_SIDE_ALL), TARGET_SIDE_KEYS)
-		_update_target_side.call()
-		effect_sel.selected = _idx_of(eff.get("effect", SkillEngine.EFFECT_DAMAGE), EFFECT_KEYS)
-		val_spin.value = float(eff.get("value", 1))
-		buff_sel.selected = _idx_of(eff.get("buff_id", SkillEngine.BUFF_ATK_BOOST), BUFF_KEYS)
-		val_spin.editable = (buff_sel.selected not in [5, 6])
-		target_sel.disabled = (effect_sel.selected == 2)
-		_update_target_side.call()
-		dur_spin.value = int(eff.get("duration", 2))
-		rcount_spin.value = float(eff.get("random_count", 0))
-		eff_prob_spin.value = float(eff.get("probability", 100))
-		buff_row.visible = (effect_sel.selected == 5)
-		# Detect value mode from which optional fields are present.
-		var var_id: String = eff.get("value_var", "")
-		if var_id != "":
-			mode_sel.selected = 2
-			var_sel.selected = _idx_of(var_id, VAR_KEYS)
-			off_spin.value = float(eff.get("value_offset", 0))
-		elif eff.has("value_min") and eff.has("value_max"):
-			mode_sel.selected = 1
-			min_spin.value = float(eff.get("value_min", 1))
-			max_spin.value = float(eff.get("value_max", 1))
-		else:
-			mode_sel.selected = 0
-		condition_sel.selected = _idx_of(eff.get("condition_type", SkillEngine.CONDITION_NONE), CONDITION_KEYS)
-		condition_op_sel.selected = _idx_of(eff.get("condition_op", SkillEngine.CONDITION_OP_GTE), CONDITION_OP_KEYS)
-		condition_value_spin.value = float(eff.get("condition_value", 1))
-		condition_buff_sel.selected = _idx_of(eff.get("condition_buff_id", SkillEngine.BUFF_TAUNT), BUFF_KEYS)
-		_update_condition_mode.call(condition_sel.selected)
-		_update_effect_labels.call()
-		_update_value_mode.call(mode_sel.selected)
-		_update_pct.call()
-	else:
-		_update_effect_labels.call()
-		_update_value_mode.call(0)
-		_update_condition_mode.call(0)
-		_update_target_side.call()
-	_update_editor_dropdown_tooltip(target_sel, "target", TARGET_KEYS)
-	_update_editor_dropdown_tooltip(side_sel, "target_side", TARGET_SIDE_KEYS)
-	_update_editor_dropdown_tooltip(effect_sel, "effect", EFFECT_KEYS)
-	_update_editor_dropdown_tooltip(buff_sel, "buff", BUFF_KEYS)
-	_update_editor_dropdown_tooltip(var_sel, "value_var", VAR_KEYS)
-	_update_editor_dropdown_tooltip(condition_buff_sel, "buff", BUFF_KEYS)
-	_update_condition_dropdown_tooltip(condition_sel)
-	_connect_preview_updates.call()
-	_update_effect_preview.call()
-
-
-func _on_popup_ok():
-	if popup_form.is_empty():
-		return
-	var selected_target: String = TARGET_KEYS[popup_form.target_sel.selected]
-	var selected_side: String = TARGET_SIDE_KEYS[popup_form.side_sel.selected]
-	if selected_target in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES] and selected_side == SkillEngine.TARGET_SIDE_ALL:
-		selected_side = SkillEngine.TARGET_SIDE_ENEMY
-	var eff := {
-		"target": selected_target,
-		"target_side": selected_side,
-		"effect": EFFECT_KEYS[popup_form.effect_sel.selected],
-		"value": float(popup_form.val_spin.value),
-		"buff_id": "",
-		"duration": 0,
-		"random_count": int(popup_form.rcount_spin.value),
-		"probability": int(popup_form.prob_spin.value),
-	}
-	# Value mode: 0=fixed, 1=random range, 2=variable. Only the active mode's
-	# fields are written so _resolve_value / _describe_value pick the right one.
-	var vmode: int = popup_form.mode_sel.selected
-	if vmode == 1:
-		eff.value_min = int(popup_form.min_spin.value)
-		eff.value_max = int(popup_form.max_spin.value)
-	elif vmode == 2:
-		eff.value_var = VAR_KEYS[popup_form.var_sel.selected]
-		eff.value_offset = int(popup_form.off_spin.value)
-	if popup_form.effect_sel.selected == 5:
-		eff.buff_id = BUFF_KEYS[popup_form.buff_sel.selected]
-		eff.duration = int(popup_form.dur_spin.value)
-		eff.random_count = int(popup_form.rcount_spin.value)
-	var condition_type: String = CONDITION_KEYS[popup_form.condition_sel.selected]
-	if condition_type != SkillEngine.CONDITION_NONE:
-		eff.condition_type = condition_type
-		if condition_type == SkillEngine.CONDITION_TARGET_HAS_BUFF:
-			eff.condition_buff_id = BUFF_KEYS[popup_form.condition_buff_sel.selected]
-		else:
-			eff.condition_op = CONDITION_OP_KEYS[popup_form.condition_op_sel.selected]
-			eff.condition_value = int(popup_form.condition_value_spin.value)
-	if eff.effect in EFFECTS_FORCE_SELF:
-		eff.target = SkillEngine.TARGET_SELF
-		eff.target_side = SkillEngine.TARGET_SIDE_ALL
-	eff = _TargetResolver.normalize_effect_target(eff)
-
-	if editing_effect_idx >= 0:
-		effect_data[editing_effect_idx] = eff
-	else:
-		effect_data.append(eff)
-
-	_close_popup()
-	_refresh_effect_list()
-	_update_summary()
-
-
-func _on_popup_cancel():
-	_close_popup()
-
-
-func _close_popup():
-	if popup_layer:
-		popup_layer.queue_free()
-		popup_layer = null
-	popup_form = {}
-	editing_effect_idx = -1
-
-
-# ============================================
-# Dropdown helpers
-# ============================================
-
-const TARGET_KEYS := [
-	SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES,
-	SkillEngine.TARGET_SELF, SkillEngine.TARGET_SELF_SIDES,
-	SkillEngine.TARGET_ALL,
-	SkillEngine.TARGET_MALE, SkillEngine.TARGET_FEMALE, SkillEngine.TARGET_NONHUMAN,
-]
-const TARGET_SIDE_KEYS := [
-	SkillEngine.TARGET_SIDE_ENEMY, SkillEngine.TARGET_SIDE_ALLY, SkillEngine.TARGET_SIDE_ALL,
-]
-const EFFECT_KEYS := [
-	SkillEngine.EFFECT_DAMAGE, SkillEngine.EFFECT_HEAL,
-	SkillEngine.EFFECT_DRAW_CARDS, SkillEngine.EFFECT_SHIELD,
-	SkillEngine.EFFECT_CHARM,
-	SkillEngine.EFFECT_ADD_BUFF,
-	SkillEngine.EFFECT_LIFESTEAL_DAMAGE,
-	SkillEngine.EFFECT_EXECUTE,
-	SkillEngine.EFFECT_CLEANSE,
-	SkillEngine.EFFECT_DISPEL,
-	SkillEngine.EFFECT_GAIN_MANA,
-	SkillEngine.EFFECT_GAIN_ATTACK,
-	SkillEngine.EFFECT_GAIN_MAX_HP,
-	SkillEngine.EFFECT_VIEW_DISCARD,
-	SkillEngine.EFFECT_VIEW_DECK,
-	SkillEngine.EFFECT_ZERO_COST,
-]
-const EFFECTS_FORCE_SELF := [SkillEngine.EFFECT_DRAW_CARDS, SkillEngine.EFFECT_GAIN_MANA, SkillEngine.EFFECT_VIEW_DISCARD, SkillEngine.EFFECT_VIEW_DECK]
-const EFFECTS_NO_VALUE := [SkillEngine.EFFECT_CLEANSE, SkillEngine.EFFECT_DISPEL]
-const BUFF_KEYS := [
-	SkillEngine.BUFF_ATK_BOOST,
-	SkillEngine.BUFF_REGEN,
-	SkillEngine.BUFF_MANA_REFUND,
-	SkillEngine.BUFF_THORNS,
-	SkillEngine.BUFF_DAMAGE_REDUCTION,
-	SkillEngine.BUFF_TAUNT,
-	SkillEngine.BUFF_SILENCE,
-	SkillEngine.BUFF_MISFORTUNE,
-	SkillEngine.BUFF_IMMUNE_LETHAL,
-]
-const VAR_KEYS := [
-	SkillEngine.VAR_FIELD_TOTAL, SkillEngine.VAR_FIELD_ALLY, SkillEngine.VAR_FIELD_ENEMY,
-	SkillEngine.VAR_EMPTY_ALLY, SkillEngine.VAR_EMPTY_ENEMY,
-	SkillEngine.VAR_HAND_COUNT, SkillEngine.VAR_MANA_CURRENT,
-]
-const CONDITION_KEYS := [
-	SkillEngine.CONDITION_NONE,
-	SkillEngine.CONDITION_SOURCE_HP_PCT,
-	SkillEngine.CONDITION_TARGET_HP_PCT,
-	SkillEngine.CONDITION_FIELD_ALLY,
-	SkillEngine.CONDITION_FIELD_ENEMY,
-	SkillEngine.CONDITION_HAND_COUNT,
-	SkillEngine.CONDITION_MANA_CURRENT,
-	SkillEngine.CONDITION_TARGET_HAS_BUFF,
-]
-const CONDITION_OP_KEYS := [
-	SkillEngine.CONDITION_OP_GTE, SkillEngine.CONDITION_OP_LTE, SkillEngine.CONDITION_OP_EQ,
-]
-
-func _target_warning_for(trigger_key: String, target_key: String, target_disabled: bool = false) -> String:
-	if target_disabled:
-		return Locale.t("skill_editor.warning_forced_self")
-	if target_key in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES]:
-		if trigger_key == SkillEngine.TRIGGER_ON_DEATH:
-			return Locale.t("skill_editor.warning_death_directed")
-		if trigger_key == SkillEngine.TRIGGER_ON_ATTACK:
-			return Locale.t("skill_editor.warning_attack_target")
-		if trigger_key == SkillEngine.TRIGGER_ON_DAMAGED:
-			return Locale.t("skill_editor.warning_damaged_source")
-		if trigger_key in [SkillEngine.TRIGGER_ON_ACTIVATE, SkillEngine.TRIGGER_ON_SUMMON]:
-			return Locale.t("skill_editor.warning_manual_target")
-		return Locale.t("skill_editor.warning_directed_side")
-	if trigger_key == SkillEngine.TRIGGER_ON_DEATH:
-		return Locale.t("skill_editor.warning_death_filter")
-	return Locale.t("skill_editor.warning_side_filter")
-
-
-func _setup_target_dropdown(dd: OptionButton):
-	_setup_editor_dropdown(dd, "target", TARGET_KEYS)
-
-func _setup_target_side_dropdown(dd: OptionButton):
-	_setup_editor_dropdown(dd, "target_side", TARGET_SIDE_KEYS)
-
-func _setup_effect_dropdown(dd: OptionButton):
-	_setup_editor_dropdown(dd, "effect", EFFECT_KEYS)
-
-func _setup_buff_dropdown(dd: OptionButton):
-	_setup_editor_dropdown(dd, "buff", BUFF_KEYS)
-
-func _setup_var_dropdown(dd: OptionButton):
-	_setup_editor_dropdown(dd, "value_var", VAR_KEYS)
-
-func _setup_condition_dropdown(dd: OptionButton):
-	dd.clear()
-	for i in range(CONDITION_KEYS.size()):
-		var key: String = CONDITION_KEYS[i]
-		var label := Locale.t("skill_editor.condition_none") if key == SkillEngine.CONDITION_NONE else Locale.term("condition", key)
-		dd.add_item(label, i)
-		if key != SkillEngine.CONDITION_NONE:
-			dd.get_popup().set_item_tooltip(i, _editor_term("condition", key))
-	_update_condition_dropdown_tooltip(dd)
-	dd.item_selected.connect(func(_i: int): _update_condition_dropdown_tooltip(dd))
-
-func _setup_condition_op_dropdown(dd: OptionButton):
-	dd.clear()
-	for i in range(CONDITION_OP_KEYS.size()):
-		dd.add_item(Locale.term("condition_op", CONDITION_OP_KEYS[i]), i)
-
-func _setup_editor_dropdown(dd: OptionButton, category: String, keys: Array) -> void:
-	dd.clear()
-	for i in range(keys.size()):
-		var key: String = keys[i]
-		dd.add_item(Locale.term(category, key), i)
-		dd.get_popup().set_item_tooltip(i, _editor_term(category, key))
-	_update_editor_dropdown_tooltip(dd, category, keys)
-	dd.item_selected.connect(func(_i: int): _update_editor_dropdown_tooltip(dd, category, keys))
-
-func _update_editor_dropdown_tooltip(dd: OptionButton, category: String, keys: Array) -> void:
-	if dd.selected < 0 or dd.selected >= keys.size():
-		dd.tooltip_text = ""
-		return
-	dd.tooltip_text = _editor_term(category, keys[dd.selected])
-
-func _update_condition_dropdown_tooltip(dd: OptionButton) -> void:
-	if dd.selected < 0 or dd.selected >= CONDITION_KEYS.size():
-		dd.tooltip_text = ""
-		return
-	var key: String = CONDITION_KEYS[dd.selected]
-	dd.tooltip_text = "" if key == SkillEngine.CONDITION_NONE else _editor_term("condition", key)
-
-func _editor_term(category: String, value: String) -> String:
-	var label := Locale.term("editor_%s" % category, value)
-	if label == value:
-		return Locale.term(category, value)
-	return label
-
-func _idx_of(key: String, keys: Array) -> int:
-	var i := keys.find(key)
-	return i if i >= 0 else 0
 
 
 # ============================================
@@ -1111,10 +1064,10 @@ func _idx_of(key: String, keys: Array) -> int:
 
 func _load_skill(skill: Dictionary):
 	skill_name_input.text = skill.get("skill_name", "")
-	if PlayerData.card_draft.get("card_type", "minion") == "spell":
-		trigger_select.selected = 0
+	if _is_spell():
+		current_trigger_key = SkillEngine.TRIGGER_ON_CAST
 	else:
-		trigger_select.selected = _idx_of(skill.get("trigger", SkillEngine.TRIGGER_ON_ATTACK), _trigger_keys())
+		current_trigger_key = skill.get("trigger", SkillEngine.TRIGGER_ON_ATTACK)
 	if skill_prob_spin:
 		skill_prob_spin.value = float(skill.get("probability", 100))
 	if max_uses_spin:
@@ -1123,34 +1076,28 @@ func _load_skill(skill: Dictionary):
 		skill_type_select.selected = 0 if skill.get("skill_type", SkillEngine.SKILL_TYPE_NORMAL) != SkillEngine.SKILL_TYPE_TALENT else 1
 	_update_skill_type_visibility()
 
-	var effects: Array = skill.get("effects", [])
-	if effects.is_empty() and not skill.get("effect", "").is_empty():
-		effects = [{
-			"target": skill.get("target", SkillEngine.TARGET_SINGLE),
-			"effect": skill.get("effect", SkillEngine.EFFECT_DAMAGE),
-			"value": skill.get("value", 1),
-			"buff_id": skill.get("buff_id", ""),
-			"duration": skill.get("duration", 0),
-		}]
+	var effects: Array = SkillEngine.legacy_skill_effects(skill)
 	var normalized_effects: Array = []
 	for eff in effects:
 		normalized_effects.append(_TargetResolver.normalize_effect_target(eff))
 	effect_data = normalized_effects
-	_refresh_effect_list()
+	# Start a fresh undo history for this loaded skill.
+	_reset_undo_history()
+	_refresh_script()
 
 
 func _build_skill() -> Dictionary:
 	if effect_data.is_empty():
 		return {}
-	var is_spell: bool = PlayerData.card_draft.get("card_type", "minion") == "spell"
-	var trigger_key: String = SkillEngine.TRIGGER_ON_CAST if is_spell else _selected_trigger_key()
+	var is_spell := _is_spell()
+	var trigger_key: String = _selected_trigger_key()
 	var skill_type_val: String = SkillEngine.SKILL_TYPE_NORMAL
 	# Talent only applies to passive skills (not on_activate, not spell).
-	if not is_spell and trigger_key != SkillEngine.TRIGGER_ON_ACTIVATE and skill_type_select and skill_type_select.selected == 1:
+	if not is_spell and SkillRegistry.trigger_is_passive(trigger_key) and skill_type_select and skill_type_select.selected == 1:
 		skill_type_val = SkillEngine.SKILL_TYPE_TALENT
 	return {
 		"skill_name": PlayerData.card_draft.get("name", "") if is_spell else skill_name_input.text.strip_edges(),
-		"trigger": SkillEngine.TRIGGER_ON_CAST if is_spell else _selected_trigger_key(),
+		"trigger": trigger_key,
 		"probability": int(skill_prob_spin.value) if skill_prob_spin else 100,
 		"max_uses": int(max_uses_spin.value) if max_uses_spin else 0,
 		"skill_type": skill_type_val,
@@ -1161,10 +1108,11 @@ func _build_skill() -> Dictionary:
 func _update_summary():
 	var skill: Dictionary = _build_skill()
 	skill_summary.text = _format_skill(skill)
+	_refresh_error_banner()
 
 
 func _format_skill(skill: Dictionary) -> String:
-	var is_spell: bool = PlayerData.card_draft.get("card_type", "minion") == "spell"
+	var is_spell := _is_spell()
 	var sp: int = skill.get("probability", 100)
 	var max_uses: int = skill.get("max_uses", 0)
 	var skill_type: String = skill.get("skill_type", SkillEngine.SKILL_TYPE_NORMAL)
@@ -1177,11 +1125,11 @@ func _format_skill(skill: Dictionary) -> String:
 		var tname: String = Locale.term("trigger", skill.get("trigger", SkillEngine.TRIGGER_ON_ATTACK))
 		lines = "[%s] %s\n" % [sname, tname]
 		if skill_type == SkillEngine.SKILL_TYPE_TALENT:
-			lines += "  [天赋] "
+			lines += "  %s " % Locale.t("skill.talent_badge")
 	if sp < 100:
 		lines += "  %s\n" % Locale.t("skill.chance", [sp])
 	if max_uses > 0:
-		lines += "  限定技 (最多 %d 次)\n" % max_uses
+		lines += "  %s\n" % Locale.t("skill_editor.limited_uses", [max_uses])
 	if effects.is_empty():
 		lines += "  %s" % Locale.t("skill.no_effects")
 	for i in range(effects.size()):
@@ -1193,12 +1141,76 @@ func _format_skill(skill: Dictionary) -> String:
 
 
 # ============================================
-# Save / Cancel
+# Ready / Save / Cancel
 # ============================================
+
+func _ready():
+	# Long reporters widen their block; the script area scrolls horizontally
+	# (bottom bar, like the existing vertical scroll) so every part of a wide
+	# block stays reachable without auto-wrapping the sentence.
+	var script_scroll: ScrollContainer = $Panel/Margin/HBox/MainPanel/Margin/Scroll
+	script_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	_apply_theme()
+	_apply_texts()
+	_build_settings_row()
+	_build_palette()
+	_build_undo_buttons()
+	_connect_signals()
+	_setup_drop_targets()
+
+	var skill_index: int = PlayerData.editing_skill_index
+	var skill_key: String = _skill_key_for_index(skill_index)
+	if PlayerData.card_draft.has(skill_key) and not PlayerData.card_draft[skill_key].is_empty():
+		_load_skill(PlayerData.card_draft[skill_key])
+	# Always seed the undo baseline (also for an empty/untouched skill), so the
+	# first edit is undoable and Ctrl+Z never returns a nil state.
+	_reset_undo_history()
+
+	_refresh_script()
+	_update_summary()
+	_apply_responsive_layout()
+	get_viewport().size_changed.connect(_on_viewport_size_changed)
+
+
+func _connect_signals():
+	skill_name_input.text_changed.connect(func(_t: String): _update_summary())
+	save_button.pressed.connect(_on_save_pressed)
+	cancel_button.pressed.connect(_on_cancel_pressed)
+
+
+# Undo / redo buttons sit at the left of the save/cancel row (Ctrl+Z / Ctrl+Y
+# work too); they are disabled when their stack is empty.
+func _build_undo_buttons() -> void:
+	var row: HBoxContainer = save_button.get_parent()
+	_undo_btn = Button.new()
+	_undo_btn.text = Locale.t("skill_editor.undo")
+	_undo_btn.add_theme_font_size_override("font_size", max(10, int(13 * _ui_scale())))
+	UITheme.apply_button(_undo_btn, "secondary")
+	_undo_btn.pressed.connect(_undo)
+	row.add_child(_undo_btn)
+	row.move_child(_undo_btn, 0)
+	_redo_btn = Button.new()
+	_redo_btn.text = Locale.t("skill_editor.redo")
+	_redo_btn.add_theme_font_size_override("font_size", max(10, int(13 * _ui_scale())))
+	UITheme.apply_button(_redo_btn, "secondary")
+	_redo_btn.pressed.connect(_redo)
+	row.add_child(_redo_btn)
+	row.move_child(_redo_btn, 1)
+	_refresh_undo_buttons()
+
+
+func _skill_key_for_index(index: int) -> String:
+	match index:
+		0:
+			return "skill1"
+		1:
+			return "skill2"
+	return "skill3"
+
 
 func _on_save_pressed():
 	var skill: Dictionary = _build_skill()
-	var skill_key: String = "skill1" if PlayerData.editing_skill_index == 0 else "skill2"
+	var skill_key: String = _skill_key_for_index(PlayerData.editing_skill_index)
 	PlayerData.card_draft[skill_key] = skill
 	print("Skill saved: %s" % skill.get("skill_name", ""))
 	get_tree().change_scene_to_file("res://CardEditor.tscn")

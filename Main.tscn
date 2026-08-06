@@ -17,6 +17,27 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
+[node name="EnemyAura" type="ColorRect" parent="CanvasLayer/MainBackground"]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_bottom = 240.0
+grow_horizontal = 2
+mouse_filter = 2
+color = Color(0.22, 0.035, 0.12, 0.28)
+
+[node name="PlayerAura" type="ColorRect" parent="CanvasLayer/MainBackground"]
+layout_mode = 1
+anchors_preset = 12
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_top = -270.0
+grow_horizontal = 2
+grow_vertical = 0
+mouse_filter = 2
+color = Color(0.02, 0.22, 0.32, 0.30)
+
 [node name="MainLayout" type="VBoxContainer" parent="CanvasLayer/MainBackground" unique_id=1645648937]
 layout_mode = 1
 anchors_preset = 15
@@ -125,6 +146,15 @@ size_flags_vertical = 3
 theme_override_constants/margin_left = 24
 theme_override_constants/margin_right = 24
 theme_override_constants/margin_bottom = 12
+
+[node name="HandBackdrop" type="Panel" parent="CanvasLayer/MainBackground/MainLayout/HandArea"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
 
 [node name="HandScroll" type="ScrollContainer" parent="CanvasLayer/MainBackground/MainLayout/HandArea" unique_id=4550001]
 layout_mode = 2
