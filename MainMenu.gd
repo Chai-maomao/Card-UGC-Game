@@ -99,6 +99,10 @@ func _apply_theme() -> void:
 	for btn in [start_battle_btn, card_editor_btn, my_cards_btn, online_btn, settings_btn]:
 		UITheme.apply_button(btn, "primary" if btn == start_battle_btn else "secondary")
 	UITheme.apply_label(version_label, true)
+	# Entrance motion: panel spring-in, breathing title, staggered buttons.
+	UITheme.animate_popup_enter(menu_panel)
+	UITheme.title_breathe(title_label)
+	UITheme.animate_list_enter(buttons_box, 0.05, 12.0)
 
 
 func _on_viewport_size_changed() -> void:
@@ -169,6 +173,7 @@ func _show_battle_mode_popup() -> void:
 	panel.offset_bottom = 130
 	UITheme.apply_panel(panel, "gold")
 	popup_layer.add_child(panel)
+	UITheme.animate_popup_enter(panel)
 
 	var margin := MarginContainer.new()
 	margin.anchor_right = 1.0
@@ -243,6 +248,7 @@ func _show_practice_difficulty_popup() -> void:
 	panel.offset_bottom = 170
 	UITheme.apply_panel(panel, "gold")
 	popup_layer.add_child(panel)
+	UITheme.animate_popup_enter(panel)
 
 	var margin := MarginContainer.new()
 	margin.anchor_right = 1.0
@@ -296,14 +302,14 @@ func _start_hotseat_battle() -> void:
 	PlayerData.battle_select_mode = "hotseat_p1"
 	PlayerData.battle_select_next_scene = "res://Main.tscn"
 	PlayerData.pending_hotseat_p1_deck.clear()
-	get_tree().change_scene_to_file("res://BattleDeckSelect.tscn")
+	UIMotion.change_scene("res://BattleDeckSelect.tscn")
 
 
 func _start_practice_battle(difficulty: String = "normal") -> void:
 	PlayerData.practice_ai_difficulty = difficulty
 	PlayerData.battle_select_mode = "practice"
 	PlayerData.battle_select_next_scene = "res://Main.tscn"
-	get_tree().change_scene_to_file("res://BattleDeckSelect.tscn")
+	UIMotion.change_scene("res://BattleDeckSelect.tscn")
 
 
 func _on_card_editor_pressed():
@@ -358,7 +364,7 @@ func _show_card_type_popup():
 	minion_btn.pressed.connect(func():
 		PlayerData.init_card_draft()
 		layer.queue_free()
-		get_tree().change_scene_to_file("res://CardEditor.tscn")
+		UIMotion.change_scene("res://CardEditor.tscn")
 	)
 	box.add_child(minion_btn)
 	var spell_btn := Button.new()
@@ -368,7 +374,7 @@ func _show_card_type_popup():
 	spell_btn.pressed.connect(func():
 		PlayerData.init_spell_draft()
 		layer.queue_free()
-		get_tree().change_scene_to_file("res://CardEditor.tscn")
+		UIMotion.change_scene("res://CardEditor.tscn")
 	)
 	box.add_child(spell_btn)
 	var parasite_btn := Button.new()
@@ -378,7 +384,7 @@ func _show_card_type_popup():
 	parasite_btn.pressed.connect(func():
 		PlayerData.init_parasite_draft()
 		layer.queue_free()
-		get_tree().change_scene_to_file("res://CardEditor.tscn")
+		UIMotion.change_scene("res://CardEditor.tscn")
 	)
 	box.add_child(parasite_btn)
 	var cancel_btn := Button.new()
@@ -390,17 +396,17 @@ func _show_card_type_popup():
 
 
 func _on_my_cards_pressed():
-	get_tree().change_scene_to_file("res://MyCards.tscn")
+	UIMotion.change_scene("res://MyCards.tscn")
 
 
 func _on_online_pressed():
 	NetworkManager.close_connection()
 	NetworkManager.clear_room_session()
-	get_tree().change_scene_to_file("res://MultiplayerMenu.tscn")
+	UIMotion.change_scene("res://MultiplayerMenu.tscn")
 
 
 func _on_settings_pressed() -> void:
-	get_tree().change_scene_to_file("res://SettingsMenu.tscn")
+	UIMotion.change_scene("res://SettingsMenu.tscn")
 
 
 func _on_resume_battle_pressed() -> void:
@@ -411,7 +417,7 @@ func _on_resume_battle_pressed() -> void:
 
 
 func _on_reconnect_transport_ready() -> void:
-	get_tree().change_scene_to_file("res://Main.tscn")
+	UIMotion.change_scene("res://Main.tscn")
 
 
 func _on_reconnect_failed(_reason: String) -> void:

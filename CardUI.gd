@@ -31,6 +31,9 @@ var _is_layout_applying: bool = false
 # Intent behind action_buttons visibility (true = show in battle): silence
 # temporarily overrides it, and set_card restores it once the silence expires.
 var _actions_visible: bool = true
+# Hand cards (children of the hand container) grow on hover; field cards don't.
+var is_hand_card: bool = false
+var _hover_tween: Tween = null
 
 
 func _scaled_rect(left: float, top: float, right: float, bottom: float) -> void:
@@ -60,7 +63,7 @@ func apply_ui_scale(scale_value: float) -> void:
 		background_panel.size = custom_minimum_size
 	_scale_child_rect($Background, 0, 0, 120, 160)
 	_scale_child_rect(card_surface, 0, 0, 120, 160)
-	_scale_child_rect(type_accent, 6, 27, 114, 29)
+	_scale_child_rect(type_accent, 6, 23, 114, 25)
 	_scale_child_rect(type_label, 62, 26, 114, 40)
 	var is_special_card := current_card_data != null and (current_card_data.is_spell() or current_card_data.is_parasite())
 	if is_special_card:
@@ -177,11 +180,37 @@ func _ready():
 	if skill3_btn:
 		skill3_btn.pressed.connect(func(): skill3_requested.emit())
 
+	mouse_entered.connect(_on_hover_enter)
+	mouse_exited.connect(_on_hover_exit)
+
 	_auto_hide_if_enemy()
 	if current_card_data != null:
 		set_card(current_card_data)
 	else:
 		apply_ui_scale(ui_scale)
+
+
+# Hand cards pop up (scale from bottom-center + raise) while hovered so the
+# player can see the card clearly before dragging it onto the battlefield.
+func _on_hover_enter() -> void:
+	if not is_hand_card or not is_inside_tree():
+		return
+	if _hover_tween and _hover_tween.is_valid():
+		_hover_tween.kill()
+	z_index = 20
+	pivot_offset = Vector2(size.x * 0.5, size.y)
+	_hover_tween = create_tween()
+	_hover_tween.tween_property(self, "scale", Vector2(1.14, 1.14), 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+
+
+func _on_hover_exit() -> void:
+	if not is_hand_card or not is_inside_tree():
+		return
+	if _hover_tween and _hover_tween.is_valid():
+		_hover_tween.kill()
+	_hover_tween = create_tween()
+	_hover_tween.tween_property(self, "scale", Vector2.ONE, 0.10).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	z_index = 0
 
 
 func set_card(card_data: CardData):
@@ -505,9 +534,10 @@ func _get_drag_data(_position: Vector2):
 		return null
 
 	var preview_card = duplicate()
-	preview_card.modulate.a = 0.6
+	preview_card.modulate.a = 0.72
 	preview_card.anchor_right = 0.0
 	preview_card.anchor_bottom = 0.0
+	preview_card.scale = Vector2(1.04, 1.04)
 	if preview_card.has_method("apply_ui_scale"):
 		preview_card.call("apply_ui_scale", ui_scale)
 	else:

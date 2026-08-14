@@ -22,7 +22,7 @@ func _ready() -> void:
 	_apply_responsive_layout()
 	language_option.item_selected.connect(_on_language_selected)
 	resolution_option.item_selected.connect(_on_resolution_selected)
-	back_button.pressed.connect(func(): get_tree().change_scene_to_file("res://MainMenu.tscn"))
+	back_button.pressed.connect(func(): UIMotion.change_scene("res://MainMenu.tscn"))
 	Locale.language_changed.connect(_apply_texts)
 	get_viewport().size_changed.connect(_apply_responsive_layout)
 
@@ -61,6 +61,9 @@ func _apply_theme() -> void:
 	UITheme.apply_button(language_option, "secondary")
 	UITheme.apply_button(resolution_option, "secondary")
 	UITheme.apply_button(back_button, "primary")
+	# Entrance motion: breathing title + staggered controls.
+	UITheme.title_breathe(title_label)
+	UITheme.animate_list_enter($CenterContainer/VBoxContainer, 0.06, 10.0)
 
 
 func _apply_responsive_layout() -> void:

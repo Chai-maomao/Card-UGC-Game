@@ -160,6 +160,7 @@ mouse_filter = 2
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
+clip_contents = false
 vertical_scroll_mode = 0
 
 [node name="HandContainer" type="HBoxContainer" parent="CanvasLayer/MainBackground/MainLayout/HandArea/HandScroll" unique_id=454726733]

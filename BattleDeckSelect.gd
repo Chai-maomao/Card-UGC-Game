@@ -32,6 +32,9 @@ func _apply_theme() -> void:
 	UITheme.apply_button($Panel/VBoxContainer/TopBar/ConfirmButton, "primary")
 	UITheme.apply_button($Panel/VBoxContainer/TopBar/BackButton, "secondary")
 	UITheme.apply_button(deck_select, "secondary")
+	# Entrance motion: breathing title + staggered top bar.
+	UITheme.title_breathe(title_label)
+	UITheme.animate_list_enter(top_bar, 0.05, 8.0)
 
 
 func _ui_scale() -> float:
@@ -82,6 +85,8 @@ func _refresh_cards() -> void:
 	card_grid.columns = 4
 	for card in PlayerData.get_cards_for_deck(selected_deck_id):
 		_add_card_box(card)
+	# Staggered fade for the freshly built grid (alpha only — grid re-sorts).
+	UITheme.animate_list_enter(card_grid, 0.02, 0.0)
 
 
 func _add_card_box(card_data: CardData) -> void:
@@ -143,7 +148,7 @@ func _start_battle_with_cards(cards: Array) -> void:
 			PlayerData.opponent_battle_deck.clear()
 			for card in CardDatabase.starter_library():
 				PlayerData.opponent_battle_deck.append(card.duplicate_card())
-			get_tree().change_scene_to_file("res://Main.tscn")
+			UIMotion.change_scene("res://Main.tscn")
 		"hotseat_p1":
 			PlayerData.pending_hotseat_p1_deck = cards
 			PlayerData.battle_select_mode = "hotseat_p2"
@@ -153,17 +158,17 @@ func _start_battle_with_cards(cards: Array) -> void:
 			PlayerData.battle_deck = PlayerData.pending_hotseat_p1_deck.duplicate(true)
 			PlayerData.opponent_battle_deck = cards
 			PlayerData.pending_hotseat_p1_deck.clear()
-			get_tree().change_scene_to_file("res://Main.tscn")
+			UIMotion.change_scene("res://Main.tscn")
 		"online":
 			PlayerData.battle_deck = cards
-			get_tree().change_scene_to_file(PlayerData.battle_select_next_scene)
+			UIMotion.change_scene(PlayerData.battle_select_next_scene)
 
 
 func _on_back_pressed() -> void:
 	if PlayerData.battle_select_mode == "online":
-		get_tree().change_scene_to_file("res://MultiplayerMenu.tscn")
+		UIMotion.change_scene("res://MultiplayerMenu.tscn")
 	else:
-		get_tree().change_scene_to_file("res://MainMenu.tscn")
+		UIMotion.change_scene("res://MainMenu.tscn")
 
 
 func _show_battle_config_popup(cards: Array) -> void:

@@ -51,13 +51,15 @@ var show_enemy_status: bool = false
 var practice_ai_running: bool = false
 var battle_finished: bool = false
 var _turn_ending: bool = false  # 防止短时间内重复点击结束按钮
-var feedback_targets: Dictionary = {}
 var _pending_feedback_events: Array = []
 var _action_broadcast: Dictionary = {}
 var _action_hp_events: Array = []
 var _action_damage_events: Array = []
 var _action_parasite_events: Array = []
 var _action_failed_events: Array = []
+var _end_turn_pulse: Tween = null
+var _mana_pop_tween: Tween = null
+var _mana_last_text: String = ""
 const BASE_VIEWPORT_SIZE := Vector2(1152, 648)
 const BASE_CARD_SIZE := Vector2(120, 160)
 const BASE_SLOT_SIZE := BASE_CARD_SIZE
@@ -93,7 +95,8 @@ func _apply_theme() -> void:
 	UITheme.apply_panel(splash_panel, "gold")
 	UITheme.apply_label(mana_label)
 	UITheme.apply_button(status_toggle_button, "secondary")
-	UITheme.apply_button(end_turn_button, "primary")
+	# End-turn gets its own attention pulse, so skip the generic hover hook.
+	UITheme.apply_button(end_turn_button, "primary", false)
 	for btn in [draw_pile_btn, discard_pile_btn, debug_state_btn, help_btn]:
 		UITheme.apply_button(btn, "secondary")
 	var discard_label := $CanvasLayer/DiscardZone/DiscardLabel
@@ -452,6 +455,8 @@ func _on_game_draw_cards(amount: int):
 		_active_hand_container().add_child(card_ui)
 		card_ui.set_card(card_data)
 		_scale_control(card_ui, BASE_CARD_SIZE)
+		card_ui.is_hand_card = true
+		_apply_hand_castability(card_ui, card_data)
 		_play_hand_card_enter_feedback(card_ui)
 		# Hand cards drawn mid-game also need skill-signal connections.
 		var hand: Array = _my_hand()
@@ -502,6 +507,8 @@ func _show_toast(key: String, args := []) -> void:
 	if toast_label == null:
 		_build_toast()
 	toast_label.text = Locale.t(key, args)
+	if key == "tip.insufficient_mana":
+		UITheme.reject_shake(toast_label)
 	if toast_tween and toast_tween.is_valid():
 		toast_tween.kill()
 	toast_label.modulate.a = 0.0
@@ -593,81 +600,17 @@ func _on_skill_roll_failed(source: CardData, skill_name: String, misfortune: int
 
 
 func _spawn_combat_text(pos: Vector2, delta: int, strong: bool = false) -> void:
-	if delta == 0:
-		return
-	var is_damage: bool = delta < 0
-	var lbl := Label.new()
-	lbl.text = ("-%d" % -delta) if is_damage else ("+%d" % delta)
-	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lbl.add_theme_color_override("font_color", Color(1.0, 0.22, 0.12) if is_damage else Color(0.35, 1.0, 0.58))
-	lbl.add_theme_color_override("font_outline_color", Color(0.08, 0.02, 0.01, 0.95) if is_damage else Color(0.02, 0.08, 0.03, 0.95))
-	lbl.add_theme_constant_override("outline_size", 5 if strong else 4)
-	lbl.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.85))
-	lbl.add_theme_constant_override("shadow_offset_x", 2)
-	lbl.add_theme_constant_override("shadow_offset_y", 3)
-	lbl.add_theme_font_size_override("font_size", 42 if strong else 34)
-	lbl.pivot_offset = Vector2(34, 20)
-	var side_offset: Vector2 = Vector2(16, -30) if is_damage else Vector2(-16, -26)
-	var random_offset := Vector2(randf_range(-20.0, 20.0), randf_range(-10.0, 12.0))
-	lbl.position = pos + side_offset + random_offset
-	lbl.scale = Vector2(0.55, 0.55) if is_damage else Vector2(0.68, 0.68)
-	lbl.modulate.a = 0.0
-	$CanvasLayer.add_child(lbl)
-	$CanvasLayer.move_child(lbl, $CanvasLayer.get_child_count() - 1)
-
-	var rise: float = (56.0 if is_damage else 68.0) + randf_range(-6.0, 8.0)
-	var drift: float = (12.0 if is_damage else -10.0) + randf_range(-18.0, 18.0)
-	var peak_scale: Vector2 = Vector2(1.55, 1.55) if strong and is_damage else (Vector2(1.34, 1.34) if is_damage else Vector2(1.18, 1.18))
-	var settle_scale: Vector2 = Vector2(1.14, 1.14) if is_damage else Vector2(1.0, 1.0)
-	var twn := create_tween()
-	twn.set_parallel(true)
-	twn.tween_property(lbl, "modulate:a", 1.0, 0.07)
-	twn.tween_property(lbl, "scale", peak_scale, 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	twn.tween_property(lbl, "position", lbl.position + Vector2(drift, -rise), 0.82).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	twn.tween_property(lbl, "scale", settle_scale, 0.18).set_delay(0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	twn.tween_property(lbl, "modulate:a", 0.0, 0.28).set_delay(0.50)
-	twn.chain().tween_callback(lbl.queue_free)
+	BattleFx.combat_text($CanvasLayer, pos, delta, strong, _ui_scale())
+	if strong:
+		BattleFx.shake_layer($CanvasLayer, 2.8)
 
 
-func _spawn_impact_ring(center: Vector2, damage: bool = true) -> void:
-	var ring := ColorRect.new()
-	ring.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ring.color = Color(1.0, 0.22, 0.12, 0.30) if damage else Color(0.35, 1.0, 0.58, 0.24)
-	ring.size = Vector2(38, 38)
-	ring.pivot_offset = ring.size / 2
-	ring.position = center - ring.size / 2
-	$CanvasLayer.add_child(ring)
-	$CanvasLayer.move_child(ring, $CanvasLayer.get_child_count() - 1)
-	var twn := create_tween()
-	twn.set_parallel(true)
-	twn.tween_property(ring, "scale", Vector2(2.0, 2.0), 0.22).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	twn.tween_property(ring, "modulate:a", 0.0, 0.22)
-	twn.chain().tween_callback(ring.queue_free)
+func _spawn_impact_ring(center: Vector2, damage: bool = true, tint: Color = Color()) -> void:
+	BattleFx.impact_ring($CanvasLayer, center, damage, tint, _ui_scale())
 
 
 func _spawn_heal_particles(center: Vector2, amount: int) -> void:
-	var count: int = clampi(4 + amount, 5, 10)
-	for i in range(count):
-		var dot := ColorRect.new()
-		dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		dot.color = Color(0.38, 1.0, 0.58, 0.78)
-		var size: float = 5.0 + float(i % 3)
-		dot.size = Vector2(size, size)
-		dot.pivot_offset = dot.size / 2
-		var start_angle: float = TAU * float(i) / float(count)
-		var start_radius: float = 14.0 + float(i % 2) * 6.0
-		var start: Vector2 = center + Vector2(cos(start_angle), sin(start_angle)) * start_radius
-		dot.position = start
-		$CanvasLayer.add_child(dot)
-		$CanvasLayer.move_child(dot, $CanvasLayer.get_child_count() - 1)
-		var end: Vector2 = start + Vector2(cos(start_angle) * 10.0, -34.0 - float(i % 4) * 6.0)
-		var twn := create_tween()
-		twn.set_parallel(true)
-		twn.tween_property(dot, "position", end, 0.55 + float(i % 3) * 0.05).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-		twn.tween_property(dot, "scale", Vector2(0.25, 0.25), 0.55)
-		twn.tween_property(dot, "modulate:a", 0.0, 0.36).set_delay(0.18)
-		twn.chain().tween_callback(dot.queue_free)
+	BattleFx.heal_particles($CanvasLayer, center, amount, _ui_scale())
 
 
 func _show_combat_feedback_for(player: int, slot: int, delta: int) -> void:
@@ -706,6 +649,14 @@ func _replay_feedback_event(event: Dictionary) -> void:
 		_play_attack_feedback(player, slot, int(event.get("target_slot", -1)))
 	elif kind == "skill":
 		_play_skill_cast_feedback(player, slot)
+	elif kind == "summon":
+		_play_summon_feedback(_slot_ui_for_player(player, slot))
+	elif kind == "cast":
+		_play_skill_cast_feedback(player, slot)
+	elif kind == "move":
+		_play_move_feedback(player, slot, int(event.get("target_slot", -1)), true)
+	elif kind == "turn":
+		_show_turn_banner()
 	elif kind == "discard":
 		_play_discard_feedback()
 
@@ -728,48 +679,111 @@ func _card_feedback_target(slot_ui: Control) -> CanvasItem:
 	return slot_ui
 
 
+# Brief screen shake for impactful moments (attack hits).
+func _shake_screen(strength: float = 2.5) -> void:
+	BattleFx.shake_layer($CanvasLayer, strength)
+
+
+# Three-beat attack animation: attacker lunge toward the target -> impact
+# (ring + light screen shake) -> recoil return and fade. Main resolves where
+# the attacker and target are; BattleFx owns the animation itself.
 func _play_attack_feedback(player: int, source_slot: int, target_slot: int = -1) -> void:
 	var slot_ui := _slot_ui_for_player(player, source_slot)
-	var target := _card_feedback_target(slot_ui)
-	if target == null or not is_instance_valid(target):
+	if slot_ui == null:
 		return
-	var base_position: Vector2 = target.position if target is Control else Vector2.ZERO
-	var base_scale: Vector2 = target.scale if target is Control else Vector2.ONE
-	var base_modulate: Color = target.modulate
-	var direction := Vector2(0, -10)
+	var card_ui = slot_ui.get("current_card_ui")
+	if card_ui == null or not is_instance_valid(card_ui):
+		return
+	var from_center: Vector2 = slot_ui.global_position + slot_ui.size / 2
+	var to_center: Vector2 = from_center + Vector2(0, -14) * _ui_scale()
 	if target_slot >= 0:
 		var target_ui := _slot_ui_for_player(_opponent_of_player(player), target_slot)
 		if target_ui != null:
-			var diff: Vector2 = target_ui.global_position - slot_ui.global_position
-			if diff.length() > 0.0:
-				direction = diff.normalized() * 14.0
-	target.modulate = Color(1.25, 1.16, 0.72, 1.0)
-	var twn := create_tween()
-	twn.set_parallel(false)
-	if target is Control:
-		twn.tween_property(target, "position", base_position + direction, 0.08).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-		twn.parallel().tween_property(target, "scale", base_scale * 1.06, 0.08)
-		twn.tween_property(target, "position", base_position, 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		twn.parallel().tween_property(target, "scale", base_scale, 0.12)
-	twn.parallel().tween_property(target, "modulate", base_modulate, 0.16)
+			to_center = from_center.lerp(target_ui.global_position + target_ui.size / 2, 0.68)
+	BattleFx.attack_lunge($CanvasLayer, card_ui, to_center, _ui_scale())
+
+
+# Pop-in landing effect for a freshly summoned card in a slot.
+func _play_summon_feedback(slot_ui: Control) -> void:
+	if slot_ui == null or not is_instance_valid(slot_ui):
+		return
+	var card_ui = slot_ui.get("current_card_ui")
+	if card_ui == null or not is_instance_valid(card_ui):
+		return
+	var center: Vector2 = slot_ui.global_position + slot_ui.size / 2
+	BattleFx.summon_landing($CanvasLayer, card_ui, center, _ui_scale())
+
+
+# Swap transition for a move: both involved cards fly along a small arc to each
+# other's slot, then fade. Call before update_entire_screen so the ghost still
+# shows the pre-swap arrangement. When `reverse` is set (non-authority client
+# replaying after the state already swapped), each ghost starts from the slot
+# the card originally occupied so the animation direction stays consistent.
+func _play_move_feedback(player: int, source_slot: int, target_slot: int, reverse: bool = false) -> void:
+	if source_slot < 0 or target_slot < 0 or source_slot == target_slot:
+		return
+	var slots_ui: Array = _my_slots_ui() if player == _view_player() else _their_slots_ui()
+	if source_slot >= slots_ui.size() or target_slot >= slots_ui.size():
+		return
+	var src_ui: Control = slots_ui[source_slot]
+	var dst_ui: Control = slots_ui[target_slot]
+	var src_center: Vector2 = src_ui.global_position + src_ui.size / 2
+	var dst_center: Vector2 = dst_ui.global_position + dst_ui.size / 2
+	var to_dst: Vector2 = dst_center - src_center
+	var to_src: Vector2 = src_center - dst_center
+	var entries: Array = []
+	if reverse:
+		# Post-swap: the moved card now sits in target_slot, the displaced card
+		# in source_slot — start each ghost from the slot it left.
+		_append_move_entry(entries, dst_ui, to_dst, src_center)
+		_append_move_entry(entries, src_ui, to_src, dst_center)
+	else:
+		# Pre-swap: the moved card sits in source_slot, the displaced card in target_slot.
+		_append_move_entry(entries, src_ui, to_dst)
+		_append_move_entry(entries, dst_ui, to_src)
+	BattleFx.move_swap($CanvasLayer, entries, _ui_scale())
+
+
+func _append_move_entry(entries: Array, slot_ui: Control, delta: Vector2, start_pos: Vector2 = Vector2.INF) -> void:
+	var card_ui = slot_ui.get("current_card_ui")
+	if card_ui == null or not is_instance_valid(card_ui):
+		return
+	entries.append([card_ui, delta, start_pos])
+
+
+# Lightweight turn-start banner (fade in -> hold -> fade out), replaces the
+# heavy full-screen splash for turn transitions.
+func _show_turn_banner() -> void:
+	if battle_finished:
+		return
+	var text := Locale.t("battle.your_turn") if game.current_player == _view_player() else Locale.t("battle.opponent_turn")
+	BattleFx.turn_banner($CanvasLayer, text, _ui_scale(), get_viewport_rect().size)
 
 
 func _play_skill_cast_feedback(player: int, slot: int) -> void:
+	# Hand-cast spells have no field slot; render an arcane burst + projectile
+	# flying from the hand toward the battlefield center instead.
+	if slot < 0:
+		_play_spell_cast_from_hand_feedback()
+		return
 	var slot_ui := _slot_ui_for_player(player, slot)
 	var target := _card_feedback_target(slot_ui)
 	if target == null or not is_instance_valid(target):
 		return
-	var base_scale: Vector2 = target.scale if target is Control else Vector2.ONE
-	var base_modulate: Color = target.modulate
-	target.modulate = Color(0.72, 0.9, 1.35, 1.0)
 	var center: Vector2 = slot_ui.global_position + slot_ui.size / 2
-	_spawn_impact_ring(center, false)
-	var twn := create_tween()
-	twn.set_parallel(true)
-	if target is Control:
-		twn.tween_property(target, "scale", base_scale * 1.08, 0.12).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-		twn.tween_property(target, "scale", base_scale, 0.18).set_delay(0.12).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	twn.tween_property(target, "modulate", base_modulate, 0.26)
+	BattleFx.skill_cast_pulse($CanvasLayer, target, center, _ui_scale())
+
+
+# Arcane burst at the hand + a projectile flying to the battlefield center for
+# spells cast directly from hand (slot == -1).
+func _play_spell_cast_from_hand_feedback() -> void:
+	if hand_container == null:
+		return
+	var start: Vector2 = hand_container.global_position + Vector2(hand_container.size.x * 0.5, hand_container.size.y * 0.35)
+	_spawn_impact_ring(start, false, Color(0.45, 0.7, 1.0, 0.5))
+	var field_center: Vector2 = (player_side_ui.global_position + enemy_side_ui.global_position) / 2
+	field_center.y = (player_side_ui.global_position.y + enemy_side_ui.global_position.y) / 2 + player_side_ui.size.y / 2
+	BattleFx.spell_cast_projectile($CanvasLayer, start, field_center, _ui_scale())
 
 
 func _opponent_of_player(player: int) -> int:
@@ -785,56 +799,7 @@ func _play_card_feedback(slot_ui: Control, delta: int) -> void:
 		target = card_ui
 	if not is_instance_valid(target):
 		return
-	var key: int = target.get_instance_id()
-	if not feedback_targets.has(key):
-		feedback_targets[key] = {
-			"position": target.position if target is Control else Vector2.ZERO,
-			"scale": target.scale if target is Control else Vector2.ONE,
-			"modulate": target.modulate,
-			"tween": null,
-		}
-	var data: Dictionary = feedback_targets[key]
-	var old_tween: Tween = data.get("tween")
-	if old_tween != null and old_tween.is_valid():
-		old_tween.kill()
-	if target is Control:
-		target.position = data["position"]
-		target.scale = data["scale"]
-	target.modulate = data["modulate"]
-	var base_modulate: Color = data["modulate"]
-	var base_position: Vector2 = data["position"]
-	var base_scale: Vector2 = data["scale"]
-	var flash := Color(1.0, 0.44, 0.34) if delta < 0 else Color(0.54, 1.0, 0.64)
-	var twn := create_tween()
-	data["tween"] = twn
-	feedback_targets[key] = data
-	twn.set_parallel(false)
-	twn.tween_property(target, "modulate", flash, 0.04)
-	if target is Control:
-		if delta < 0:
-			twn.parallel().tween_property(target, "scale", Vector2(base_scale.x * 1.07, base_scale.y * 0.92), 0.04)
-			twn.parallel().tween_property(target, "position", base_position + Vector2(8, -1), 0.035)
-			twn.tween_property(target, "position", base_position + Vector2(-7, 1), 0.04)
-			twn.parallel().tween_property(target, "scale", Vector2(base_scale.x * 0.96, base_scale.y * 1.05), 0.04)
-			twn.tween_property(target, "position", base_position + Vector2(5, 0), 0.035)
-			twn.tween_property(target, "position", base_position + Vector2(-3, 0), 0.035)
-			twn.tween_property(target, "position", base_position, 0.08).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-			twn.parallel().tween_property(target, "scale", base_scale, 0.10).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		else:
-			twn.parallel().tween_property(target, "scale", base_scale * 1.07, 0.14).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-			twn.tween_property(target, "scale", base_scale, 0.18).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	twn.tween_property(target, "modulate", base_modulate, 0.18)
-	twn.finished.connect(_finish_card_feedback.bind(key, base_position, base_scale, base_modulate))
-
-
-func _finish_card_feedback(key: int, base_position: Vector2, base_scale: Vector2, base_modulate: Color) -> void:
-	var target := instance_from_id(key) as CanvasItem
-	if target != null and is_instance_valid(target):
-		if target is Control:
-			target.position = base_position
-			target.scale = base_scale
-		target.modulate = base_modulate
-	feedback_targets.erase(key)
+	BattleFx.card_hit_flash(target, delta)
 
 
 # Locates a card's absolute player (1/2) and slot index, or slot -1 if not found.
@@ -1139,13 +1104,16 @@ func _show_splash(card: CardData) -> void:
 		splash_art.visible = false
 		splash_text.visible = true
 		splash_text.text = card.card_name
+	# Lightweight reveal: pop in place on the right edge (no full-screen slide).
+	splash_panel.position.x = 0.0
+	splash_panel.pivot_offset = splash_panel.size / 2
+	splash_panel.scale = Vector2(0.88, 0.88)
 	splash_panel.modulate.a = 1.0
-	var off_x := -get_viewport_rect().size.x
-	splash_panel.position.x = off_x
 	splash_tween = create_tween()
-	splash_tween.tween_property(splash_panel, "position:x", 0.0, 0.5).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	splash_tween.tween_interval(0.5)
-	splash_tween.tween_property(splash_panel, "position:x", off_x, 0.5).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	splash_tween.set_parallel(true)
+	splash_tween.tween_property(splash_panel, "scale", Vector2.ONE, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	splash_tween.tween_property(splash_panel, "modulate:a", 0.0, 0.28).set_delay(0.75)
+	splash_tween.chain().tween_callback(func(): splash_panel.scale = Vector2(0.88, 0.88))
 
 # ============================================
 # Summon
@@ -1181,6 +1149,7 @@ func _on_card_drag_summoned(card_data, origin_ui, slot_index: int):
 		var displaced: CardData = field.slots[slot_index]
 		field.slots[slot_index] = card_data
 		field.slots[source_slot] = displaced
+		_play_move_feedback(_view_player(), source_slot, slot_index)
 		update_entire_screen()
 		return
 
@@ -1211,6 +1180,7 @@ func _on_card_drag_summoned(card_data, origin_ui, slot_index: int):
 	_apply_deaths()
 	_check_charm_overflow()
 	update_entire_screen()
+	_play_summon_feedback(_slot_ui_for_player(_view_player(), slot_index))
 
 # ============================================
 # Spell cast (from hand)
@@ -1763,9 +1733,7 @@ func _on_opponent_slot_clicked(index: int):
 	if victim != null and not victim.is_alive():
 		_action_broadcast["kill_mana"] = true
 	_finish_action_broadcast()
-	var card: CardData = _my_field().slots[attacker_slot]
 	_play_attack_feedback(game.current_player, attacker_slot, index)
-	_show_splash(card)
 	_apply_deaths()
 	_check_charm_overflow()
 	_refresh_hand_ui()
@@ -1822,6 +1790,7 @@ func _run_local_end_turn() -> void:
 		return
 	await get_tree().create_timer(0.5).timeout
 	game.start_new_turn()
+	_show_turn_banner()
 	if game.current_player == _view_player() and _my_hand().size() >= SkillEngine.MAX_HAND_SIZE:
 		_show_toast("tip.hand_full", [SkillEngine.MAX_HAND_SIZE])
 	_refresh_hand_ui()
@@ -1979,7 +1948,6 @@ func _practice_ai_attack_with_ready_cards() -> void:
 			continue
 		game.execute_attack(slot, target_slot)
 		_play_attack_feedback(2, slot, target_slot)
-		_show_splash(card)
 		_apply_deaths()
 		if game.check_game_over() != "":
 			break
@@ -2068,22 +2036,8 @@ func _play_death_feedback(slot_ui: Control) -> void:
 	if card_ui == null or not is_instance_valid(card_ui):
 		slot_ui.set_card(null)
 		return
-	var ghost: Control = card_ui.duplicate()
-	ghost.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ghost.global_position = card_ui.global_position
-	ghost.size = card_ui.size
-	ghost.scale = card_ui.scale
-	$CanvasLayer.add_child(ghost)
-	$CanvasLayer.move_child(ghost, $CanvasLayer.get_child_count() - 1)
+	BattleFx.death_fade($CanvasLayer, card_ui, _ui_scale())
 	slot_ui.set_card(null)
-	var base_position: Vector2 = ghost.position
-	var base_scale: Vector2 = ghost.scale
-	var twn := create_tween()
-	twn.set_parallel(true)
-	twn.tween_property(ghost, "modulate:a", 0.0, 0.24)
-	twn.tween_property(ghost, "position", base_position + Vector2(0, 18), 0.24).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	twn.tween_property(ghost, "scale", base_scale * 0.82, 0.24).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
-	twn.chain().tween_callback(ghost.queue_free)
 
 
 func _refresh_hand_ui():
@@ -2096,8 +2050,23 @@ func _refresh_hand_ui():
 		hand_container.add_child(card_ui)
 		card_ui.set_card(card_data)
 		_scale_control(card_ui, BASE_CARD_SIZE)
+		card_ui.is_hand_card = true
+		_apply_hand_castability(card_ui, card_data)
 		_connect_hand_card_signals(card_ui, i)
+		_play_hand_card_enter_feedback(card_ui)
 	_update_pile_labels()
+
+
+# Hand cards show a green cost when affordable now, red when mana is
+# insufficient. Charmed cards keep their own green "免费" display. The mana
+# basis is the hand owner's field (view player), not the acting player's.
+func _apply_hand_castability(card_ui, card_data: CardData) -> void:
+	if card_data == null or card_data.is_charmed():
+		return
+	var affordable: bool = _field_for_player(_view_player()).get_total_mana() >= card_data.cost
+	var cost_label = card_ui.get("cost_label")
+	if cost_label:
+		cost_label.add_theme_color_override("font_color", Color(0.4, 1.0, 0.5) if affordable else Color(1.0, 0.35, 0.3))
 
 
 func _connect_hand_card_signals(card_ui, hand_index: int) -> void:
@@ -2105,18 +2074,7 @@ func _connect_hand_card_signals(card_ui, hand_index: int) -> void:
 
 
 func _play_hand_card_enter_feedback(card_ui: Control) -> void:
-	if card_ui == null or not is_instance_valid(card_ui):
-		return
-	var base_position: Vector2 = card_ui.position
-	var base_scale: Vector2 = card_ui.scale
-	card_ui.modulate.a = 0.0
-	card_ui.position = base_position + Vector2(0, 18)
-	card_ui.scale = base_scale * 0.92
-	var twn := create_tween()
-	twn.set_parallel(true)
-	twn.tween_property(card_ui, "modulate:a", 1.0, 0.18)
-	twn.tween_property(card_ui, "position", base_position, 0.22).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	twn.tween_property(card_ui, "scale", base_scale, 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	BattleFx.hand_card_enter($CanvasLayer, card_ui, _ui_scale())
 
 
 func _play_draw_fly_feedback(player: int, count: int) -> void:
@@ -2148,38 +2106,7 @@ func _draw_fly_target_for_player(player: int) -> Vector2:
 
 
 func _spawn_draw_fly_card(start: Vector2, target: Vector2, index: int) -> void:
-	var card_back := Panel.new()
-	card_back.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	card_back.size = Vector2(52, 72) * _ui_scale()
-	card_back.pivot_offset = card_back.size / 2
-	card_back.position = start - card_back.size / 2 + Vector2(index * 7, -index * 5)
-	card_back.modulate.a = 0.0
-	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.13, 0.19, 0.34, 0.96)
-	style.border_color = Color(0.95, 0.78, 0.32, 0.95)
-	style.set_border_width_all(max(1, int(2 * _ui_scale())))
-	style.set_corner_radius_all(max(5, int(7 * _ui_scale())))
-	card_back.add_theme_stylebox_override("panel", style)
-	var shine := ColorRect.new()
-	shine.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	shine.color = Color(1.0, 1.0, 1.0, 0.08)
-	shine.anchor_right = 1.0
-	shine.anchor_bottom = 0.28
-	card_back.add_child(shine)
-	$CanvasLayer.add_child(card_back)
-	$CanvasLayer.move_child(card_back, $CanvasLayer.get_child_count() - 1)
-	var lift: float = -78.0 * _ui_scale() - index * 8.0
-	var mid: Vector2 = (start + target) * 0.5 + Vector2(0, lift)
-	var duration: float = 0.58 + index * 0.07
-	var twn := create_tween()
-	twn.set_parallel(false)
-	twn.tween_property(card_back, "modulate:a", 1.0, 0.08)
-	twn.parallel().tween_property(card_back, "scale", Vector2(1.08, 1.08), 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	twn.tween_property(card_back, "position", mid - card_back.size / 2, duration * 0.45).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	twn.tween_property(card_back, "position", target - card_back.size / 2 + Vector2(index * 5, 0), duration * 0.55).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	twn.parallel().tween_property(card_back, "scale", Vector2(0.82, 0.82), duration * 0.55)
-	twn.parallel().tween_property(card_back, "modulate:a", 0.0, 0.16).set_delay(duration * 0.35)
-	twn.chain().tween_callback(card_back.queue_free)
+	BattleFx.spawn_draw_fly_card($CanvasLayer, start, target, index, _ui_scale())
 
 
 func _play_discard_feedback() -> void:
@@ -2213,6 +2140,11 @@ func _show_result(result: String):
 	practice_ai_running = false
 	cancel_attack()
 	NetworkManager.clear_room_session()
+	if _end_turn_pulse and _end_turn_pulse.is_valid():
+		_end_turn_pulse.kill()
+		_end_turn_pulse = null
+	if end_turn_button:
+		end_turn_button.scale = Vector2.ONE
 	if mana_label:
 		mana_label.text = "[ %s ]" % _result_title(result)
 	if end_turn_button:
@@ -2569,7 +2501,7 @@ func _show_disconnect_result_page() -> void:
 
 func _on_disconnect_back_multiplayer_pressed() -> void:
 	NetworkManager.close_connection()
-	get_tree().change_scene_to_file("res://MultiplayerMenu.tscn")
+	UIMotion.change_scene("res://MultiplayerMenu.tscn")
 
 
 func _result_winner_player(result: String) -> int:
@@ -2639,6 +2571,9 @@ func _show_battle_result_page(result: String) -> void:
 	panel.custom_minimum_size = Vector2(520, 360) * _ui_scale()
 	UITheme.apply_panel(panel, "gold")
 	center.add_child(panel)
+	panel.resized.connect(func():
+		panel.pivot_offset = panel.size / 2
+	)
 
 	var margin := MarginContainer.new()
 	margin.add_theme_constant_override("margin_left", 32)
@@ -2707,19 +2642,25 @@ func _show_battle_result_page(result: String) -> void:
 	twn.set_parallel(true)
 	twn.tween_property(layer, "modulate:a", 1.0, 0.20)
 	twn.tween_property(panel, "scale", Vector2.ONE, 0.24).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	# Victory celebration: confetti rain + warm flash; defeat gets a somber pulse.
+	if _did_local_player_win(result):
+		BattleFx.victory_confetti($CanvasLayer, _ui_scale(), get_viewport_rect().size)
+		BattleFx.screen_flash($CanvasLayer, Color(1.0, 0.86, 0.4), 0.22, 0.5)
+	else:
+		BattleFx.screen_flash($CanvasLayer, Color(0.4, 0.22, 0.55), 0.16, 0.5)
 
 
 func _on_result_play_again_pressed() -> void:
 	if NetworkManager.is_online:
 		NetworkManager.close_connection()
-		get_tree().change_scene_to_file("res://MainMenu.tscn")
+		UIMotion.change_scene("res://MainMenu.tscn")
 		return
 	get_tree().reload_current_scene()
 
 
 func _on_result_back_menu_pressed() -> void:
 	NetworkManager.close_connection()
-	get_tree().change_scene_to_file("res://MainMenu.tscn")
+	UIMotion.change_scene("res://MainMenu.tscn")
 
 
 # ============================================
@@ -2770,21 +2711,69 @@ func update_entire_screen():
 			e_slots[i].current_card_ui.set_card(their_field.slots[i])
 			_scale_control(e_slots[i].current_card_ui, BASE_CARD_SIZE)
 	_toggle_turn_cover()
+	_update_action_glows()
+	_update_ui_state_motion()
+	_refresh_hand_castability()
+
+
+# Re-applies green/red cost tinting to every hand card so the affordance stays
+# correct after mana changes (summons, casts, turn advances, ...).
+func _refresh_hand_castability() -> void:
+	if hand_container == null or game == null:
+		return
+	for card_ui in hand_container.get_children():
+		var card_data = card_ui.get("current_card_data")
+		if card_data != null:
+			_apply_hand_castability(card_ui, card_data)
+
+
+# Attention pulse on the end-turn button while the player can act, and a soft
+# pop on the status line whenever its text changes (mana spent, turn advanced).
+func _update_ui_state_motion() -> void:
+	if end_turn_button != null:
+		var want_pulse: bool = not battle_finished and end_turn_button.visible and not end_turn_button.disabled
+		if want_pulse:
+			if _end_turn_pulse == null or not _end_turn_pulse.is_valid():
+				end_turn_button.pivot_offset = end_turn_button.size / 2
+				_end_turn_pulse = create_tween().set_loops()
+				_end_turn_pulse.tween_property(end_turn_button, "scale", Vector2(1.035, 1.035), 0.7).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+				_end_turn_pulse.tween_property(end_turn_button, "scale", Vector2.ONE, 0.7).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		else:
+			if _end_turn_pulse and _end_turn_pulse.is_valid():
+				_end_turn_pulse.kill()
+				_end_turn_pulse = null
+			end_turn_button.scale = Vector2.ONE
+	if mana_label != null and mana_label.text != "" and mana_label.text != _mana_last_text:
+		_mana_last_text = mana_label.text
+		if _mana_pop_tween and _mana_pop_tween.is_valid():
+			_mana_pop_tween.kill()
+		mana_label.pivot_offset = mana_label.size / 2
+		_mana_pop_tween = create_tween()
+		_mana_pop_tween.tween_property(mana_label, "scale", Vector2(1.06, 1.06), 0.09).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		_mana_pop_tween.tween_property(mana_label, "scale", Vector2.ONE, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
 func _process(_delta):
 	if is_my_turn():
 		var source: int = -1
+		var from_hand: bool = false
 		if current_attacker_idx != -1:
 			source = current_attacker_idx
 		elif summon_targeting:
 			source = summon_source_slot
 		elif activate_targeting:
 			source = activate_source_slot
+		elif cast_targeting or parasite_targeting:
+			# Spells / parasites cast from hand: the arrow originates at the hand.
+			from_hand = true
 
-		if source != -1:
-			var slot_ui = _my_slots_ui()[source]
-			var start_pos = slot_ui.global_position + slot_ui.size / 2
+		if source != -1 or from_hand:
+			var start_pos: Vector2
+			if from_hand:
+				start_pos = hand_container.global_position + Vector2(hand_container.size.x * 0.5, hand_container.size.y * 0.35)
+			else:
+				var slot_ui = _my_slots_ui()[source]
+				start_pos = slot_ui.global_position + slot_ui.size / 2
 			var end_pos = get_global_mouse_position()
 			attack_arrow.points = [start_pos, end_pos]
 			attack_arrow.visible = true
@@ -2796,7 +2785,8 @@ func _process(_delta):
 				if rect.has_point(get_global_mouse_position()):
 					hovered = i
 					break
-			if hovered != last_hovered_target:
+			# Hand-cast aiming is private; only field-source arrows sync to the opponent.
+			if not from_hand and hovered != last_hovered_target:
 				last_hovered_target = hovered
 				if NetworkManager.is_online:
 					NetworkManager.rpc_targeting_arrow.rpc(source, hovered, game.current_player)
@@ -2815,6 +2805,74 @@ func _process(_delta):
 			attack_arrow.visible = true
 		else:
 			attack_arrow.visible = false
+	_update_slot_highlights()
+
+
+# Gold-highlights the hovered valid target slot while aiming (attack/skill/spell
+# targeting) or dragging a card onto an empty slot. Recomputed every frame, so
+# highlights never go stale.
+func _update_slot_highlights() -> void:
+	var my_ui: Array = _my_slots_ui()
+	var their_ui: Array = _their_slots_ui()
+	var targets: Array = []  # [slots_ui, index]
+	var mouse := get_global_mouse_position()
+	if get_viewport().gui_is_dragging():
+		for slots_ui in [my_ui, their_ui]:
+			for i in range(slots_ui.size()):
+				var s: Control = slots_ui[i]
+				if Rect2(s.global_position, s.size).has_point(mouse) and s.get("current_card_data") == null:
+					targets.append([slots_ui, i])
+	elif current_attacker_idx != -1 or summon_targeting or activate_targeting or cast_targeting or parasite_targeting:
+		var sides: Array = []
+		if parasite_targeting:
+			sides = [my_ui, their_ui]
+		elif _targeting_skill_wants_ally():
+			sides = [my_ui]
+		else:
+			sides = [their_ui]
+		for slots_ui in sides:
+			var player: int = _view_player() if slots_ui == my_ui else _opponent_player()
+			for i in range(slots_ui.size()):
+				var s: Control = slots_ui[i]
+				if Rect2(s.global_position, s.size).has_point(mouse):
+					if _field_for_player(player).slots[i] != null:
+						targets.append([slots_ui, i])
+	for slots_ui in [my_ui, their_ui]:
+		for s in slots_ui:
+			s.set_highlighted(false)
+	for entry in targets:
+		entry[0][entry[1]].set_highlighted(true)
+
+
+# Pulsing gold border on friendly cards that can still act this turn.
+func _update_action_glows() -> void:
+	if battle_finished:
+		return
+	var my_ui: Array = _my_slots_ui()
+	var their_ui: Array = _their_slots_ui()
+	for i in range(my_ui.size()):
+		my_ui[i].set_action_glow(_card_can_act(_my_field().slots[i]))
+	for s in their_ui:
+		s.set_action_glow(false)
+
+
+func _card_can_act(card: CardData) -> bool:
+	if card == null or not card.is_alive():
+		return false
+	if not game.is_player_turn or not is_my_turn():
+		return false
+	if game.turn_number <= 1:
+		return false
+	if card.is_silenced() and not card.attack_ignores_silence:
+		return false
+	if card.has_acted:
+		return false
+	if card.effective_atk() > 0:
+		return true
+	for i in range(card.skills.size()):
+		if not card.skills_used.has(i):
+			return true
+	return false
 
 
 # ============================================
@@ -2925,8 +2983,7 @@ func _on_reconnect_transport_ready() -> void:
 
 func _on_reconnect_failed(_reason: String) -> void:
 	NetworkManager.clear_room_session()
-	get_tree().change_scene_to_file.call_deferred("res://MainMenu.tscn")
-
+	UIMotion.change_scene.call_deferred("res://MainMenu.tscn")
 
 func _request_resume_state() -> void:
 	if not NetworkManager.is_online or my_player not in [1, 2]:
@@ -3068,6 +3125,8 @@ func _host_apply_summon(hand_index: int, slot_index: int, player: int) -> void:
 	# nothing auto-fires here. The summoned_this_turn flag travels in the state.
 	_refresh_hand_ui()
 	update_entire_screen()
+	_play_summon_feedback(_slot_ui_for_player(player, slot_index))
+	_record_feedback_event("summon", player, slot_index)
 	_commit_authority_state("summon")
 
 
@@ -3117,7 +3176,6 @@ func _host_apply_attack(source_slot: int, target_slot: int, player: int) -> void
 	if not result.is_empty():
 		_play_attack_feedback(player, source_slot, target_slot)
 		_record_feedback_event("attack", player, source_slot, {"target_slot": target_slot})
-		_authority_splash(player, source_slot)
 	_apply_deaths()
 	_check_charm_overflow()
 	_refresh_hand_ui()
@@ -3241,7 +3299,9 @@ func _host_apply_move(source_slot: int, target_slot: int, player: int) -> void:
 	var displaced = field.slots[target_slot]
 	field.slots[target_slot] = field.slots[source_slot]
 	field.slots[source_slot] = displaced
+	_play_move_feedback(player, source_slot, target_slot)
 	update_entire_screen()
+	_record_feedback_event("move", player, source_slot, {"target_slot": target_slot})
 	_commit_authority_state("move")
 
 
@@ -3257,6 +3317,8 @@ func _host_apply_end_turn(player: int) -> void:
 		_commit_authority_state("game over")
 		return
 	game.start_new_turn()
+	_show_turn_banner()
+	_record_feedback_event("turn", game.current_player, -1)
 	_refresh_hand_ui()
 	end_turn_button.disabled = false
 	update_entire_screen()
@@ -3424,6 +3486,10 @@ func _toggle_turn_cover():
 			label.text = Locale.t("battle.reconnecting") if match_paused else Locale.t("battle.waiting")
 		turn_wait_hint.visible = show
 		$CanvasLayer.move_child(turn_wait_hint, $CanvasLayer.get_child_count() - 1)
+		if show:
+			var fade := create_tween()
+			turn_wait_hint.modulate.a = 0.0
+			fade.tween_property(turn_wait_hint, "modulate:a", 1.0, 0.25).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	if overlay:
 		overlay.visible = show
 
@@ -3493,6 +3559,7 @@ func _show_help_popup():
 	panel.anchor_top = 0.1
 	panel.anchor_bottom = 0.9
 	popup_layer.add_child(panel)
+	UITheme.animate_popup_enter(panel)
 
 	var margin := MarginContainer.new()
 	margin.anchor_right = 1.0
@@ -3587,6 +3654,7 @@ func _show_pile_viewer(cards: Array, title_text: String):
 	panel.anchor_top = 0.1
 	panel.anchor_bottom = 0.9
 	popup_layer.add_child(panel)
+	UITheme.animate_popup_enter(panel)
 
 	var vbox := VBoxContainer.new()
 	vbox.anchor_right = 1.0
@@ -3682,6 +3750,7 @@ func _show_charm_selection(charmed_cards: Array, max_picks: int):
 	panel.anchor_top = 0.15
 	panel.anchor_bottom = 0.85
 	popup_layer.add_child(panel)
+	UITheme.animate_popup_enter(panel)
 
 	var vbox := VBoxContainer.new()
 	vbox.anchor_right = 1.0

@@ -48,7 +48,16 @@ var _pending_lobby_action: String = ""
 
 
 func _apply_theme() -> void:
-	UITheme.apply_app_background(lobby_panel)
+	# Full-screen dark backdrop, matching every other scene (the lobby's
+	# content panel is centered and fixed-size, so it can't double as the bg).
+	var bg := Panel.new()
+	bg.name = "ThemeBackground"
+	bg.anchor_right = 1.0
+	bg.anchor_bottom = 1.0
+	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	UITheme.apply_app_background(bg)
+	add_child(bg)
+	move_child(bg, 0)
 	UITheme.apply_panel(lobby_panel, "gold")
 	UITheme.apply_title(title_label, max(18, int(24 * _ui_scale())))
 	for label in [status_label, server_label, room_label]:
@@ -59,6 +68,9 @@ func _apply_theme() -> void:
 	UITheme.apply_button(join_btn, "primary")
 	UITheme.apply_button(check_server_btn, "secondary")
 	UITheme.apply_button(back_btn, "secondary")
+	# Entrance motion: breathing title + staggered form controls.
+	UITheme.title_breathe(title_label)
+	UITheme.animate_list_enter($Panel/VBoxContainer, 0.05, 12.0)
 
 
 func _theme_waiting_button(button: BaseButton, variant: String = "secondary") -> void:
@@ -500,7 +512,7 @@ func _show_waiting_room(initial_message: String = ""):
 	exit_btn.pressed.connect(func():
 		NetworkManager.close_connection()
 		NetworkManager.clear_room_session()
-		get_tree().change_scene_to_file("res://MultiplayerMenu.tscn")
+		UIMotion.change_scene("res://MultiplayerMenu.tscn")
 	)
 	waiting_ui.add_child(exit_btn)
 
@@ -587,7 +599,7 @@ func _on_create_card_pressed():
 	PlayerData.card_draft.clear()
 	PlayerData.card_editor_return_scene = "res://Lobby.tscn"
 	PlayerData.return_to_waiting_room = true
-	get_tree().change_scene_to_file("res://CardEditor.tscn")
+	UIMotion.change_scene("res://CardEditor.tscn")
 
 
 func _on_start_pressed():
@@ -780,10 +792,10 @@ func _start_battle():
 
 func _on_battle_start():
 	NetworkManager.mark_room_match_started()
-	NetworkManager.get_tree().change_scene_to_file("res://Main.tscn")
+	UIMotion.change_scene("res://Main.tscn")
 
 
 func _on_back_pressed():
 	NetworkManager.close_connection()
 	NetworkManager.clear_room_session()
-	get_tree().change_scene_to_file("res://MultiplayerMenu.tscn")
+	UIMotion.change_scene("res://MultiplayerMenu.tscn")

@@ -200,6 +200,8 @@ func _apply_theme() -> void:
 		UITheme.apply_label(soft_label, true)
 	for label in [skill_name_label, trigger_label, settings_label, effects_label, preview_label]:
 		UITheme.apply_label(label)
+	# Entrance: fade the whole editor panel in (full-rect, no scale).
+	UITheme.fade_enter($Panel, 0.22)
 
 
 func _on_viewport_size_changed() -> void:
@@ -1213,8 +1215,8 @@ func _on_save_pressed():
 	var skill_key: String = _skill_key_for_index(PlayerData.editing_skill_index)
 	PlayerData.card_draft[skill_key] = skill
 	print("Skill saved: %s" % skill.get("skill_name", ""))
-	get_tree().change_scene_to_file("res://CardEditor.tscn")
+	UIMotion.change_scene("res://CardEditor.tscn")
 
 
 func _on_cancel_pressed():
-	get_tree().change_scene_to_file("res://CardEditor.tscn")
+	UIMotion.change_scene("res://CardEditor.tscn")

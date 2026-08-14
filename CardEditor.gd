@@ -166,6 +166,8 @@ func _apply_theme() -> void:
 	UITheme.apply_label(art_path_label, true)
 	UITheme.apply_panel(card_preview_panel, "gold")
 	UITheme.apply_title(preview_title, 14)
+	# Entrance: fade the whole editor panel in (full-rect, no scale).
+	UITheme.fade_enter($Panel, 0.22)
 
 
 func _ready():
@@ -521,19 +523,19 @@ func _template_draft(template_id: String) -> Dictionary:
 func _on_edit_skill1_pressed():
 	_save_form_to_draft()
 	PlayerData.editing_skill_index = 0
-	get_tree().change_scene_to_file("res://SkillEditor.tscn")
+	UIMotion.change_scene("res://SkillEditor.tscn")
 
 
 func _on_edit_skill2_pressed():
 	_save_form_to_draft()
 	PlayerData.editing_skill_index = 1
-	get_tree().change_scene_to_file("res://SkillEditor.tscn")
+	UIMotion.change_scene("res://SkillEditor.tscn")
 
 
 func _on_edit_skill3_pressed():
 	_save_form_to_draft()
 	PlayerData.editing_skill_index = 2
-	get_tree().change_scene_to_file("res://SkillEditor.tscn")
+	UIMotion.change_scene("res://SkillEditor.tscn")
 
 
 # ============================================
@@ -1005,7 +1007,7 @@ func _show_after_save_popup(saved_card: CardData) -> void:
 		PlayerData.continue_editing_flag = true
 		PlayerData.card_editor_return_scene = "res://MainMenu.tscn"
 		PlayerData.return_to_deck_id = ""
-		get_tree().change_scene_to_file("res://MainMenu.tscn")
+		UIMotion.change_scene("res://MainMenu.tscn")
 	)
 	vbox.add_child(continue_btn)
 	var test_btn := Button.new()
@@ -1026,7 +1028,7 @@ func _return_after_save() -> void:
 	var return_scene := PlayerData.card_editor_return_scene
 	PlayerData.card_editor_return_scene = "res://MainMenu.tscn"
 	PlayerData.scene_history.clear()  # Reset navigation history when returning from editor
-	get_tree().change_scene_to_file(return_scene)
+	UIMotion.change_scene(return_scene)
 
 
 func _start_solo_test(saved_card: CardData) -> void:
@@ -1040,7 +1042,7 @@ func _start_solo_test(saved_card: CardData) -> void:
 	PlayerData.editing_deck_id = ""
 	PlayerData.editing_instance_id = ""
 	PlayerData.card_draft.clear()
-	get_tree().change_scene_to_file("res://Main.tscn")
+	UIMotion.change_scene("res://Main.tscn")
 
 
 # ============================================
@@ -1054,4 +1056,4 @@ func _on_back_button_pressed():
 	PlayerData.card_draft.clear()
 	var return_scene := PlayerData.card_editor_return_scene
 	PlayerData.card_editor_return_scene = "res://MainMenu.tscn"
-	get_tree().change_scene_to_file(return_scene)
+	UIMotion.change_scene(return_scene)

@@ -22,6 +22,8 @@ PlayerData="*uid://bluk0ihmmqv4x"
 EventBus="*uid://duavhufhthawd"
 NetworkManager="*res://NetworkManager.gd"
 Locale="*res://Locale.gd"
+BattleFx="*res://BattleFx.gd"
+UIMotion="*res://UIMotion.gd"
 WindowSizeController="*res://WindowSizeController.gd"
 AppVersion="*res://AppVersion.gd"
 

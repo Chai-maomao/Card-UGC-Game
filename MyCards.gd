@@ -44,6 +44,7 @@ func _apply_theme() -> void:
 	UITheme.apply_app_background(panel)
 	UITheme.apply_panel(panel, "dark")
 	UITheme.apply_title(title_label, max(18, int(24 * _ui_scale())))
+	UITheme.title_breathe(title_label)
 
 
 func _ui_scale() -> float:
@@ -93,6 +94,7 @@ func _set_title(text: String) -> void:
 	UITheme.apply_title(label, max(14, int(24 * _ui_scale())))
 	top_bar.add_child(label)
 	title_label = label
+	UITheme.title_breathe(label)
 
 
 func _show_deck_manager() -> void:
@@ -110,6 +112,8 @@ func _show_deck_manager() -> void:
 	for deck in PlayerData.deck_library:
 		_add_deck_slot(deck)
 	_apply_responsive_layout()
+	UITheme.animate_list_enter(top_bar, 0.04, 8.0)
+	UITheme.animate_list_enter(card_grid, 0.03, 0.0)
 
 
 func _show_deck_cards(deck_id: String) -> void:
@@ -132,6 +136,8 @@ func _show_deck_cards(deck_id: String) -> void:
 	for card in PlayerData.get_cards_for_deck(deck_id):
 		_add_card_box(card)
 	_apply_responsive_layout()
+	UITheme.animate_list_enter(top_bar, 0.04, 8.0)
+	UITheme.animate_list_enter(card_grid, 0.03, 0.0)
 
 
 func _add_deck_slot(deck: Dictionary) -> void:
@@ -322,7 +328,7 @@ func _on_create_new_pressed():
 		PlayerData.editing_deck_id = ""
 		PlayerData.editing_instance_id = ""
 		layer.queue_free()
-		get_tree().change_scene_to_file("res://CardEditor.tscn")
+		UIMotion.change_scene("res://CardEditor.tscn")
 	)
 	box.add_child(minion_btn)
 	var spell_btn := Button.new()
@@ -336,7 +342,7 @@ func _on_create_new_pressed():
 		PlayerData.editing_deck_id = ""
 		PlayerData.editing_instance_id = ""
 		layer.queue_free()
-		get_tree().change_scene_to_file("res://CardEditor.tscn")
+		UIMotion.change_scene("res://CardEditor.tscn")
 	)
 	box.add_child(spell_btn)
 	var parasite_btn := Button.new()
@@ -350,7 +356,7 @@ func _on_create_new_pressed():
 		PlayerData.editing_deck_id = ""
 		PlayerData.editing_instance_id = ""
 		layer.queue_free()
-		get_tree().change_scene_to_file("res://CardEditor.tscn")
+		UIMotion.change_scene("res://CardEditor.tscn")
 	)
 	box.add_child(parasite_btn)
 	var cancel_btn := Button.new()
@@ -367,7 +373,7 @@ func _on_edit_card(instance_id: String):
 	PlayerData.editing_index = PlayerData.find_deck_card_index(selected_deck_id, instance_id)
 	PlayerData.card_editor_return_scene = "res://MyCards.tscn"
 	PlayerData.return_to_deck_id = selected_deck_id
-	get_tree().change_scene_to_file("res://CardEditor.tscn")
+	UIMotion.change_scene("res://CardEditor.tscn")
 
 
 func _on_delete_card(instance_id: String):
@@ -378,7 +384,7 @@ func _on_delete_card(instance_id: String):
 
 
 func _on_back_to_menu_pressed():
-	get_tree().change_scene_to_file("res://MainMenu.tscn")
+	UIMotion.change_scene("res://MainMenu.tscn")
 
 
 func _on_export_selected_pressed() -> void:

@@ -58,6 +58,10 @@ func _apply_theme() -> void:
 	UITheme.apply_button(back_btn, "secondary")
 	UITheme.apply_label(server_hint_label, true)
 	UITheme.apply_label(direct_hint_label, true)
+	# Entrance motion: panel spring-in, breathing title, staggered buttons.
+	UITheme.animate_popup_enter(panel)
+	UITheme.title_breathe(title_label)
+	UITheme.animate_list_enter(buttons_box, 0.06, 12.0)
 
 
 func _apply_responsive_layout() -> void:
@@ -88,14 +92,14 @@ func _ready():
 	server_btn.pressed.connect(func():
 		PlayerData.battle_select_mode = "online"
 		PlayerData.battle_select_next_scene = "res://Lobby.tscn"
-		get_tree().change_scene_to_file("res://BattleDeckSelect.tscn")
+		UIMotion.change_scene("res://BattleDeckSelect.tscn")
 	)
 	direct_btn.pressed.connect(func():
 		PlayerData.battle_select_mode = "online"
 		PlayerData.battle_select_next_scene = "res://DirectLobby.tscn"
-		get_tree().change_scene_to_file("res://BattleDeckSelect.tscn")
+		UIMotion.change_scene("res://BattleDeckSelect.tscn")
 	)
-	back_btn.pressed.connect(func(): get_tree().change_scene_to_file("res://MainMenu.tscn"))
+	back_btn.pressed.connect(func(): UIMotion.change_scene("res://MainMenu.tscn"))
 	_apply_texts()
 	_apply_responsive_layout()
 	get_viewport().size_changed.connect(_on_viewport_size_changed)
