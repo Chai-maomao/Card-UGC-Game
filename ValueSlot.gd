@@ -5,9 +5,9 @@ extends PanelContainer
 # Scratch-style number slot.
 # Defaults to a plain SpinBox (fixed number). Dropping a variable reporter
 # oval ({"type": "var_block", "var_id": ...}) into the slot switches it to a
-# variable chip — clicking the chip opens a variable picker, and the small
-# "x" button restores the fixed-number mode. Used for effect values, repeat
-# counts and comparison operands.
+# variable chip — clicking the chip opens a variable picker. Dragging the
+# chip back onto the palette restores the fixed-number mode. Used for effect
+# values, repeat counts and comparison operands.
 #
 # Data contract (bound dictionary, shared reference):
 #   fixed mode : data[num_field] = number; (optionally data[kind_field]="num")
@@ -189,12 +189,6 @@ func _build_expr_mode() -> void:
 	slot_b.setup(inner.get("b", {"kind": "num", "value": 1}), "value", "var_id", "kind", allow_negative, max_value)
 	slot_b.changed.connect(func(): changed.emit())
 	row.add_child(slot_b)
-	# The restore button must live INSIDE the row: a direct child of the
-	# PanelContainer gets stretched to cover the whole slot, which would sit on
-	# top of the operand slots and swallow the GUI drag/drop walk (a drop over
-	# [a] [op] [b] would land on the restore button and bubble to this slot,
-	# never reaching the nested operand ValueSlots).
-	row.add_child(_make_restore_button())
 	add_child(row)
 
 
@@ -264,26 +258,7 @@ func _build_var_mode() -> void:
 		)
 		_set_param_pass(offset)
 		row.add_child(offset)
-	row.add_child(_make_restore_button())
 	add_child(row)
-
-
-# The small "x" button that restores a slot from variable / expression mode
-# back to a plain fixed number.
-func _make_restore_button() -> Button:
-	var restore := Button.new()
-	restore.text = "x"
-	restore.tooltip_text = Locale.t("skill_editor.restore_number")
-	restore.add_theme_font_size_override("font_size", 12)
-	restore.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
-	restore.add_theme_stylebox_override("normal", StyleBoxEmpty.new())
-	restore.add_theme_stylebox_override("hover", StyleBoxEmpty.new())
-	restore.add_theme_stylebox_override("pressed", StyleBoxEmpty.new())
-	restore.custom_minimum_size = Vector2(18, 22)
-	restore.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	restore.pressed.connect(clear_to_number)
-	_set_param_pass(restore)
-	return restore
 
 
 # Restore the slot to a plain fixed number. Also used when the chip/expr is

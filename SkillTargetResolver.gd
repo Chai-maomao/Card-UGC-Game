@@ -34,7 +34,7 @@ static func default_target_side(target_str: String) -> String:
 
 static func normalize_effect_target(eff: Dictionary) -> Dictionary:
 	var normalized := eff.duplicate(true)
-	var target_str: String = normalized.get("target", TARGET_SINGLE)
+	var target_str: String = normalized.get("target", "")
 	# Legacy save compat: split the old pre-combined "all_enemies"/"all_allies"
 	# targets into the two-dimensional side + target form.
 	if target_str == "all_enemies":
@@ -43,8 +43,9 @@ static func normalize_effect_target(eff: Dictionary) -> Dictionary:
 	elif target_str == "all_allies":
 		normalized["target"] = TARGET_ALL
 		normalized["target_side"] = TARGET_SIDE_ALLY
-	elif not normalized.has("target_side"):
-		normalized["target_side"] = TARGET_SIDE_ALL
+	# An unset target / side is deliberately left empty: the editor renders
+	# empty sockets ("+ 选择目标" / "+ 选择阵营") until the user picks a value,
+	# and SkillErrorChecker flags the missing field as an error.
 	return normalized
 
 

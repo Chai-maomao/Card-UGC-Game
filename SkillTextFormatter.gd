@@ -320,6 +320,8 @@ static func format_skill_tooltip(skill: Dictionary) -> String:
 static func _format_target_name(eff: Dictionary) -> String:
 	var normalized := _TargetResolver.normalize_effect_target(eff)
 	var target_id: String = normalized.get("target", "")
+	if target_id == "":
+		return Locale.t("skill_editor.target_unset")
 	var side_id: String = normalized.get("target_side", _TargetResolver.default_target_side(target_id))
 	if _TargetResolver.is_directed_target(target_id):
 		return Locale.term("target", target_id)

@@ -17,76 +17,111 @@ func build() -> void:
 	for child in palette_vbox.get_children():
 		child.queue_free()
 
-	# Trigger hat blocks.
-	palette_vbox.add_child(section_title(Locale.t("skill_editor.palette_trigger")))
+	# Trigger hat blocks. (Spells are locked to on_cast and have no hats.)
 	if not editor.call("_is_spell"):
-		for trigger_key: String in editor.call("_trigger_keys"):
-			var name_text: String = Locale.term("trigger", trigger_key)
-			palette_vbox.add_child(palette_button(Locale.t("skill_editor.block_trigger", [name_text]),
-					SkillBlock.trigger_color(), Callable(editor, "_select_trigger").bind(trigger_key)))
+		_add_section(palette_vbox, Locale.t("skill_editor.palette_trigger"), true, func(box: VBoxContainer):
+			for trigger_key: String in editor.call("_trigger_keys"):
+				var name_text: String = Locale.term("trigger", trigger_key)
+				box.add_child(palette_button(Locale.t("skill_editor.block_trigger", [name_text]),
+						SkillBlock.trigger_color(), Callable(editor, "_select_trigger").bind(trigger_key)))
+		)
 
 	# Effect blocks grouped by category.
 	for category in ["attack", "defense", "utility"]:
 		var section_key := "skill_editor.palette_%s" % category
-		palette_vbox.add_child(section_title(Locale.t(section_key)))
-		for effect_id: String in SkillRegistry.EFFECT_IDS:
-			var meta: Dictionary = SkillRegistry.effect_meta(effect_id)
-			if str(meta.get("category", "")) != category:
-				continue
-			palette_vbox.add_child(palette_button(Locale.term("effect", effect_id),
-					SkillBlock.category_color(category), Callable(editor, "_add_effect_block").bind(effect_id), effect_id))
+		_add_section(palette_vbox, Locale.t(section_key), true, func(box: VBoxContainer, cat: String = category):
+			for effect_id: String in SkillRegistry.EFFECT_IDS:
+				var meta: Dictionary = SkillRegistry.effect_meta(effect_id)
+				if str(meta.get("category", "")) != cat:
+					continue
+				box.add_child(palette_button(Locale.term("effect", effect_id),
+						SkillBlock.category_color(cat), Callable(editor, "_add_effect_block").bind(effect_id), effect_id))
+		)
 
 	# Control blocks (if / if-else / repeat / stop). Draggable like every other palette block.
-	palette_vbox.add_child(section_title(Locale.t("skill_editor.palette_control")))
-	palette_vbox.add_child(palette_button(Locale.t("skill_editor.palette_if"), SkillBlock.control_color(),
-			Callable(editor, "_add_if_block"), SkillEngine.EFFECT_IF))
-	palette_vbox.add_child(palette_button(Locale.t("skill_editor.palette_if_else"), SkillBlock.control_color(),
-			Callable(editor, "_add_if_else_block"), SkillEngine.EFFECT_IF_ELSE))
-	palette_vbox.add_child(palette_button(Locale.t("skill_editor.palette_repeat"), SkillBlock.repeat_color(),
-			Callable(editor, "_add_repeat_block"), SkillEngine.EFFECT_REPEAT))
-	palette_vbox.add_child(palette_button(Locale.t("skill_editor.palette_stop"), SkillBlock.stop_color(),
-			Callable(editor, "_add_stop_block"), SkillEngine.EFFECT_STOP))
+	_add_section(palette_vbox, Locale.t("skill_editor.palette_control"), true, func(box: VBoxContainer):
+		box.add_child(palette_button(Locale.t("skill_editor.palette_if"), SkillBlock.control_color(),
+				Callable(editor, "_add_if_block"), SkillEngine.EFFECT_IF))
+		box.add_child(palette_button(Locale.t("skill_editor.palette_if_else"), SkillBlock.control_color(),
+				Callable(editor, "_add_if_else_block"), SkillEngine.EFFECT_IF_ELSE))
+		box.add_child(palette_button(Locale.t("skill_editor.palette_repeat"), SkillBlock.repeat_color(),
+				Callable(editor, "_add_repeat_block"), SkillEngine.EFFECT_REPEAT))
+		box.add_child(palette_button(Locale.t("skill_editor.palette_stop"), SkillBlock.stop_color(),
+				Callable(editor, "_add_stop_block"), SkillEngine.EFFECT_STOP))
+	)
 
 	# Boolean reporter blocks (Scratch-style comparisons) — dropped into an if
 	# block's condition gap. Each comparison takes two number slots that accept
 	# variable reporter ovals.
-	palette_vbox.add_child(section_title(Locale.t("skill_editor.palette_boolean")))
-	palette_vbox.add_child(boolean_palette_button(Locale.t("skill_editor.boolean_compare"), "compare"))
-	palette_vbox.add_child(boolean_palette_button(Locale.t("skill_editor.boolean_has_buff"), "has_buff"))
+	_add_section(palette_vbox, Locale.t("skill_editor.palette_boolean"), true, func(box: VBoxContainer):
+		box.add_child(boolean_palette_button(Locale.t("skill_editor.boolean_compare"), "compare"))
+		box.add_child(boolean_palette_button(Locale.t("skill_editor.boolean_has_buff"), "has_buff"))
+	)
 
-	# Logic reporters — combine comparisons ("hand>=2 AND target<=50%").
-	palette_vbox.add_child(section_title(Locale.t("skill_editor.palette_logic")))
-	for kind: String in ["and", "or", "not"]:
-		palette_vbox.add_child(logic_palette_button(logic_label(kind), kind))
+	# The reporter drawers below (logic / variable / math / target) are for
+	# advanced editing — collapsed by default so the common blocks stay in
+	# sight. Click a section header to expand it.
+	_add_section(palette_vbox, Locale.t("skill_editor.palette_logic"), false, func(box: VBoxContainer):
+		for kind: String in ["and", "or", "not"]:
+			box.add_child(logic_palette_button(logic_label(kind), kind))
+	)
 
-	# Variable reporter ovals — dragged into number slots (effect values,
-	# repeat counts, comparison operands).
-	palette_vbox.add_child(section_title(Locale.t("skill_editor.palette_variable")))
-	for var_id: String in SkillRegistry.VALUE_VAR_IDS:
-		palette_vbox.add_child(variable_palette_button(Locale.term("value_var", var_id), var_id))
+	_add_section(palette_vbox, Locale.t("skill_editor.palette_variable"), false, func(box: VBoxContainer):
+		for var_id: String in SkillRegistry.VALUE_VAR_IDS:
+			box.add_child(variable_palette_button(Locale.term("value_var", var_id), var_id))
+	)
 
-	# Math-expression reporters — dragged into number slots; both sides are
-	# themselves fillable number slots (Scratch-style nested math).
-	palette_vbox.add_child(section_title(Locale.t("skill_editor.palette_math")))
-	for kind: String in ValueSlot.EXPR_OPS:
-		palette_vbox.add_child(expr_palette_button(expr_palette_label(kind), kind))
+	_add_section(palette_vbox, Locale.t("skill_editor.palette_math"), false, func(box: VBoxContainer):
+		for kind: String in ValueSlot.EXPR_OPS:
+			box.add_child(expr_palette_button(expr_palette_label(kind), kind))
+	)
 
-	# Target selector reporters — dropped into the target / side slots of an
-	# effect sentence ("对 [友方/敌方] [目标] 造成 …").
-	palette_vbox.add_child(section_title(Locale.t("skill_editor.palette_target")))
-	for t_id in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES, SkillEngine.TARGET_ALL,
-			SkillEngine.TARGET_SELF, SkillEngine.TARGET_SELF_SIDES]:
-		palette_vbox.add_child(target_palette_button(Locale.term("target", t_id), t_id, true))
-	for s_id in [SkillEngine.TARGET_SIDE_ENEMY, SkillEngine.TARGET_SIDE_ALLY, SkillEngine.TARGET_SIDE_ALL]:
-		palette_vbox.add_child(target_palette_button(Locale.term("target_side", s_id), s_id, false))
+	_add_section(palette_vbox, Locale.t("skill_editor.palette_target"), false, func(box: VBoxContainer):
+		for t_id in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES, SkillEngine.TARGET_ALL,
+				SkillEngine.TARGET_SELF, SkillEngine.TARGET_SELF_SIDES]:
+			box.add_child(target_palette_button(Locale.term("target", t_id), t_id, true))
+		for s_id in [SkillEngine.TARGET_SIDE_ENEMY, SkillEngine.TARGET_SIDE_ALLY, SkillEngine.TARGET_SIDE_ALL]:
+			box.add_child(target_palette_button(Locale.term("target_side", s_id), s_id, false))
+	)
 
 
-func section_title(text: String) -> Label:
-	var lbl := Label.new()
-	lbl.text = text
-	lbl.add_theme_font_size_override("font_size", 13)
-	lbl.add_theme_color_override("font_color", Color(0.85, 0.9, 1.0))
-	return lbl
+# Adds a collapsible palette section: a clickable header ("- 触发" / "+ 触发")
+# followed by a VBox holding the section's blocks. Collapsed sections stay
+# hidden so the palette scroll never buries the common blocks.
+func _add_section(palette_vbox: VBoxContainer, title_text: String, default_open: bool, builder: Callable) -> void:
+	var header := Button.new()
+	header.text = "%s %s" % ["-" if default_open else "+", title_text]
+	header.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	header.add_theme_font_size_override("font_size", 13)
+	header.add_theme_color_override("font_color", Color(0.85, 0.9, 1.0))
+	header.add_theme_color_override("font_hover_color", Color(1.0, 0.94, 0.72))
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(0.35, 0.42, 0.58, 0.20)
+	st.set_corner_radius_all(4)
+	st.content_margin_left = 6
+	st.content_margin_top = 3
+	st.content_margin_bottom = 3
+	header.add_theme_stylebox_override("normal", st)
+	var hover_st: StyleBoxFlat = st.duplicate()
+	hover_st.bg_color = Color(0.45, 0.52, 0.68, 0.30)
+	header.add_theme_stylebox_override("hover", hover_st)
+	var pressed_st: StyleBoxFlat = st.duplicate()
+	pressed_st.bg_color = Color(0.25, 0.30, 0.42, 0.30)
+	header.add_theme_stylebox_override("pressed", pressed_st)
+	header.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	palette_vbox.add_child(header)
+
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 5)
+	box.visible = default_open
+	palette_vbox.add_child(box)
+
+	header.pressed.connect(func():
+		box.visible = not box.visible
+		header.text = "%s %s" % ["-" if box.visible else "+", title_text]
+	)
+
+	builder.call(box)
 
 
 func palette_button(text: String, color: Color, cb: Callable, effect_id: String = "") -> Button:

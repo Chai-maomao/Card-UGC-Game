@@ -12,7 +12,7 @@ const UITheme = preload("res://UITheme.gd")
 const _TargetResolver = preload("res://SkillTargetResolver.gd")
 const _TextFormatter = preload("res://SkillTextFormatter.gd")
 
-@onready var title_label = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/TitleLabel
+@onready var title_label = $Panel/Margin/HBox/MainPanel/Margin/TitleLabel
 @onready var help_label = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/HelpLabel
 @onready var skill_name_input = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/SkillNameInput
 @onready var skill_name_label = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/SkillNameLabel
@@ -21,11 +21,13 @@ const _TextFormatter = preload("res://SkillTextFormatter.gd")
 @onready var settings_label = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/SettingsLabel
 @onready var settings_row = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/SettingsRow
 @onready var effects_label = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/EffectsLabel
+@onready var effects_hint_label = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/EffectsHintLabel
 @onready var effects_list = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/EffectsList
-@onready var preview_label = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/PreviewLabel
-@onready var skill_summary = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/SkillSummary
-@onready var save_button = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/ButtonRow/SaveButton
-@onready var cancel_button = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/ButtonRow/CancelButton
+@onready var preview_panel = $Panel/Margin/HBox/MainPanel/Margin/PreviewPanel
+@onready var preview_label = $Panel/Margin/HBox/MainPanel/Margin/PreviewPanel/Margin/VBox/PreviewLabel
+@onready var skill_summary = $Panel/Margin/HBox/MainPanel/Margin/PreviewPanel/Margin/VBox/PreviewScroll/SkillSummary
+@onready var save_button = $Panel/Margin/HBox/MainPanel/Margin/ButtonRow/SaveButton
+@onready var cancel_button = $Panel/Margin/HBox/MainPanel/Margin/ButtonRow/CancelButton
 @onready var palette_title = $Panel/Margin/HBox/PalettePanel/Margin/VBox/PaletteTitle
 @onready var palette_vbox = $Panel/Margin/HBox/PalettePanel/Margin/VBox/PaletteScroll/PaletteVBox
 
@@ -139,6 +141,7 @@ func _apply_texts() -> void:
 	help_label.text = Locale.t("skill_editor.help_spell" if is_spell else "skill_editor.help")
 	palette_title.text = Locale.t("skill_editor.palette_title")
 	effects_label.text = Locale.t("skill_editor.effects" if not is_spell else "skill_editor.spell_effects")
+	effects_hint_label.text = Locale.t("skill_editor.effects_hint" if not is_spell else "skill_editor.effects_hint_spell")
 	settings_label.text = Locale.t("skill_editor.settings")
 	preview_label.text = Locale.t("skill_editor.preview" if not is_spell else "skill_editor.spell_preview")
 	save_button.text = Locale.t("skill_editor.save")
@@ -176,7 +179,7 @@ func _apply_responsive_layout() -> void:
 	panel.offset_bottom = 320.0 * s
 	$Panel/Margin/HBox/PalettePanel.custom_minimum_size = Vector2(250 * s, 0)
 	for label in [title_label, help_label, skill_name_label, trigger_label, trigger_preview_label,
-			settings_label, effects_label, preview_label, skill_summary, palette_title]:
+			settings_label, effects_label, effects_hint_label, preview_label, skill_summary, palette_title]:
 		if label:
 			var is_title: bool = label == title_label or label == palette_title
 			label.add_theme_font_size_override("font_size", max(13, int(18 * s)) if is_title else max(10, int(14 * s)))
@@ -191,6 +194,16 @@ func _apply_theme() -> void:
 	UITheme.apply_panel($Panel, "gold")
 	UITheme.apply_panel($Panel/Margin/HBox/PalettePanel, "dark")
 	UITheme.apply_panel($Panel/Margin/HBox/MainPanel, "dark")
+	# Preview card: soft recessed panel so the pinned summary reads as a
+	# distinct "live result" area rather than free-floating text.
+	var pv_style := StyleBoxFlat.new()
+	pv_style.bg_color = Color(0.06, 0.07, 0.095, 0.98)
+	pv_style.border_color = Color(0.55, 0.44, 0.24, 0.55)
+	pv_style.set_border_width_all(1)
+	pv_style.set_corner_radius_all(8)
+	pv_style.shadow_color = Color(0, 0, 0, 0.25)
+	pv_style.shadow_size = 2
+	preview_panel.add_theme_stylebox_override("panel", pv_style)
 	UITheme.apply_title(title_label, max(14, int(18 * _ui_scale())))
 	UITheme.apply_title(palette_title, max(13, int(15 * _ui_scale())))
 	UITheme.apply_input(skill_name_input)
@@ -198,7 +211,7 @@ func _apply_theme() -> void:
 	UITheme.apply_button(cancel_button, "secondary")
 	for soft_label in [help_label, trigger_preview_label, skill_summary]:
 		UITheme.apply_label(soft_label, true)
-	for label in [skill_name_label, trigger_label, settings_label, effects_label, preview_label]:
+	for label in [skill_name_label, trigger_label, settings_label, effects_label, effects_hint_label, preview_label]:
 		UITheme.apply_label(label)
 	# Entrance: fade the whole editor panel in (full-rect, no scale).
 	UITheme.fade_enter($Panel, 0.22)
@@ -243,12 +256,14 @@ func _refresh_script() -> void:
 	if _is_spell():
 		# Spells are locked to on_cast and have no visible event block.
 		_render_effects(effect_data, effects_list, [], false)
+		_maybe_add_slot_hint(effects_list)
 	else:
 		# The whole skill lives inside one event hat block (Scratch-style).
 		var event_block := SkillBlock.new()
 		event_block.setup_event_block(current_trigger_key)
 		effects_list.add_child(event_block)
 		_render_effects(effect_data, event_block.body_container, [], true)
+		_maybe_add_slot_hint(event_block.body_container)
 		_setup_slot_drop(event_block.body_container, [])
 	_refresh_error_banner()
 	_mark_invalid_conditions()
@@ -291,6 +306,8 @@ func _render_effects(list: Array, container: VBoxContainer, base_path: Array, to
 			block.draggable = true
 			_connect_block_signals(block)
 			container.add_child(block)
+			if top_level:
+				block.set_order(i + 1)
 			var then_path: Array = path.duplicate()
 			then_path.append("then")
 			_render_effects(eff.get("then_effects", []), block.then_container, then_path, false)
@@ -308,6 +325,8 @@ func _render_effects(list: Array, container: VBoxContainer, base_path: Array, to
 			block.draggable = true
 			_connect_block_signals(block)
 			container.add_child(block)
+			if top_level:
+				block.set_order(i + 1)
 			var loop_path: Array = path.duplicate()
 			loop_path.append("then")
 			_render_effects(eff.get("then_effects", []), block.then_container, loop_path, false)
@@ -318,25 +337,43 @@ func _render_effects(list: Array, container: VBoxContainer, base_path: Array, to
 			block.setup_stop_block(path)
 			_connect_block_signals(block)
 			container.add_child(block)
+			if top_level:
+				block.set_order(i + 1)
 		else:
 			var block := SkillBlock.new()
 			block.setup_effect(eff, path)
 			block.draggable = true
 			_connect_block_signals(block)
 			container.add_child(block)
+			if top_level:
+				block.set_order(i + 1)
 
 
 # Empty then/else slots get a faint "拖入积木" placeholder (mouse_filter IGNORE
 # so it never blocks drag-drops). It disappears once a block is dragged in.
+# The empty slot also gets a bright border so it clearly reads as an
+# insertable gap.
 func _maybe_add_slot_hint(slot: VBoxContainer) -> void:
 	if slot.get_child_count() > 0:
 		return
 	var hint := Label.new()
 	hint.text = Locale.t("skill_editor.slot_hint")
 	hint.add_theme_font_size_override("font_size", 11)
-	hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.35))
+	hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
 	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	slot.add_child(hint)
+	var panel := slot.get_parent()
+	if panel is PanelContainer:
+		var st := StyleBoxFlat.new()
+		st.bg_color = Color(0, 0, 0, 0.16)
+		st.border_color = Color(0.45, 0.70, 0.88, 0.65)
+		st.set_border_width_all(1)
+		st.set_corner_radius_all(5)
+		st.content_margin_left = 6
+		st.content_margin_right = 6
+		st.content_margin_top = 4
+		st.content_margin_bottom = 4
+		(panel as PanelContainer).add_theme_stylebox_override("panel", st)
 
 
 func _connect_block_signals(block: SkillBlock) -> void:
@@ -386,14 +423,20 @@ func _get_drag_data_from_list(_pos: Vector2):
 
 
 # Scratch-style drop feedback: while a drag hovers a slot, show a bright
-# insertion line at the position the block would land. Cleaned up on drop and
-# by _process once the GUI drag ends.
+# insertion line at the position the block would land, and glow the target
+# slot. Cleaned up on drop and by _process once the GUI drag ends.
 var _insertion_line: Control
+var _highlighted_slot: VBoxContainer
+var _slot_orig_style: StyleBox
 
 
 func _can_drop_on_slot(vbox: VBoxContainer, _pos: Vector2, data) -> bool:
 	var ok: bool = data is Dictionary and data.get("type", "") == "effect_block"
 	if ok:
+		if _highlighted_slot != null and _highlighted_slot != vbox:
+			_highlight_slot(_highlighted_slot, false)
+		_highlight_slot(vbox, true)
+		_highlighted_slot = vbox
 		_show_insertion_line(vbox, _insertion_index_at(vbox, _pos))
 	else:
 		_hide_insertion_line()
@@ -404,12 +447,16 @@ func _show_insertion_line(vbox: VBoxContainer, index: int) -> void:
 	if _insertion_line == null:
 		_insertion_line = PanelContainer.new()
 		var st := StyleBoxFlat.new()
-		st.bg_color = Color(1.0, 0.92, 0.45)
+		st.bg_color = Color(1.0, 0.93, 0.5)
+		st.border_color = Color(1, 1, 1, 0.65)
+		st.set_border_width_all(1)
 		st.set_corner_radius_all(2)
+		st.shadow_color = Color(1, 0.9, 0.4, 0.65)
+		st.shadow_size = 4
 		_insertion_line.add_theme_stylebox_override("panel", st)
 		_insertion_line.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_insertion_line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_insertion_line.custom_minimum_size = Vector2(40, 3)
+		_insertion_line.custom_minimum_size = Vector2(40, 4)
 	if _insertion_line.get_parent() != null:
 		_insertion_line.get_parent().remove_child(_insertion_line)
 	vbox.add_child(_insertion_line)
@@ -428,7 +475,36 @@ func _show_insertion_line(vbox: VBoxContainer, index: int) -> void:
 	vbox.move_child(_insertion_line, child_index)
 
 
+# Glows the recessed slot panel while a drag hovers it, so the drop target is
+# unmistakable. Restores the original style (incl. the empty-slot border) on
+# leave/drop.
+func _highlight_slot(vbox: VBoxContainer, on: bool) -> void:
+	var panel := vbox.get_parent()
+	if not (panel is PanelContainer):
+		return
+	if on:
+		_slot_orig_style = (panel as PanelContainer).get_theme_stylebox("panel")
+		var st := StyleBoxFlat.new()
+		st.bg_color = Color(0.25, 0.50, 0.70, 0.30)
+		st.border_color = Color(0.55, 0.85, 1.0, 0.95)
+		st.set_border_width_all(2)
+		st.set_corner_radius_all(5)
+		st.content_margin_left = 6
+		st.content_margin_right = 6
+		st.content_margin_top = 4
+		st.content_margin_bottom = 4
+		(panel as PanelContainer).add_theme_stylebox_override("panel", st)
+	else:
+		if _slot_orig_style != null:
+			(panel as PanelContainer).add_theme_stylebox_override("panel", _slot_orig_style)
+		else:
+			(panel as PanelContainer).remove_theme_stylebox_override("panel")
+
+
 func _hide_insertion_line() -> void:
+	if _highlighted_slot != null:
+		_highlight_slot(_highlighted_slot, false)
+		_highlighted_slot = null
 	if _insertion_line != null and _insertion_line.get_parent() != null:
 		_insertion_line.get_parent().remove_child(_insertion_line)
 
@@ -705,9 +781,12 @@ func _on_effect_form_confirmed(eff: Dictionary):
 
 
 func _default_effect(effect_id: String) -> Dictionary:
+	# Target selection starts EMPTY: the block shows a "+ 选择目标" placeholder
+	# so the user actively picks (rather than silently inheriting a default
+	# like "敌方单体"). force_self effects never show a target slot.
 	var eff := {
-		"target": SkillEngine.TARGET_SELF,
-		"target_side": SkillEngine.TARGET_SIDE_ALL,
+		"target": "",
+		"target_side": "",
 		"effect": effect_id,
 		"value": 1,
 		"buff_id": "",
@@ -718,9 +797,6 @@ func _default_effect(effect_id: String) -> Dictionary:
 	if SkillRegistry.force_self(effect_id):
 		eff["target"] = SkillEngine.TARGET_SELF
 		eff["target_side"] = SkillEngine.TARGET_SIDE_ALL
-	elif str(SkillRegistry.effect_meta(effect_id).get("polarity", "")) == "harmful":
-		eff["target"] = SkillEngine.TARGET_SINGLE
-		eff["target_side"] = SkillEngine.TARGET_SIDE_ENEMY
 	if effect_id == SkillEngine.EFFECT_ADD_BUFF:
 		eff["buff_id"] = SkillEngine.BUFF_ATK_BOOST
 		eff["duration"] = 2
@@ -959,9 +1035,28 @@ func _idx_of(key: String, keys: Array) -> int:
 func _build_settings_row() -> void:
 	var s := _ui_scale()
 
+	# Settings live in a subtle inset card so the tuning fields read as one
+	# group, distinct from the effect blocks below.
+	var card := PanelContainer.new()
+	var card_st := StyleBoxFlat.new()
+	card_st.bg_color = Color(0.05, 0.06, 0.09, 0.55)
+	card_st.border_color = Color(0.30, 0.36, 0.48, 0.40)
+	card_st.set_border_width_all(1)
+	card_st.set_corner_radius_all(6)
+	card_st.content_margin_left = 8
+	card_st.content_margin_top = 4
+	card_st.content_margin_right = 8
+	card_st.content_margin_bottom = 4
+	card.add_theme_stylebox_override("panel", card_st)
+	settings_row.add_child(card)
+
+	var inner := VBoxContainer.new()
+	inner.add_theme_constant_override("separation", int(4 * s))
+	card.add_child(inner)
+
 	var row1 := HBoxContainer.new()
 	row1.add_theme_constant_override("separation", int(10 * s))
-	settings_row.add_child(row1)
+	inner.add_child(row1)
 
 	var prob_lbl := Label.new()
 	prob_lbl.text = Locale.t("skill_editor.probability")
@@ -999,7 +1094,8 @@ func _build_settings_row() -> void:
 
 	var row2 := HBoxContainer.new()
 	row2.add_theme_constant_override("separation", int(10 * s))
-	settings_row.add_child(row2)
+	inner.add_child(row2)
+	skill_type_row = row2
 
 	var type_lbl := Label.new()
 	type_lbl.text = Locale.t("skill_editor.skill_type")
@@ -1022,6 +1118,8 @@ func _update_skill_type_visibility() -> void:
 	if skill_type_select == null:
 		return
 	var show_talent: bool = not _is_spell() and SkillRegistry.trigger_is_passive(_selected_trigger_key())
+	if skill_type_row != null:
+		skill_type_row.visible = show_talent
 	skill_type_select.visible = show_talent
 	if not show_talent and skill_type_select.selected != 0:
 		skill_type_select.selected = 0
@@ -1211,11 +1309,90 @@ func _skill_key_for_index(index: int) -> String:
 
 
 func _on_save_pressed():
+	var errors: Array = _collect_errors()
+	# An untouched/empty skill is a valid "no skill" state (saved as {}); only
+	# real compile errors must block the save, otherwise the invalid skill
+	# would be written into the card JSON.
+	var empty_only: bool = errors.size() == 1 and str(errors[0]) == Locale.t("skill_editor.error_empty_skill")
+	if not errors.is_empty() and not empty_only:
+		_show_save_blocked_popup(errors)
+		return
 	var skill: Dictionary = _build_skill()
 	var skill_key: String = _skill_key_for_index(PlayerData.editing_skill_index)
 	PlayerData.card_draft[skill_key] = skill
 	print("Skill saved: %s" % skill.get("skill_name", ""))
 	UIMotion.change_scene("res://CardEditor.tscn")
+
+
+# A compile-error skill must not reach the card draft (which is later written
+# to card_library.json): show what's wrong and refuse to leave the editor.
+func _show_save_blocked_popup(errors: Array) -> void:
+	var s := _ui_scale()
+	var popup := UITheme.make_popup_layer(self, 100)
+	var layer: CanvasLayer = popup.get("layer")
+	var size := Vector2(420, 300) * s
+	var panel := Panel.new()
+	UITheme.apply_panel(panel, "gold")
+	panel.custom_minimum_size = size
+	panel.anchor_left = 0.5
+	panel.anchor_right = 0.5
+	panel.anchor_top = 0.5
+	panel.anchor_bottom = 0.5
+	panel.offset_left = -size.x / 2.0
+	panel.offset_top = -size.y / 2.0
+	panel.offset_right = size.x / 2.0
+	panel.offset_bottom = size.y / 2.0
+	layer.add_child(panel)
+
+	var margin := MarginContainer.new()
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	margin.add_theme_constant_override("margin_left", int(14 * s))
+	margin.add_theme_constant_override("margin_top", int(10 * s))
+	margin.add_theme_constant_override("margin_right", int(14 * s))
+	margin.add_theme_constant_override("margin_bottom", int(10 * s))
+	panel.add_child(margin)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", int(6 * s))
+	margin.add_child(vb)
+
+	var title := Label.new()
+	title.text = Locale.t("skill_editor.save_blocked_title")
+	title.add_theme_font_size_override("font_size", max(13, int(16 * s)))
+	UITheme.apply_title(title, max(13, int(16 * s)))
+	title.add_theme_color_override("font_color", Color(1, 0.70, 0.70))
+	vb.add_child(title)
+
+	var body := Label.new()
+	body.text = Locale.t("skill_editor.save_blocked_body")
+	body.add_theme_font_size_override("font_size", max(10, int(13 * s)))
+	UITheme.apply_label(body)
+	vb.add_child(body)
+
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	vb.add_child(scroll)
+	var err_box := VBoxContainer.new()
+	err_box.add_theme_constant_override("separation", int(4 * s))
+	err_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.add_child(err_box)
+	for e in errors:
+		var lbl := Label.new()
+		lbl.text = "- " + str(e)
+		lbl.add_theme_font_size_override("font_size", max(10, int(12 * s)))
+		lbl.add_theme_color_override("font_color", Color(1, 0.82, 0.82))
+		lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		err_box.add_child(lbl)
+
+	var close_btn := Button.new()
+	close_btn.text = Locale.t("skill_editor.save_blocked_close")
+	close_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	UITheme.apply_button(close_btn, "secondary")
+	close_btn.pressed.connect(func():
+		if is_instance_valid(layer):
+			layer.queue_free()
+	)
+	vb.add_child(close_btn)
 
 
 func _on_cancel_pressed():

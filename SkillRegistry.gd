@@ -140,7 +140,7 @@ const EFFECT_META := {
 		"handler": "_apply_draw_cards", "template": "draw_cards", "polarity": "helpful", "score_kind": "value_linear", "score_weight": 2.0, "category": "utility"},
 	EFFECT_SHIELD:            {"requires_live_target": true,  "allows_negative": false, "force_self": false, "uses_value": true,
 		"handler": "_apply_shield", "template": "shield", "polarity": "helpful", "score_kind": "value_linear", "score_weight": 0.68, "category": "defense"},
-	EFFECT_CHARM:             {"requires_live_target": true,  "allows_negative": false, "force_self": false, "uses_value": true,
+	EFFECT_CHARM:             {"requires_live_target": true,  "allows_negative": false, "force_self": false, "uses_value": false,
 		"handler": "_apply_charm", "template": "charm", "polarity": "harmful", "score_kind": "fixed", "score_weight": 3.0, "category": "attack"},
 	EFFECT_LIFESTEAL_DAMAGE:  {"requires_live_target": true,  "allows_negative": false, "force_self": false, "uses_value": true,
 		"handler": "_apply_lifesteal_damage", "template": "lifesteal_damage", "polarity": "harmful", "score_kind": "value_linear", "score_weight": 1.55, "category": "attack"},

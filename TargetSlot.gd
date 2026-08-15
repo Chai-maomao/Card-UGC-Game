@@ -66,7 +66,11 @@ func _default_value() -> String:
 
 
 func _current_value() -> String:
-	return str(data.get(_field(), _default_value()))
+	# Unset keys count as empty: the slot renders as an empty socket
+	# ("+ 选择目标" / "+ 选择阵营") until the user picks a value, matching the
+	# _sync_side visibility rule. clear_to_number still writes the default
+	# explicitly when the chip is dragged back to the palette.
+	return str(data.get(_field(), ""))
 
 
 func _ids() -> Array:
@@ -81,16 +85,24 @@ func _rebuild() -> void:
 	for child in get_children():
 		child.queue_free()
 	var btn := Button.new()
-	btn.text = ValueSlot._clamp_chip(_value_label(_current_value()), 8)
+	var value := _current_value()
+	var empty := value == ""
+	if empty:
+		btn.text = ValueSlot._clamp_chip(_placeholder_text(), 10)
+	else:
+		btn.text = ValueSlot._clamp_chip(_value_label(value), 8)
 	# No clip_text: it drops the text from the minimum-size calculation and
 	# collapses the chip; _clamp_chip already keeps the label bounded.
 	btn.add_theme_font_size_override("font_size", 12)
-	btn.add_theme_color_override("font_color", Color(1, 1, 1, 0.97))
+	btn.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
 	var st := StyleBoxFlat.new()
 	var tint := _tint_color()
-	st.bg_color = Color(tint.r, tint.g, tint.b, 0.65)
-	st.border_color = tint
-	st.set_border_width_all(1)
+	# Unset slots look like empty sockets: faint fill, dashed-feel bright edge.
+	# (A directed target with 全体 is no longer grayed out — it is reported as
+	# a compile error by SkillErrorChecker's red banner instead.)
+	st.bg_color = Color(tint.r, tint.g, tint.b, 0.22 if empty else 0.65)
+	st.border_color = Color(tint.r, tint.g, tint.b, 0.55) if empty else tint
+	st.set_border_width_all(2 if empty else 1)
 	st.set_corner_radius_all(12)
 	st.content_margin_left = 8
 	st.content_margin_right = 8
@@ -98,13 +110,19 @@ func _rebuild() -> void:
 	st.content_margin_bottom = 1
 	btn.add_theme_stylebox_override("normal", st)
 	var hover: StyleBoxFlat = st.duplicate()
-	hover.bg_color = Color(tint.r, tint.g, tint.b, 0.85)
+	hover.bg_color = Color(tint.r, tint.g, tint.b, 0.55 if empty else 0.85)
 	btn.add_theme_stylebox_override("hover", hover)
 	btn.add_theme_stylebox_override("pressed", hover)
 	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	if empty:
+		btn.tooltip_text = Locale.t("skill_editor.target_pick_hint_tip") if kind == "target" else Locale.t("skill_editor.side_pick_hint_tip")
 	btn.pressed.connect(func(): _open_menu(btn))
 	_set_param_pass(btn)
 	add_child(btn)
+
+
+func _placeholder_text() -> String:
+	return Locale.t("skill_editor.target_pick_hint") if kind == "target" else Locale.t("skill_editor.side_pick_hint")
 
 
 func _open_menu(anchor: Control) -> void:

@@ -254,9 +254,10 @@ func _ready() -> void:
 
 	# --- Palette drag-to-install: grab a palette block, drop it into the script ---
 	var palette_vbox: VBoxContainer = sed2.get_node("Panel/Margin/HBox/PalettePanel/Margin/VBox/PaletteScroll/PaletteVBox")
+	# Palette sections are collapsible; search inside every section container.
 	var palette_block: SkillPaletteBlock = null
-	for child in palette_vbox.get_children():
-		if child is SkillPaletteBlock:
+	for child in palette_vbox.find_children("*", "SkillPaletteBlock", true, false):
+		if (child as SkillPaletteBlock).effect_id != "":
 			palette_block = child as SkillPaletteBlock
 			break
 	if palette_block == null or palette_block.effect_id == "":
@@ -289,8 +290,8 @@ func _ready() -> void:
 
 	# --- Boolean block drop: palette comparison block into an if gap ---
 	var bool_block: SkillPaletteBlock = null
-	for child in palette_vbox.get_children():
-		if child is SkillPaletteBlock and (child as SkillPaletteBlock).boolean_kind != "":
+	for child in palette_vbox.find_children("*", "SkillPaletteBlock", true, false):
+		if (child as SkillPaletteBlock).boolean_kind != "":
 			bool_block = child as SkillPaletteBlock
 			break
 	if bool_block == null:

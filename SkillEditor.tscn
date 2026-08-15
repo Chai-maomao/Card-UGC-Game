@@ -83,17 +83,23 @@ layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 
-[node name="Margin" type="MarginContainer" parent="Panel/Margin/HBox/MainPanel"]
+[node name="Margin" type="VBoxContainer" parent="Panel/Margin/HBox/MainPanel"]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
-theme_override_constants/margin_left = 10
-theme_override_constants/margin_top = 8
-theme_override_constants/margin_right = 10
-theme_override_constants/margin_bottom = 8
+theme_override_constants/separation = 6
+
+[node name="TitleLabel" type="Label" parent="Panel/Margin/HBox/MainPanel/Margin" unique_id=2000005]
+layout_mode = 2
+theme_override_font_sizes/font_size = 18
+text = "Skill Editor"
+horizontal_alignment = 1
+
+[node name="Separator0" type="HSeparator" parent="Panel/Margin/HBox/MainPanel/Margin" unique_id=2000028]
+layout_mode = 2
 
 [node name="Scroll" type="ScrollContainer" parent="Panel/Margin/HBox/MainPanel/Margin"]
 layout_mode = 2
@@ -106,19 +112,10 @@ layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 6
 
-[node name="TitleLabel" type="Label" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox" unique_id=2000005]
-layout_mode = 2
-theme_override_font_sizes/font_size = 18
-text = "Skill Editor"
-horizontal_alignment = 1
-
 [node name="HelpLabel" type="Label" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox"]
 layout_mode = 2
 text = "Pick a trigger, then stack effect blocks."
 autowrap_mode = 3
-
-[node name="Separator0" type="HSeparator" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox" unique_id=2000028]
-layout_mode = 2
 
 [node name="SkillNameLabel" type="Label" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox" unique_id=2000026]
 layout_mode = 2
@@ -152,31 +149,55 @@ theme_override_constants/separation = 4
 layout_mode = 2
 text = "Effects:"
 
+[node name="EffectsHintLabel" type="Label" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox"]
+layout_mode = 2
+text = "Effects run top to bottom."
+autowrap_mode = 3
+
 [node name="EffectsList" type="VBoxContainer" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox" unique_id=2001001]
 layout_mode = 2
-theme_override_constants/separation = 6
+theme_override_constants/separation = 3
 
-[node name="SeparatorBottom" type="HSeparator" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox" unique_id=2000021]
+[node name="PreviewPanel" type="PanelContainer" parent="Panel/Margin/HBox/MainPanel/Margin"]
 layout_mode = 2
+size_flags_horizontal = 3
 
-[node name="PreviewLabel" type="Label" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox"]
+[node name="Margin" type="MarginContainer" parent="Panel/Margin/HBox/MainPanel/Margin/PreviewPanel"]
+layout_mode = 2
+theme_override_constants/margin_left = 8
+theme_override_constants/margin_top = 5
+theme_override_constants/margin_right = 8
+theme_override_constants/margin_bottom = 5
+
+[node name="VBox" type="VBoxContainer" parent="Panel/Margin/HBox/MainPanel/Margin/PreviewPanel/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 4
+
+[node name="PreviewLabel" type="Label" parent="Panel/Margin/HBox/MainPanel/Margin/PreviewPanel/Margin/VBox"]
 layout_mode = 2
 text = "Skill Preview:"
 
-[node name="SkillSummary" type="Label" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox" unique_id=2000022]
+[node name="PreviewScroll" type="ScrollContainer" parent="Panel/Margin/HBox/MainPanel/Margin/PreviewPanel/Margin/VBox"]
 layout_mode = 2
+size_flags_horizontal = 3
+custom_minimum_size = Vector2(0, 48)
+horizontal_scroll_mode = 0
+
+[node name="SkillSummary" type="Label" parent="Panel/Margin/HBox/MainPanel/Margin/PreviewPanel/Margin/VBox/PreviewScroll"]
+layout_mode = 2
+size_flags_horizontal = 3
 horizontal_alignment = 0
 autowrap_mode = 3
 
-[node name="ButtonRow" type="HBoxContainer" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox" unique_id=2000023]
+[node name="ButtonRow" type="HBoxContainer" parent="Panel/Margin/HBox/MainPanel/Margin" unique_id=2000023]
 layout_mode = 2
 theme_override_constants/separation = 16
 alignment = 1
 
-[node name="SaveButton" type="Button" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/ButtonRow" unique_id=2000024]
+[node name="SaveButton" type="Button" parent="Panel/Margin/HBox/MainPanel/Margin/ButtonRow" unique_id=2000024]
 layout_mode = 2
 text = "Save Skill"
 
-[node name="CancelButton" type="Button" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/ButtonRow" unique_id=2000025]
+[node name="CancelButton" type="Button" parent="Panel/Margin/HBox/MainPanel/Margin/ButtonRow" unique_id=2000025]
 layout_mode = 2
 text = "Cancel"

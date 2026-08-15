@@ -21,6 +21,10 @@ func _ready() -> void:
 		print("E2E_TIMEOUT_FAIL scenarios did not finish in 120s")
 		get_tree().quit(1)
 	)
+	# A saved high-resolution preset (user://settings.cfg via WindowSizeController)
+	# can stretch the 1152x648 canvas (e.g. 1920x1080 -> 1.6667x). Synthetic
+	# mouse events are hit-tested in window space, so the input helpers scale
+	# every coordinate with the viewport's final transform (see _win()).
 	Locale.language = "zh"
 	PlayerData.card_draft = {
 		"name": "预览卡",
@@ -122,17 +126,32 @@ func _ready() -> void:
 # Real-mouse drag scenarios
 # ============================================
 
+# Palette sections are collapsible (advanced ones start closed). The drag
+# simulations need every reporter reachable, so open all section boxes and
+# sync their header marks ("+ 标题" -> "- 标题").
+func _expand_all_sections(palette_vbox: VBoxContainer) -> void:
+	for child in palette_vbox.get_children():
+		if child is VBoxContainer:
+			(child as VBoxContainer).visible = true
+		elif child is Button:
+			var t: String = (child as Button).text
+			if t.begins_with("+"):
+				(child as Button).text = "-" + t.substr(1)
+
 func _run_drag_simulation() -> void:
 	var palette_vbox: VBoxContainer = _sed.get_node("Panel/Margin/HBox/PalettePanel/Margin/VBox/PaletteScroll/PaletteVBox")
 	var palette_panel: Panel = _sed.get_node("Panel/Margin/HBox/PalettePanel")
 	var palette_scroll: ScrollContainer = _sed.get_node("Panel/Margin/HBox/PalettePanel/Margin/VBox/PaletteScroll")
 	var main_scroll: ScrollContainer = _sed.get_node("Panel/Margin/HBox/MainPanel/Margin/Scroll")
 	var effects_list: VBoxContainer = _sed.get_node("Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/EffectsList")
+	# Palette sections are collapsible and advanced ones start closed — open
+	# every section so the real-mouse simulations can reach any reporter.
+	_expand_all_sections(palette_vbox)
 
 	# --- A. Boolean comparison block -> if block's condition gap ------------
 	var bool_pal: SkillPaletteBlock = null
-	for child in palette_vbox.get_children():
-		if child is SkillPaletteBlock and (child as SkillPaletteBlock).boolean_kind != "":
+	for child in palette_vbox.find_children("*", "SkillPaletteBlock", true, false):
+		if (child as SkillPaletteBlock).boolean_kind != "":
 			bool_pal = child as SkillPaletteBlock
 			break
 	if bool_pal == null:
@@ -147,6 +166,9 @@ func _run_drag_simulation() -> void:
 		get_tree().quit(1)
 		return
 	print("DRAG_TEST_A press=", bool_pal.get_global_rect().get_center(), " drop=", if_block.cond_slot.get_global_rect().get_center(), " kind=", bool_kind)
+	# The pinned preview/button area shrinks the script viewport, so bring the
+	# if block's condition gap into view before the synthetic drop.
+	await _scroll_into_view(main_scroll, if_block.cond_slot)
 	await _drag(bool_pal.get_global_rect().get_center(), if_block.cond_slot.get_global_rect().get_center())
 	var ed: Array = _sed.get("effect_data")
 	var cond_dict: Dictionary = (ed[1] as Dictionary).get("condition", {})
@@ -163,8 +185,8 @@ func _run_drag_simulation() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 	var eff_pal: SkillPaletteBlock = null
-	for child in palette_vbox.get_children():
-		if child is SkillPaletteBlock and (child as SkillPaletteBlock).effect_id != "":
+	for child in palette_vbox.find_children("*", "SkillPaletteBlock", true, false):
+		if (child as SkillPaletteBlock).effect_id != "":
 			eff_pal = child as SkillPaletteBlock
 			break
 	if eff_pal == null:
@@ -184,11 +206,17 @@ func _run_drag_simulation() -> void:
 		return
 
 	# --- C. Palette effect block -> script body (insert) ----------------------
-	main_scroll.scroll_vertical = 0
-	await get_tree().process_frame
-	await get_tree().process_frame
-	var body: Control = effects_list.get_child(0).body_container
-	var drop_pos: Vector2 = body.get_global_rect().position + Vector2(20, 10)
+	# The pinned preview panel clips the scroll viewport's bottom edge, and a
+	# tall body centered by _scroll_into_view leaves its top above the viewport.
+	# Drop onto the FIRST block instead: its center scrolls fully visible and
+	# the upper-half rule inserts the new block before it (index 0).
+	var first_block_c: SkillBlock = _find_body_block_path(0)
+	if first_block_c == null:
+		print("DRAG_TEST_FAIL no first body block for insert")
+		get_tree().quit(1)
+		return
+	await _scroll_into_view(main_scroll, first_block_c)
+	var drop_pos: Vector2 = first_block_c.get_global_rect().get_center()
 	await _drag(eff_pal.get_global_rect().get_center(), drop_pos)
 	ed = _sed.get("effect_data")
 	print("DRAG_TEST_C effect_data=", str(ed.size()), " first=", str(ed[0].get("effect", "?")) if ed.size() > 0 else "none")
@@ -222,11 +250,14 @@ func _run_drag_simulation() -> void:
 	e_ed.clear()
 	_sed.call("_refresh_script")
 	palette_scroll.scroll_vertical = 0
+	main_scroll.scroll_vertical = 0
 	await get_tree().process_frame
 	await get_tree().process_frame
 	var empty_body: Control = effects_list.get_child(0).body_container
 	print("EMPTY_TEST body_rect=", empty_body.get_global_rect(), " size=", empty_body.size)
-	await _drag(eff_pal.get_global_rect().get_center(), empty_body.get_global_rect().get_center())
+	# The empty hat sits just above the pinned preview panel; release inside
+	# the visible part of the slot (its center is clipped by the viewport).
+	await _drag(eff_pal.get_global_rect().get_center(), empty_body.get_global_rect().position + Vector2(30, 6))
 	e_ed = _sed.get("effect_data")
 	print("EMPTY_TEST size=", str(e_ed.size()))
 	if e_ed.size() != 1:
@@ -302,6 +333,7 @@ func _run_drag_simulation() -> void:
 		get_tree().quit(1)
 		return
 	var le: LineEdit = value_spin.get_line_edit()
+	print("EDIT_TEST le_rect=", le.get_global_rect(), " main_rect=", main_scroll.get_global_rect())
 	await _click(le.get_global_rect().get_center())
 	await get_tree().process_frame
 	print("EDIT_TEST focused=", le.has_focus())
@@ -336,8 +368,8 @@ func _run_drag_simulation() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 	var var_pal: SkillPaletteBlock = null
-	for child in palette_vbox.get_children():
-		if child is SkillPaletteBlock and (child as SkillPaletteBlock).var_id != "":
+	for child in palette_vbox.find_children("*", "SkillPaletteBlock", true, false):
+		if (child as SkillPaletteBlock).var_id != "":
 			var_pal = child as SkillPaletteBlock
 			break
 	if var_pal == null:
@@ -418,8 +450,8 @@ func _run_drag_simulation() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 	var expr_pal: SkillPaletteBlock = null
-	for child in palette_vbox.get_children():
-		if child is SkillPaletteBlock and (child as SkillPaletteBlock).expr_kind != "":
+	for child in palette_vbox.find_children("*", "SkillPaletteBlock", true, false):
+		if (child as SkillPaletteBlock).expr_kind != "":
 			expr_pal = child as SkillPaletteBlock
 			break
 	if expr_pal == null:
@@ -495,8 +527,8 @@ func _run_drag_simulation() -> void:
 	await get_tree().process_frame
 	var expr_pal_n: SkillPaletteBlock = null
 	var expr_pal_sub: SkillPaletteBlock = null
-	for child in palette_vbox.get_children():
-		if child is SkillPaletteBlock and (child as SkillPaletteBlock).expr_kind != "":
+	for child in palette_vbox.find_children("*", "SkillPaletteBlock", true, false):
+		if (child as SkillPaletteBlock).expr_kind != "":
 			if expr_pal_n == null:
 				expr_pal_n = child as SkillPaletteBlock
 			elif expr_pal_sub == null:
@@ -571,12 +603,11 @@ func _run_drag_simulation() -> void:
 		side_slot_t = _find_target_slot(dmg_block_t, "side")
 	var side_pal_t: SkillPaletteBlock = null
 	var tgt_pal_t: SkillPaletteBlock = null
-	for child in palette_vbox.get_children():
-		if child is SkillPaletteBlock:
-			if (child as SkillPaletteBlock).side_kind == SkillEngine.TARGET_SIDE_ENEMY:
-				side_pal_t = child as SkillPaletteBlock
-			if (child as SkillPaletteBlock).target_kind == SkillEngine.TARGET_ALL:
-				tgt_pal_t = child as SkillPaletteBlock
+	for child in palette_vbox.find_children("*", "SkillPaletteBlock", true, false):
+		if (child as SkillPaletteBlock).side_kind == SkillEngine.TARGET_SIDE_ENEMY:
+			side_pal_t = child as SkillPaletteBlock
+		if (child as SkillPaletteBlock).target_kind == SkillEngine.TARGET_ALL:
+			tgt_pal_t = child as SkillPaletteBlock
 	if dmg_block_t == null or tgt_slot == null or side_slot_t == null or side_pal_t == null or tgt_pal_t == null:
 		print("TARGET_TEST_FAIL setup (block/slot/palette missing)")
 		get_tree().quit(1)
@@ -631,7 +662,9 @@ func _run_drag_simulation() -> void:
 	print("TARGET_TEST restore=ok")
 
 	# --- INLINE. New inline controls answer to simulated mouse/keyboard ------
-	# Probability spin: click to focus, ctrl+a, type 50 -> effect probability.
+	# (The bare probability spin was removed from the block header for a
+	# cleaner look — probability is edited in the config form and surfaced as
+	# a badge. The inline side-slot click path below is still required.)
 	var inline_ed: Array = _sed.get("effect_data")
 	inline_ed.clear()
 	inline_ed.append({"effect": SkillEngine.EFFECT_DAMAGE, "target": SkillEngine.TARGET_SINGLE, "target_side": SkillEngine.TARGET_SIDE_ENEMY, "value": 3})
@@ -640,38 +673,6 @@ func _run_drag_simulation() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 	var dmg_inline: SkillBlock = _find_body_block(SkillEngine.EFFECT_DAMAGE)
-	var prob_spin: SpinBox = null
-	for child in dmg_inline.get_children():
-		if child is VBoxContainer:
-			for row in (child as VBoxContainer).get_children():
-				if row is HBoxContainer:
-					for item in (row as HBoxContainer).get_children():
-						if item is SpinBox:
-							prob_spin = item as SpinBox
-							break
-				if prob_spin != null:
-					break
-		if prob_spin != null:
-			break
-	if prob_spin == null:
-		print("INLINE_TEST_FAIL no probability spin in header")
-		get_tree().quit(1)
-		return
-	var prob_le: LineEdit = prob_spin.get_line_edit()
-	await _click(prob_le.get_global_rect().get_center())
-	await get_tree().process_frame
-	await _type_key(Key.KEY_A, true)
-	await _type_key(Key.KEY_5)
-	await _type_key(Key.KEY_0)
-	await _type_key(Key.KEY_ENTER)
-	await get_tree().process_frame
-	await get_tree().process_frame
-	inline_ed = _sed.get("effect_data")
-	print("INLINE_TEST probability=", str(inline_ed[0].get("probability", "?")))
-	if int(inline_ed[0].get("probability", -1)) != 50:
-		print("INLINE_TEST_FAIL probability not edited via keyboard")
-		get_tree().quit(1)
-		return
 	# Side slot: click it open, then pick "ally" (2nd entry of the popup menu).
 	var side_slot_in: TargetSlot = _find_target_slot(dmg_inline, "side")
 	if side_slot_in == null:
@@ -742,49 +743,11 @@ func _run_drag_simulation() -> void:
 		get_tree().quit(1)
 		return
 
-	# --- RCOUNT. "最多N个目标" spin edits random_count via mouse/keyboard ----
-	var rc_ed: Array = _sed.get("effect_data")
-	rc_ed.clear()
-	rc_ed.append({"effect": SkillEngine.EFFECT_DAMAGE, "target": SkillEngine.TARGET_SIDES, "target_side": SkillEngine.TARGET_SIDE_ENEMY, "value": 3})
-	_sed.call("_refresh_script")
-	main_scroll.scroll_vertical = 0
-	await get_tree().process_frame
-	await get_tree().process_frame
-	var dmg_rc: SkillBlock = _find_body_block(SkillEngine.EFFECT_DAMAGE)
-	var rc_spin: SpinBox = null
-	for child in dmg_rc.get_children():
-		if child is VBoxContainer:
-			for row in (child as VBoxContainer).get_children():
-				if row is HBoxContainer:
-					var spins: Array = []
-					for item in (row as HBoxContainer).get_children():
-						if item is SpinBox:
-							spins.append(item)
-					if spins.size() >= 2:
-						rc_spin = spins[1] as SpinBox
-						break
-		if rc_spin != null:
-			break
-	if rc_spin == null:
-		print("RCOUNT_TEST_FAIL no random_count spin in header")
-		get_tree().quit(1)
-		return
-	var rc_le: LineEdit = rc_spin.get_line_edit()
-	await _click(rc_le.get_global_rect().get_center())
-	await get_tree().process_frame
-	await _type_key(Key.KEY_A, true)
-	await _type_key(Key.KEY_2)
-	await _type_key(Key.KEY_ENTER)
-	await get_tree().process_frame
-	await get_tree().process_frame
-	rc_ed = _sed.get("effect_data")
-	print("RCOUNT_TEST random_count=", str(rc_ed[0].get("random_count", "?")))
-	if int(rc_ed[0].get("random_count", 0)) != 2:
-		print("RCOUNT_TEST_FAIL random_count not edited")
-		get_tree().quit(1)
-		return
+	# (random_count / probability header spins were removed for a cleaner block
+	# header; they are edited in the config form and surfaced as badges.)
 
-	# --- CHARM. Charm block renders an inline value slot (was form-only) ------
+	# --- CHARM. Charm always pulls the target into hand at 0 cost — its
+	# numeric value is meaningless, so the block must NOT render a value slot.
 	var charm_ed: Array = _sed.get("effect_data")
 	charm_ed.clear()
 	charm_ed.append({"effect": SkillEngine.EFFECT_CHARM, "target": SkillEngine.TARGET_SINGLE, "target_side": SkillEngine.TARGET_SIDE_ENEMY, "value": 1})
@@ -803,8 +766,8 @@ func _run_drag_simulation() -> void:
 			charm_has_value = true
 			break
 	print("CHARM_TEST has_value_slot=", charm_has_value)
-	if not charm_has_value:
-		print("CHARM_TEST_FAIL charm sentence has no inline value slot")
+	if charm_has_value:
+		print("CHARM_TEST_FAIL charm sentence must not show a value slot")
 		get_tree().quit(1)
 		return
 
@@ -818,8 +781,8 @@ func _run_drag_simulation() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 	var logic_pal: SkillPaletteBlock = null
-	for child in palette_vbox.get_children():
-		if child is SkillPaletteBlock and (child as SkillPaletteBlock).logic_kind != "":
+	for child in palette_vbox.find_children("*", "SkillPaletteBlock", true, false):
+		if (child as SkillPaletteBlock).logic_kind != "":
 			logic_pal = child as SkillPaletteBlock
 			break
 	if logic_pal == null:
@@ -916,8 +879,8 @@ func _run_drag_simulation() -> void:
 		get_tree().quit(1)
 		return
 	var bool_pal_k: SkillPaletteBlock = null
-	for child in palette_vbox.get_children():
-		if child is SkillPaletteBlock and (child as SkillPaletteBlock).boolean_kind != "":
+	for child in palette_vbox.find_children("*", "SkillPaletteBlock", true, false):
+		if (child as SkillPaletteBlock).boolean_kind != "":
 			bool_pal_k = child as SkillPaletteBlock
 			break
 	if bool_pal_k == null:
@@ -950,6 +913,21 @@ func _run_drag_simulation() -> void:
 	print("ERROR_TEST repeat0=", banner_text.contains(Locale.t("skill_editor.error_repeat_count")))
 	if not banner_text.contains(Locale.t("skill_editor.error_repeat_count")):
 		print("ERROR_TEST_FAIL repeat 0 not reported")
+		get_tree().quit(1)
+		return
+	# Directed target + 全体 must surface in the red banner (the old gray-out
+	# chip was removed in favour of a compile error).
+	var ie_ed: Array = _sed.get("effect_data")
+	ie_ed.clear()
+	ie_ed.append({"effect": SkillEngine.EFFECT_DAMAGE, "target": SkillEngine.TARGET_SINGLE, "target_side": SkillEngine.TARGET_SIDE_ALL, "value": 1})
+	_sed.call("_refresh_script")
+	await get_tree().process_frame
+	await get_tree().process_frame
+	await get_tree().process_frame
+	banner_text = _find_banner_text()
+	print("ERROR_TEST ineffective=", banner_text.contains(Locale.t("skill_editor.error_target_ineffective")))
+	if not banner_text.contains(Locale.t("skill_editor.error_target_ineffective")):
+		print("ERROR_TEST_FAIL directed+all not reported: ", banner_text)
 		get_tree().quit(1)
 		return
 
@@ -1163,7 +1141,7 @@ func _drag(from_pos: Vector2, to_pos: Vector2) -> void:
 		var p := from_pos.lerp(to_pos, float(i) / float(steps))
 		Input.parse_input_event(_mouse_motion(from_pos, p))
 		await get_tree().process_frame
-	Input.warp_mouse(to_pos)
+	Input.warp_mouse(_win(to_pos))
 	for _i in range(3):
 		await get_tree().process_frame
 	Input.parse_input_event(_mouse_button(to_pos, false))
@@ -1186,7 +1164,7 @@ func _drag_path(path: Array) -> void:
 			Input.parse_input_event(_mouse_motion(prev, p))
 			await get_tree().process_frame
 		prev = target
-	Input.warp_mouse(prev)
+	Input.warp_mouse(_win(prev))
 	for _i in range(3):
 		await get_tree().process_frame
 	Input.parse_input_event(_mouse_button(prev, false))
@@ -1195,7 +1173,7 @@ func _drag_path(path: Array) -> void:
 
 
 func _click(pos: Vector2) -> void:
-	Input.warp_mouse(pos)
+	Input.warp_mouse(_win(pos))
 	for _i in range(2):
 		await get_tree().process_frame
 	Input.parse_input_event(_mouse_button(pos, true))
@@ -1240,9 +1218,12 @@ func _find_target_slot(block: SkillBlock, kind: String) -> TargetSlot:
 
 func _find_banner_text() -> String:
 	var title: String = Locale.t("skill_editor.error_title")
+	var hint: String = Locale.t("skill_editor.error_empty_skill")
 	for c in _sed.find_children("*", "Label", true, false):
-		if c is Label and (c as Label).text.contains(title):
-			return (c as Label).text
+		if c is Label:
+			var t: String = (c as Label).text
+			if t.contains(title) or t == hint:
+				return t
 	return ""
 
 
@@ -1262,9 +1243,12 @@ func _scroll_into_view(scroll: ScrollContainer, control: Control, target_y: floa
 # Scrolls the palette so a specific palette block (content coordinates) is
 # inside the visible viewport.
 func _scroll_palette_to(scroll: ScrollContainer, ctrl: Control) -> void:
-	var y: float = ctrl.position.y
+	# Palette blocks now live inside collapsible section containers, so their
+	# local position.y is relative to the section, not the scroll content.
+	# Derive the content-space offset from global rects instead.
+	var content_y: float = ctrl.get_global_rect().position.y - scroll.get_global_rect().position.y + scroll.scroll_vertical
 	var max_v: float = scroll.get_v_scroll_bar().max_value
-	scroll.scroll_vertical = clampf(y - 80.0, 0.0, max_v)
+	scroll.scroll_vertical = clampf(content_y - 80.0, 0.0, max_v)
 	await get_tree().process_frame
 	await get_tree().process_frame
 
@@ -1362,19 +1346,29 @@ func _dump_block(block: SkillBlock, indent: String) -> void:
 # Input event helpers
 # ============================================
 
+# Canvas -> window transform: a saved high-resolution preset (WindowSizeController)
+# stretches the 1152x648 canvas, so synthetic mouse events (whose positions the
+# GUI hit-tests in window space) must be scaled to match the control rects.
+func _win(p: Vector2) -> Vector2:
+	return get_viewport().get_final_transform() * p
+
+
 func _mouse_button(pos: Vector2, pressed: bool) -> InputEventMouseButton:
 	var ev := InputEventMouseButton.new()
 	ev.button_index = MOUSE_BUTTON_LEFT
 	ev.pressed = pressed
-	ev.position = pos
-	ev.global_position = pos
+	var w := _win(pos)
+	ev.position = w
+	ev.global_position = w
 	return ev
 
 
 func _mouse_motion(from: Vector2, to: Vector2) -> InputEventMouseMotion:
 	var ev := InputEventMouseMotion.new()
-	ev.position = to
-	ev.global_position = to
-	ev.relative = to - from
+	var w := _win(to)
+	var w_from := _win(from)
+	ev.position = w
+	ev.global_position = w
+	ev.relative = w - w_from
 	ev.button_mask = MOUSE_BUTTON_MASK_LEFT
 	return ev

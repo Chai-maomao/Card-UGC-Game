@@ -6,5 +6,12 @@
 .qwen/
 .trae/
 
+# Local MCP servers (not part of the game repo)
+glm-vision-mcp/
+
+# Stray test/log artifacts
+godot_test.log
+*.log
+
 # Server build output
 server-build/

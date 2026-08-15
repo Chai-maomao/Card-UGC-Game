@@ -34,8 +34,30 @@ func _ready() -> void:
 
 	var side_slot: TargetSlot = _find_target_slot(block, "side")
 	var tgt_slot: TargetSlot = _find_target_slot(block, "target")
-	_assert(side_slot != null, "side slot missing")
 	_assert(tgt_slot != null, "target slot missing")
+	_assert(side_slot != null, "side slot missing")
+	if tgt_slot != null:
+		var t_chip: Button = null
+		for sub in tgt_slot.get_children():
+			if sub is Button:
+				t_chip = sub as Button
+				break
+		if t_chip != null:
+			_assert(t_chip.text.contains("选择目标"), "unset target slot should show a pick placeholder (got: %s)" % t_chip.text)
+	# A fresh effect has no target yet: the side chip stays hidden until the
+	# user picks a shape that splits by faction (自身 needs no faction).
+	_assert(side_slot == null or not side_slot.visible, "side slot should be hidden while the target is unset")
+	# Simulate the user picking "单体" (via the slot menu or a palette drop).
+	var ed_init: Array = sed.get("effect_data")
+	ed_init[0]["target"] = SkillEngine.TARGET_SINGLE
+	ed_init[0]["target_side"] = SkillEngine.TARGET_SIDE_ENEMY
+	sed.call("_refresh_script")
+	await get_tree().process_frame
+	block = _find_effect_block(sed, SkillEngine.EFFECT_DAMAGE)
+	side_slot = _find_target_slot(block, "side")
+	tgt_slot = _find_target_slot(block, "target")
+	_assert(side_slot != null and side_slot.visible, "side slot should appear after picking a directed target")
+	_assert(tgt_slot != null, "target slot missing after refresh")
 
 	# --- Sentence order: side slot comes before the target slot --------------
 	var row: Control = block.get("_sentence_row")
@@ -100,6 +122,25 @@ func _ready() -> void:
 	if effs.size() == 1:
 		_assert(str((effs[0] as Dictionary).get("target", "")) == SkillEngine.TARGET_SELF_SIDES, "round-trip target lost")
 		_assert(str((effs[0] as Dictionary).get("target_side", "")) == SkillEngine.TARGET_SIDE_ENEMY, "round-trip target_side lost")
+
+	# --- Directed target + 全体 is now a compile error (no more gray-out) ----
+	var ie_ed: Array = sed.get("effect_data")
+	ie_ed[0]["target"] = SkillEngine.TARGET_SINGLE
+	ie_ed[0]["target_side"] = SkillEngine.TARGET_SIDE_ALL
+	sed.call("_refresh_script")
+	await get_tree().process_frame
+	var errs: Array = sed.call("_collect_errors")
+	var has_ineff := false
+	for e in errs:
+		if str(e) == Locale.t("skill_editor.error_target_ineffective"):
+			has_ineff = true
+	_assert(has_ineff, "single+all must be reported as a compile error (got: %s)" % str(errs))
+	# The save button must refuse: the card draft stays untouched (so the
+	# invalid skill can never be written into card_library.json).
+	var draft_before: Dictionary = PlayerData.card_draft["skill2"]
+	sed.call("_on_save_pressed")
+	await get_tree().process_frame
+	_assert(PlayerData.card_draft["skill2"] == draft_before, "save must not write an invalid skill into the draft")
 
 	_finish()
 

@@ -88,6 +88,20 @@ func _apply_style(bg: Color, radius: int = 6) -> void:
 	add_theme_stylebox_override("panel", style)
 
 
+# Puzzle "socket" cue: a thicker, darker bottom edge suggests the notch where
+# the next block plugs in, so stacked blocks read as one connected script
+# instead of loose cards. Blocks that stack below keep the notch; the event
+# hat (top of the stack) and the stop block do not.
+func _apply_socket_notch() -> void:
+	var current: StyleBox = get_theme_stylebox("panel")
+	if not (current is StyleBoxFlat):
+		return
+	var st: StyleBoxFlat = (current as StyleBoxFlat).duplicate()
+	st.border_width_bottom = 4
+	st.border_color = st.border_color.darkened(0.18)
+	add_theme_stylebox_override("panel", st)
+
+
 func _make_label(text: String, size: int = 13) -> Label:
 	var lbl := Label.new()
 	lbl.text = text
@@ -102,16 +116,54 @@ func _make_label(text: String, size: int = 13) -> Label:
 func _make_icon_button(text: String) -> Button:
 	var btn := Button.new()
 	btn.text = text
-	btn.add_theme_font_size_override("font_size", 12)
-	btn.custom_minimum_size = Vector2(30, 26)
-	btn.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
+	btn.add_theme_font_size_override("font_size", 11)
+	btn.custom_minimum_size = Vector2(30, 24)
+	btn.add_theme_color_override("font_color", Color(1, 1, 1, 0.92))
 	btn.add_theme_color_override("font_hover_color", Color.WHITE)
-	btn.add_theme_stylebox_override("normal", StyleBoxEmpty.new())
-	btn.add_theme_stylebox_override("hover", StyleBoxEmpty.new())
-	btn.add_theme_stylebox_override("pressed", StyleBoxEmpty.new())
+	btn.add_theme_color_override("font_pressed_color", Color(0.9, 0.9, 0.9))
+	# Pill buttons: faint translucent capsule with a visible edge, so the row
+	# of CJK action labels reads as clickable controls (plain text was
+	# indistinguishable from the block title).
+	var normal_st := StyleBoxFlat.new()
+	normal_st.bg_color = Color(1, 1, 1, 0.13)
+	normal_st.border_color = Color(1, 1, 1, 0.30)
+	normal_st.set_border_width_all(1)
+	normal_st.set_corner_radius_all(9)
+	normal_st.content_margin_left = 6
+	normal_st.content_margin_right = 6
+	normal_st.content_margin_top = 2
+	normal_st.content_margin_bottom = 2
+	btn.add_theme_stylebox_override("normal", normal_st)
+	var hover_st: StyleBoxFlat = normal_st.duplicate()
+	hover_st.bg_color = Color(1, 1, 1, 0.30)
+	btn.add_theme_stylebox_override("hover", hover_st)
+	var pressed_st: StyleBoxFlat = normal_st.duplicate()
+	pressed_st.bg_color = Color(1, 1, 1, 0.07)
+	btn.add_theme_stylebox_override("pressed", pressed_st)
 	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	btn.tooltip_text = text
 	return btn
+
+
+# Inserts a small order badge ("1.") at the front of the block header so the
+# top-to-bottom execution order of stacked effects is readable at a glance.
+func set_order(n: int) -> void:
+	var target: Node = get_child(0) if get_child_count() > 0 else null
+	if target is VBoxContainer:
+		for child in (target as VBoxContainer).get_children():
+			if child is HBoxContainer:
+				target = child
+				break
+	if not (target is HBoxContainer):
+		return
+	var badge := Label.new()
+	badge.text = "%d." % n
+	badge.add_theme_font_size_override("font_size", 12)
+	badge.add_theme_color_override("font_color", Color(1, 1, 1, 0.72))
+	badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	badge.custom_minimum_size = Vector2(18, 0)
+	(target as HBoxContainer).add_child(badge)
+	(target as HBoxContainer).move_child(badge, 0)
 
 
 # Action row shared by effect / if / stop blocks. Uses plain CJK labels —
@@ -152,7 +204,7 @@ func _make_slot(parent: Node) -> VBoxContainer:
 	slot.custom_minimum_size = Vector2(0, 30)
 	parent.add_child(slot)
 	var inner := VBoxContainer.new()
-	inner.add_theme_constant_override("separation", 4)
+	inner.add_theme_constant_override("separation", 2)
 	inner.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	inner.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	slot.add_child(inner)
@@ -189,6 +241,7 @@ func setup_effect(eff: Dictionary, path: Array) -> void:
 	var effect_id: String = eff.get("effect", "")
 	var category: String = str(SkillRegistry.effect_meta(effect_id).get("category", "utility"))
 	_apply_style(category_color(category))
+	_apply_socket_notch()
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 	var box := VBoxContainer.new()
@@ -200,16 +253,9 @@ func setup_effect(eff: Dictionary, path: Array) -> void:
 	var title := _make_label(Locale.term("effect", effect_id), 13)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	head.add_child(title)
-	head.add_child(_make_probability_spin(eff))
-	# Effects whose sentence already carries a draw/"最多N个" spin (the
-	# view_*_draw templates) must not get a duplicate random_count control.
-	var has_draw := false
-	for t in _TextFormatter.effect_sentence_tokens(eff):
-		if t.get("type", "") == "draw":
-			has_draw = true
-			break
-	if not has_draw:
-		head.add_child(_make_random_count_spin(eff))
+	# Keep the header clean: probability / max-targets are optional tuning
+	# fields (edited in the config form) and non-default values surface as
+	# badges below the sentence, so no bare spinboxes clutter the header row.
 	_build_action_buttons(head)
 	box.add_child(head)
 
@@ -258,6 +304,20 @@ func _build_sentence_row(eff: Dictionary) -> HBoxContainer:
 				tgt_slot.setup(eff, "target")
 				tgt_slot.changed.connect(_on_param_changed)
 				row.add_child(tgt_slot)
+				# The side chip only appears for targets that actually split by
+				# faction (单体/目标+相邻/全部/性别); self / self+adjacent targets
+				# have no faction dimension, and an unset target shows just the
+				# empty target socket.
+				var _sync_side := func():
+					var tgt: String = str(eff.get("target", ""))
+					var needs_side: bool = tgt in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES,
+							SkillEngine.TARGET_ALL, SkillEngine.TARGET_MALE,
+							SkillEngine.TARGET_FEMALE, SkillEngine.TARGET_NONHUMAN]
+					side_slot.visible = needs_side
+					if tgt in [SkillEngine.TARGET_SELF, SkillEngine.TARGET_SELF_SIDES]:
+						eff["target_side"] = SkillEngine.TARGET_SIDE_ALL
+				_sync_side.call()
+				tgt_slot.changed.connect(_sync_side)
 			"value":
 				# Scratch-style: the value slot accepts a variable reporter
 				# oval or a nested math-expression reporter.
@@ -366,46 +426,14 @@ func _make_number_spin(eff: Dictionary, kind: String) -> SpinBox:
 	return spin
 
 
-# Inline per-effect trigger probability (0-100%). Rendered in the block
-# header so any effect can be gated by a chance without opening the config
-# form (the form keeps the same field for parity).
-func _make_probability_spin(eff: Dictionary) -> SpinBox:
-	var spin := SpinBox.new()
-	spin.add_theme_stylebox_override("normal", _make_param_style())
-	spin.add_theme_stylebox_override("hover", _make_param_style())
-	spin.add_theme_font_size_override("font_size", 12)
-	spin.custom_minimum_size = Vector2(52, 24)
-	spin.min_value = 0.0
-	spin.max_value = 100.0
-	spin.value = float(int(eff.get("probability", 100)))
-	spin.tooltip_text = Locale.t("skill_editor.probability")
-	spin.value_changed.connect(func(v: float):
-		_effect["probability"] = int(v)
-		_on_param_changed()
-	)
-	_set_param_pass(spin)
-	return spin
+# Inline per-effect trigger probability (0-100%) is tuned in the config form
+# (SkillEffectForm); non-default values surface as badges. No inline control
+# is rendered in the block header to keep it clean.
 
 
-# Inline "最多N个目标" (random_count): when a multi-target effect resolves, the
-# engine picks at most this many targets at random. 0 = no limit.
-func _make_random_count_spin(eff: Dictionary) -> SpinBox:
-	var spin := SpinBox.new()
-	spin.add_theme_stylebox_override("normal", _make_param_style())
-	spin.add_theme_stylebox_override("hover", _make_param_style())
-	spin.add_theme_font_size_override("font_size", 12)
-	spin.custom_minimum_size = Vector2(44, 24)
-	spin.min_value = 0.0
-	spin.max_value = 9.0
-	spin.value = float(int(eff.get("random_count", 0)))
-	spin.tooltip_text = Locale.t("skill_editor.random_count")
-	spin.value_changed.connect(func(v: float):
-		_effect["random_count"] = int(v)
-		_on_param_changed()
-	)
-	_set_param_pass(spin)
-	return spin
-
+# ============================================
+# Inline parameter edits
+# ============================================
 
 func _on_param_changed() -> void:
 	# Inline parameter edits mutate the shared effect dict directly. The
@@ -429,6 +457,7 @@ func setup_if_else(eff: Dictionary, path: Array) -> void:
 	_effect = eff
 	has_else = str(eff.get("effect", "")) == SkillEngine.EFFECT_IF_ELSE
 	_apply_style(control_color(), 8)
+	_apply_socket_notch()
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 	var outer := VBoxContainer.new()
@@ -438,20 +467,29 @@ func setup_if_else(eff: Dictionary, path: Array) -> void:
 
 	var head := HBoxContainer.new()
 	head.add_theme_constant_override("separation", 4)
-	head.add_child(_make_label(Locale.t("skill_editor.if_word"), 13))
+	# The yellow control fill is light — dark text reads far better than white.
+	var if_lbl := _make_label(Locale.t("skill_editor.if_word"), 13)
+	if_lbl.add_theme_color_override("font_color", Color(0.16, 0.12, 0.04))
+	head.add_child(if_lbl)
 	cond_slot = _make_cond_slot()
 	head.add_child(cond_slot)
-	head.add_child(_make_label(Locale.t("skill_editor.then_word"), 13))
+	var then_lbl := _make_label(Locale.t("skill_editor.then_word"), 13)
+	then_lbl.add_theme_color_override("font_color", Color(0.16, 0.12, 0.04))
+	head.add_child(then_lbl)
 	# No edit button: the condition is edited inline (Scratch-style boolean
 	# block with number slots), not via a legacy condition popup.
 	_build_action_buttons(head, false)
 	outer.add_child(head)
 
-	outer.add_child(_make_label(Locale.t("skill_editor.satisfy_label"), 12))
+	var satisfy_lbl := _make_label(Locale.t("skill_editor.satisfy_label"), 12)
+	satisfy_lbl.add_theme_color_override("font_color", Color(0.16, 0.12, 0.04))
+	outer.add_child(satisfy_lbl)
 	then_container = _make_slot(outer)
 
 	if has_else:
-		outer.add_child(_make_label(Locale.t("skill_editor.else_label"), 12))
+		var else_lbl := _make_label(Locale.t("skill_editor.else_label"), 12)
+		else_lbl.add_theme_color_override("font_color", Color(0.16, 0.12, 0.04))
+		outer.add_child(else_lbl)
 		else_container = _make_slot(outer)
 
 
@@ -461,6 +499,7 @@ func setup_repeat_block(eff: Dictionary, path: Array) -> void:
 	effect_path = path
 	_effect = eff
 	_apply_style(repeat_color(), 8)
+	_apply_socket_notch()
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 	var outer := VBoxContainer.new()
