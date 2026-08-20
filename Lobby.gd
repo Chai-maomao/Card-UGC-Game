@@ -374,6 +374,9 @@ func _on_lobby_response_create(data: Dictionary):
 	elif status == "no_ports":
 		status_label.text = Locale.t("lobby.server_full")
 		_reset_lobby_buttons()
+	elif status == "protocol_mismatch":
+		status_label.text = Locale.t("lobby.protocol_mismatch", [AppVersion.PROTOCOL_VERSION, int(data.get("remote_protocol", 0))])
+		_reset_lobby_buttons()
 	else:
 		status_label.text = Locale.t("lobby.unknown_response", [status])
 		_reset_lobby_buttons()
@@ -434,6 +437,9 @@ func _on_lobby_response_join(data: Dictionary):
 	elif status == "invalid_code":
 		status_label.text = Locale.t("lobby.server_rejected_code")
 		_reset_lobby_buttons()
+	elif status == "protocol_mismatch":
+		status_label.text = Locale.t("lobby.protocol_mismatch", [AppVersion.PROTOCOL_VERSION, int(data.get("remote_protocol", 0))])
+		_reset_lobby_buttons()
 	else:
 		status_label.text = Locale.t("lobby.unknown_response", [status])
 		_reset_lobby_buttons()
@@ -459,6 +465,12 @@ func _ignore_lobby_response(_data: Dictionary):
 
 
 func _on_lobby_status_response(data: Dictionary):
+	if str(data.get("status", "")) == "protocol_mismatch":
+		status_label.text = Locale.t("lobby.protocol_mismatch", [AppVersion.PROTOCOL_VERSION, int(data.get("remote_protocol", 0))])
+		_pending_lobby_action = ""
+		NetworkManager.disconnect_from_lobby()
+		_reset_lobby_buttons()
+		return
 	var rooms: int = int(data.get("rooms", 0))
 	var port_start: int = int(data.get("port_start", 0))
 	var port_end: int = int(data.get("port_end", 0))

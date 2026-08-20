@@ -36,6 +36,23 @@ func _ready() -> void:
 		get_tree().quit(1)
 		return
 
+	# Long skill names/effect summaries must wrap inside the form instead of
+	# widening the ScrollContainer's child and distorting the editor homepage.
+	PlayerData.card_draft["skill2"]["skill_name"] = "超长技能说明".repeat(80)
+	editor.call("_update_skill_labels")
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var form_scroll: ScrollContainer = editor.get_node("Panel/MarginContainer/ScrollContainer")
+	var form_vbox: VBoxContainer = form_scroll.get_node("VBoxContainer")
+	if form_vbox.size.x > form_scroll.size.x + 1.0 or summary.size.x > form_scroll.size.x + 1.0:
+		push_error("Long skill summary stretched editor width (scroll=%.1f vbox=%.1f summary=%.1f)" % [form_scroll.size.x, form_vbox.size.x, summary.size.x])
+		get_tree().quit(1)
+		return
+	if summary.max_lines_visible != 3 or summary.tooltip_text != summary.text:
+		push_error("Long skill summary did not keep three-line ellipsis/full tooltip behavior")
+		get_tree().quit(1)
+		return
+
 	# --- SkillEditor renders a nested if/else + stop block tree without errors ---
 	PlayerData.card_draft["skill2"]["effects"] = [
 		{

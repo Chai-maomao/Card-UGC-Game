@@ -170,6 +170,13 @@ func _handle_lobby_request(sender_id: int, json_str: String) -> void:
 
 	var action: String = str(data.get("action", ""))
 	var code: String = str(data.get("code", ""))
+	var protocol := int(data.get("protocol", 0))
+	if protocol != AppVersion.PROTOCOL_VERSION:
+		NetworkManager.send_lobby_response(sender_id, JSON.stringify({
+			"status": "protocol_mismatch", "protocol": AppVersion.PROTOCOL_VERSION,
+		}))
+		print("[SERVER] Protocol mismatch from peer %d: client=%d server=%d" % [sender_id, protocol, AppVersion.PROTOCOL_VERSION])
+		return
 
 	if action == "status":
 		NetworkManager.send_lobby_response(sender_id, JSON.stringify({
@@ -179,6 +186,7 @@ func _handle_lobby_request(sender_id: int, json_str: String) -> void:
 			"port_start": game_port_start,
 			"port_end": game_port_end,
 			"card_art": allow_card_art,
+			"protocol": AppVersion.PROTOCOL_VERSION,
 		}))
 		print("[SERVER] Status requested by peer %d" % sender_id)
 
@@ -213,6 +221,7 @@ func _handle_lobby_request(sender_id: int, json_str: String) -> void:
 					NetworkManager.send_lobby_response(sender_id, JSON.stringify({
 						"status": "ok", "port": port, "player": 1,
 						"reconnect_token": p1_token, "card_art": allow_card_art,
+						"protocol": AppVersion.PROTOCOL_VERSION,
 					}))
 					print("[SERVER] Room '%s' created on port %d (pid %d)" % [code, port, pid])
 
@@ -234,6 +243,7 @@ func _handle_lobby_request(sender_id: int, json_str: String) -> void:
 			NetworkManager.send_lobby_response(sender_id, JSON.stringify({
 				"status": "ok", "port": room["port"], "player": 2,
 				"reconnect_token": str(tokens.get(2, "")), "card_art": allow_card_art,
+				"protocol": AppVersion.PROTOCOL_VERSION,
 			}))
 			print("[SERVER] Peer %d joining room '%s' on port %d (%d/2)" % [sender_id, code, room["port"], room["players"]])
 
@@ -259,6 +269,7 @@ func _handle_lobby_request(sender_id: int, json_str: String) -> void:
 		NetworkManager.send_lobby_response(sender_id, JSON.stringify({
 			"status": "ok", "port": room["port"], "player": requested_player,
 			"reconnect_token": reconnect_token, "card_art": allow_card_art,
+			"protocol": AppVersion.PROTOCOL_VERSION,
 		}))
 		print("[SERVER] Reconnect approved for room '%s' P%d" % [code, requested_player])
 

@@ -9,6 +9,7 @@ const UITheme = preload("res://UITheme.gd")
 const _TargetResolver = preload("res://SkillTargetResolver.gd")
 const _TextFormatter = preload("res://SkillTextFormatter.gd")
 const _BalanceEvaluator = preload("res://BalanceEvaluator.gd")
+const _UsabilityAnalyzer = preload("res://CardUsabilityAnalyzer.gd")
 
 var card_ui_scene = preload("res://CardUI.tscn")
 var pending_save_card: CardData = null
@@ -34,6 +35,7 @@ var pending_save_popup_layer: CanvasLayer = null
 @onready var gender_select = $Panel/MarginContainer/ScrollContainer/VBoxContainer/GenderSelect
 @onready var balance_label = $Panel/MarginContainer/ScrollContainer/VBoxContainer/BalanceLabel
 @onready var balance_summary = $Panel/MarginContainer/ScrollContainer/VBoxContainer/BalanceSummary
+@onready var usability_summary = $Panel/MarginContainer/ScrollContainer/VBoxContainer/UsabilitySummary
 @onready var art_path_label = $Panel/MarginContainer/ScrollContainer/VBoxContainer/ArtRow/ArtPathLabel
 @onready var art_dialog = $ArtFileDialog
 @onready var card_preview_panel = $CardPreviewPanel
@@ -157,8 +159,8 @@ func _apply_theme() -> void:
 	UITheme.apply_app_background($Panel)
 	UITheme.apply_panel($Panel, "dark")
 	UITheme.apply_title(title_label, max(18, int(22 * _ui_scale())))
-	for label in [art_label, name_label, cost_label, hp_label, atk_label, gender_label, balance_label, balance_summary, skill1_label, skill1_summary, skill2_label, skill2_summary, skill3_label, skill3_summary]:
-		UITheme.apply_label(label, label == balance_summary or label == skill1_summary or label == skill2_summary or label == skill3_summary)
+	for label in [art_label, name_label, cost_label, hp_label, atk_label, gender_label, balance_label, balance_summary, usability_summary, skill1_label, skill1_summary, skill2_label, skill2_summary, skill3_label, skill3_summary]:
+		UITheme.apply_label(label, label == balance_summary or label == usability_summary or label == skill1_summary or label == skill2_summary or label == skill3_summary)
 	for input in [name_input, cost_input, hp_input, atk_input, gender_select]:
 		UITheme.apply_input(input)
 	for btn in [template_button, browse_button, clear_art_button, edit_skill1_btn, edit_skill2_btn, edit_skill3_btn, save_button, back_button]:
@@ -172,11 +174,14 @@ func _apply_theme() -> void:
 
 func _ready():
 	_apply_theme()
+	_configure_skill_summaries()
 	_setup_gender_dropdown()
 	var is_fresh_entry: bool = PlayerData.card_draft.is_empty()
 
 	if is_fresh_entry:
-		if PlayerData.editing_deck_id != "" and PlayerData.editing_instance_id != "":
+		if PlayerData.has_card_draft_recovery() and PlayerData.restore_card_draft_recovery():
+			pass
+		elif PlayerData.editing_deck_id != "" and PlayerData.editing_instance_id != "":
 			var card: CardData = PlayerData.find_deck_card(PlayerData.editing_deck_id, PlayerData.editing_instance_id)
 			if card != null:
 				PlayerData.load_card_to_draft(card)
@@ -192,6 +197,7 @@ func _ready():
 	_restore_form_from_draft()
 	_update_skill_labels()
 	_update_balance_summary()
+	_update_usability_summary()
 	_refresh_card_preview()
 	_connect_live_balance_updates()
 	_apply_responsive_layout()
@@ -241,6 +247,7 @@ func _save_form_to_draft():
 	PlayerData.card_draft["atk"] = int(atk_input.value)
 	var genders: Array = ["male", "female", "nonhuman"]
 	PlayerData.card_draft["gender"] = genders[gender_select.selected]
+	PlayerData.queue_card_draft_recovery()
 
 
 func _refresh_card_preview() -> void:
@@ -262,7 +269,26 @@ func _connect_live_balance_updates() -> void:
 func _update_balance_from_form() -> void:
 	_save_form_to_draft()
 	_update_balance_summary()
+	_update_usability_summary()
 	_refresh_card_preview()
+
+
+func _update_usability_summary() -> void:
+	var result := _UsabilityAnalyzer.analyze(PlayerData.card_draft)
+	var issues: Array = result.get("issues", [])
+	if issues.is_empty():
+		usability_summary.text = Locale.t("usability.ready")
+		usability_summary.add_theme_color_override("font_color", Color(0.45, 0.92, 0.62))
+		return
+	var lines: Array = []
+	var has_error := false
+	for issue in issues:
+		var severity := str(issue.get("severity", "info"))
+		has_error = has_error or severity == "error"
+		var marker := "!" if severity == "error" else ("△" if severity == "warning" else "·")
+		lines.append("%s %s" % [marker, Locale.t(str(issue.get("key", "")), issue.get("args", []))])
+	usability_summary.text = "\n".join(lines)
+	usability_summary.add_theme_color_override("font_color", Color(1.0, 0.45, 0.42) if has_error else Color(0.95, 0.78, 0.42))
 
 
 func _update_balance_summary() -> void:
@@ -337,18 +363,31 @@ func _on_art_file_selected(path: String):
 		return
 
 	PlayerData.card_draft["art_path"] = "user://arts/" + fname
+	PlayerData.queue_card_draft_recovery()
 	art_path_label.text = fname
 	print("Art saved: %s" % dest)
 
 
 func _on_clear_art_pressed():
 	PlayerData.card_draft["art_path"] = ""
+	PlayerData.queue_card_draft_recovery()
 	art_path_label.text = Locale.t("editor.none")
 
 
 # ============================================
 # Skill preview
 # ============================================
+
+func _configure_skill_summaries() -> void:
+	for summary in [skill1_summary, skill2_summary, skill3_summary]:
+		if summary == null:
+			continue
+		summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		summary.custom_minimum_size.x = 0.0
+		summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		summary.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		summary.max_lines_visible = 3
+
 
 func _update_skill_labels():
 	var card_type: String = PlayerData.card_draft.get("card_type", "minion")
@@ -357,6 +396,9 @@ func _update_skill_labels():
 	skill1_summary.text = _format_skill_short(PlayerData.card_draft.get("skill1", {}))
 	skill2_summary.text = _format_skill_short(PlayerData.card_draft.get("skill2", {}))
 	skill3_summary.text = _format_skill_short(PlayerData.card_draft.get("skill3", {}))
+	skill1_summary.tooltip_text = skill1_summary.text
+	skill2_summary.tooltip_text = skill2_summary.text
+	skill3_summary.tooltip_text = skill3_summary.text
 	var has_skill2: bool = not PlayerData.card_draft.get("skill2", {}).is_empty()
 	var has_skill3: bool = not PlayerData.card_draft.get("skill3", {}).is_empty()
 	# Spell cards only have one skill; parasite cards currently expose one passive skill slot.
@@ -469,9 +511,11 @@ func _apply_template(template_id: String) -> void:
 	if art_path != "":
 		draft["art_path"] = art_path
 	PlayerData.card_draft = draft
+	PlayerData.queue_card_draft_recovery()
 	_restore_form_from_draft()
 	_update_skill_labels()
 	_update_balance_summary()
+	_update_usability_summary()
 
 
 func _template_draft(template_id: String) -> Dictionary:
@@ -1004,6 +1048,7 @@ func _show_after_save_popup(saved_card: CardData) -> void:
 		PlayerData.editing_deck_id = ""
 		PlayerData.editing_instance_id = ""
 		PlayerData.card_draft.clear()
+		PlayerData.clear_card_draft_recovery()
 		PlayerData.continue_editing_flag = true
 		PlayerData.card_editor_return_scene = "res://MainMenu.tscn"
 		PlayerData.return_to_deck_id = ""
@@ -1025,6 +1070,7 @@ func _return_after_save() -> void:
 	PlayerData.editing_deck_id = ""
 	PlayerData.editing_instance_id = ""
 	PlayerData.card_draft.clear()
+	PlayerData.clear_card_draft_recovery()
 	var return_scene := PlayerData.card_editor_return_scene
 	PlayerData.card_editor_return_scene = "res://MainMenu.tscn"
 	PlayerData.scene_history.clear()  # Reset navigation history when returning from editor
@@ -1032,16 +1078,13 @@ func _return_after_save() -> void:
 
 
 func _start_solo_test(saved_card: CardData) -> void:
+	PlayerData.begin_card_playtest(saved_card)
 	PlayerData.battle_mode = "practice"
 	PlayerData.battle_deck.clear()
 	PlayerData.battle_deck.append(saved_card.duplicate_card())
 	PlayerData.opponent_battle_deck.clear()
 	for card in CardDatabase.starter_library():
 		PlayerData.opponent_battle_deck.append(card.duplicate_card())
-	PlayerData.editing_index = -1
-	PlayerData.editing_deck_id = ""
-	PlayerData.editing_instance_id = ""
-	PlayerData.card_draft.clear()
 	UIMotion.change_scene("res://Main.tscn")
 
 
@@ -1054,6 +1097,7 @@ func _on_back_button_pressed():
 	PlayerData.editing_deck_id = ""
 	PlayerData.editing_instance_id = ""
 	PlayerData.card_draft.clear()
+	PlayerData.clear_card_draft_recovery()
 	var return_scene := PlayerData.card_editor_return_scene
 	PlayerData.card_editor_return_scene = "res://MainMenu.tscn"
 	UIMotion.change_scene(return_scene)

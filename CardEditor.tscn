@@ -126,6 +126,11 @@ layout_mode = 2
 text = "-"
 autowrap_mode = 3
 
+[node name="UsabilitySummary" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
+layout_mode = 2
+text = "-"
+autowrap_mode = 3
+
 [node name="Separator1" type="HSeparator" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9360010]
 layout_mode = 2
 
@@ -135,7 +140,11 @@ text = "Skill 1:"
 
 [node name="Skill1Summary" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9360012]
 layout_mode = 2
+size_flags_horizontal = 3
 text = "(empty)"
+autowrap_mode = 3
+max_lines_visible = 3
+text_overrun_behavior = 3
 
 [node name="EditSkill1Button" type="Button" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9360013]
 layout_mode = 2
@@ -150,7 +159,11 @@ text = "Skill 2:"
 
 [node name="Skill2Summary" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9360022]
 layout_mode = 2
+size_flags_horizontal = 3
 text = "(empty)"
+autowrap_mode = 3
+max_lines_visible = 3
+text_overrun_behavior = 3
 
 [node name="EditSkill2Button" type="Button" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9360023]
 layout_mode = 2
@@ -162,7 +175,11 @@ text = "Skill 3:"
 
 [node name="Skill3Summary" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9360025]
 layout_mode = 2
+size_flags_horizontal = 3
 text = "(empty)"
+autowrap_mode = 3
+max_lines_visible = 3
+text_overrun_behavior = 3
 
 [node name="EditSkill3Button" type="Button" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9360026]
 layout_mode = 2

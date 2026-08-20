@@ -17,6 +17,8 @@ const WAITING_OPPONENT_TIMEOUT := 60.0 * 60.0
 const RECONNECT_TIMEOUT := 60.0 * 60.0
 const EMPTY_SHUTDOWN_DELAY := 60.0
 const AUTH_TIMEOUT := 10.0
+const MAX_AUTH_ATTEMPTS := 5
+const MAX_SNAPSHOT_BYTES := 2 * 1024 * 1024
 
 enum RoomState {
 	CREATED,
@@ -40,6 +42,10 @@ var _shutting_down: bool = false
 var _auth_deadlines: Dictionary = {}
 var _peer_to_player: Dictionary = {}
 var _player_to_peer: Dictionary = {}
+var _auth_attempts: Dictionary = {}
+var _rate_windows: Dictionary = {}
+var _latest_match_state: Dictionary = {}
+var _latest_revision: int = -1
 
 
 func _ready() -> void:
@@ -117,6 +123,8 @@ func _start() -> bool:
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 	NetworkManager.room_auth_handler = Callable(self, "_handle_room_auth")
+	NetworkManager.authority_state_handler = Callable(self, "_handle_authority_state")
+	NetworkManager.room_message_guard = Callable(self, "_guard_room_message")
 	print("[ROOM %s] Relay listening on port %d" % [room_code, room_port])
 	return true
 
@@ -126,7 +134,17 @@ func _on_peer_connected(id: int) -> void:
 	print("[ROOM %s] Peer %d connected; awaiting authentication" % [room_code, id])
 
 
-func _handle_room_auth(sender_id: int, requested_code: String, requested_player: int, token: String) -> void:
+func _handle_room_auth(sender_id: int, requested_code: String, requested_player: int, token: String, protocol_version: int) -> void:
+	_auth_attempts[sender_id] = int(_auth_attempts.get(sender_id, 0)) + 1
+	if int(_auth_attempts[sender_id]) > MAX_AUTH_ATTEMPTS:
+		print("[SECURITY room=%s peer=%d kind=auth attempts=%d action=disconnect]" % [room_code, sender_id, int(_auth_attempts[sender_id])])
+		call_deferred("_disconnect_rejected_peer", sender_id)
+		return
+	if protocol_version != AppVersion.PROTOCOL_VERSION:
+		NetworkManager.send_room_auth_result(sender_id, false, requested_player, "protocol_mismatch", false)
+		print("[SECURITY room=%s peer=%d kind=protocol client=%d server=%d]" % [room_code, sender_id, protocol_version, AppVersion.PROTOCOL_VERSION])
+		call_deferred("_disconnect_rejected_peer", sender_id)
+		return
 	var expected_token := ""
 	if requested_player == 1:
 		expected_token = p1_token
@@ -157,6 +175,8 @@ func _handle_room_auth(sender_id: int, requested_code: String, requested_player:
 	_player_to_peer[requested_player] = sender_id
 	player_count = _peer_to_player.size()
 	NetworkManager.send_room_auth_result(sender_id, true, requested_player, "", was_reconnect)
+	if was_reconnect and not _latest_match_state.is_empty():
+		NetworkManager.send_server_match_snapshot(sender_id, _latest_match_state)
 	print("[ROOM %s] Peer %d authenticated as P%d (%d/2)" % [room_code, sender_id, requested_player, player_count])
 	_update_lifecycle_after_player_change()
 	if player_count >= 2:
@@ -172,6 +192,8 @@ func _disconnect_rejected_peer(peer_id: int) -> void:
 
 func _on_peer_disconnected(id: int) -> void:
 	_auth_deadlines.erase(id)
+	_auth_attempts.erase(id)
+	_rate_windows.erase(id)
 	if not _peer_to_player.has(id):
 		print("[ROOM %s] Unauthenticated peer %d disconnected" % [room_code, id])
 		return
@@ -199,3 +221,42 @@ func _update_lifecycle_after_player_change() -> void:
 
 func _shutdown_if_empty() -> void:
 	_enter_state(RoomState.EMPTY, EMPTY_SHUTDOWN_DELAY)
+
+
+func _handle_authority_state(sender_id: int, state: Dictionary) -> void:
+	if int(_peer_to_player.get(sender_id, 0)) != 1:
+		print("[SECURITY room=%s peer=%d kind=authority_state action=rejected_non_authority]" % [room_code, sender_id])
+		return
+	var encoded := JSON.stringify(state)
+	if encoded.length() > MAX_SNAPSHOT_BYTES:
+		print("[SECURITY room=%s peer=%d kind=authority_state bytes=%d action=rejected_oversize]" % [room_code, sender_id, encoded.length()])
+		return
+	if not state.has("player_field") or not state.has("player2_field") or not state.has("state_revision"):
+		return
+	var revision := int(state.get("state_revision", -1))
+	if revision < _latest_revision:
+		return
+	_latest_revision = revision
+	_latest_match_state = state.duplicate(true)
+	print("[ROOM %s] Stored authoritative snapshot revision %d" % [room_code, revision])
+
+
+func _guard_room_message(sender_id: int, kind: String) -> bool:
+	if not _peer_to_player.has(sender_id):
+		return false
+	var now := _now()
+	var entry: Dictionary = _rate_windows.get(sender_id, {"started": now, "intent": 0, "resume": 0, "authority_state": 0})
+	if now - float(entry.get("started", now)) >= 1.0:
+		entry = {"started": now, "intent": 0, "resume": 0, "authority_state": 0}
+	entry[kind] = int(entry.get(kind, 0)) + 1
+	_rate_windows[sender_id] = entry
+	var limit := 60
+	if kind == "resume":
+		limit = 20
+	elif kind == "authority_state":
+		limit = 12
+	if int(entry[kind]) <= limit:
+		return true
+	print("[SECURITY room=%s peer=%d player=%d kind=%s rate=%d limit=%d action=disconnect]" % [room_code, sender_id, int(_peer_to_player.get(sender_id, 0)), kind, int(entry[kind]), limit])
+	call_deferred("_disconnect_rejected_peer", sender_id)
+	return false

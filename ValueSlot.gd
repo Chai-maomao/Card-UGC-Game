@@ -28,6 +28,9 @@ var max_value: float = 999.0
 var min_value: float = 0.0
 
 var _mode: String = "num"       # "num" / "var" / "expr"
+var _drop_highlight: bool = false
+var _dragging: bool = false
+var _motion_tween: Tween
 
 
 func setup(p_data: Dictionary, p_num_field: String, p_var_field: String,
@@ -48,10 +51,12 @@ func setup(p_data: Dictionary, p_num_field: String, p_var_field: String,
 
 func _apply_slot_style() -> void:
 	var st := StyleBoxFlat.new()
-	st.bg_color = Color(0.28, 0.60, 0.56, 0.30)
-	st.border_color = Color(0.28, 0.60, 0.56, 0.85)
-	st.set_border_width_all(1)
+	var tint := Color(0.08, 0.48, 0.48)
+	st.bg_color = Color(tint.r, tint.g, tint.b, 0.54 if _drop_highlight else 0.30)
+	st.border_color = Color(0.50, 0.95, 0.88, 1.0) if _drop_highlight else Color(tint.r, tint.g, tint.b, 0.92)
+	st.set_border_width_all(2 if _drop_highlight else 1)
 	st.set_corner_radius_all(10)
+	st.shadow_size = 0
 	st.content_margin_left = 6
 	st.content_margin_right = 6
 	st.content_margin_top = 2
@@ -318,11 +323,15 @@ func _slot_get_drag_data(_pos: Vector2):
 		if var_id == "":
 			return null
 		_set_drag_preview_label(Locale.term("value_var", var_id))
+		_dragging = true
+		_animate_slot(Vector2(0.94, 0.94), Color(0.72, 0.76, 0.84, 0.48), 0.07)
 		return {"type": "var_block", "var_id": var_id, "from_slot": self}
 	if _mode == "expr":
 		var inner := _expr_inner()
 		var op: String = str(inner.get("op", "+"))
 		_set_drag_preview_label(_op_label(op))
+		_dragging = true
+		_animate_slot(Vector2(0.94, 0.94), Color(0.72, 0.76, 0.84, 0.48), 0.07)
 		return {"type": "expr_block", "expr_kind": op, "from_slot": self}
 	return null
 
@@ -333,8 +342,9 @@ func _set_drag_preview_label(text: String) -> void:
 	lbl.add_theme_font_size_override("font_size", 13)
 	lbl.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
 	var st := StyleBoxFlat.new()
-	st.bg_color = Color(0.28, 0.60, 0.56, 0.85)
-	st.border_color = Color(0.28, 0.60, 0.56)
+	var tint := Color(0.48, 0.27, 0.66) if _mode == "expr" else Color(0.08, 0.48, 0.48)
+	st.bg_color = Color(tint.r, tint.g, tint.b, 0.90)
+	st.border_color = tint.lightened(0.24)
 	st.set_border_width_all(1)
 	st.set_corner_radius_all(12)
 	st.content_margin_left = 8
@@ -343,15 +353,19 @@ func _set_drag_preview_label(text: String) -> void:
 	st.content_margin_bottom = 3
 	lbl.add_theme_stylebox_override("normal", st)
 	var wrap := Control.new()
+	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	wrap.add_child(lbl)
 	set_drag_preview(wrap)
 
 
 func _can_drop_var(_pos: Vector2, payload) -> bool:
-	return payload is Dictionary and payload.get("type", "") in ["var_block", "expr_block"]
+	var ok: bool = payload is Dictionary and payload.get("type", "") in ["var_block", "expr_block"]
+	_set_drop_highlight(ok)
+	return ok
 
 
 func _drop_var(_pos: Vector2, payload) -> void:
+	_set_drop_highlight(false)
 	# Move semantics: if the reporter came from another slot, clear that slot
 	# (Scratch-style dragging moves the reporter, it is not copied).
 	var src: Object = payload.get("from_slot", null)
@@ -377,6 +391,7 @@ func _drop_var(_pos: Vector2, payload) -> void:
 	data.erase("b")
 	_rebuild()
 	changed.emit()
+	_play_drop_pulse()
 
 
 # A math-expression reporter (a op b) dropped into this slot. Works for BOTH
@@ -406,6 +421,39 @@ func _drop_expr(payload) -> void:
 		data[kind_field] = "expr"
 	_rebuild()
 	changed.emit()
+	_play_drop_pulse()
+
+
+func _set_drop_highlight(on: bool) -> void:
+	if _drop_highlight == on:
+		return
+	_drop_highlight = on
+	_apply_slot_style()
+
+
+func _animate_slot(target_scale: Vector2, target_modulate: Color, duration: float) -> void:
+	pivot_offset = size * 0.5
+	if _motion_tween != null and _motion_tween.is_valid():
+		_motion_tween.kill()
+	_motion_tween = create_tween().set_parallel(true)
+	_motion_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_motion_tween.tween_property(self, "scale", target_scale, duration)
+	_motion_tween.tween_property(self, "modulate", target_modulate, duration)
+
+
+func _play_drop_pulse() -> void:
+	scale = Vector2(1.10, 1.10)
+	_animate_slot(Vector2.ONE, Color.WHITE, 0.16)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_DRAG_END:
+		_dragging = false
+		_set_drop_highlight(false)
+		_animate_slot(Vector2.ONE, Color.WHITE, 0.10)
+	elif what == NOTIFICATION_MOUSE_EXIT and _drop_highlight:
+		if not get_global_rect().has_point(get_global_mouse_position()):
+			_set_drop_highlight(false)
 
 
 # ============================================

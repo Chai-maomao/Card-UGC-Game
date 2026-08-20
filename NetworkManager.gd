@@ -14,12 +14,18 @@ signal opponent_disconnected(player: int)
 signal reconnect_started()
 signal reconnect_transport_ready()
 signal reconnect_failed(reason: String)
+signal reconnect_progress(elapsed_seconds: int, attempt: int)
+signal protocol_mismatch(remote_version: int)
+signal server_match_snapshot_received(state: Dictionary)
 
 const LOBBY_PORT := 4567
 const CONNECT_TIMEOUT := 8.0  # seconds before a pending connection is treated as failed
 const RECONNECT_WINDOW := 60.0 * 60.0
 const RECONNECT_RETRY_DELAY := 5.0
 const SESSION_PATH := "user://active_room.cfg"
+const MATCH_SNAPSHOT_PATH := "user://active_match_state.json"
+const MATCH_SNAPSHOT_BACKUP_PATH := "user://active_match_state.json.bak"
+const MATCH_SNAPSHOT_SCHEMA := 1
 const HEARTBEAT_INTERVAL := 2.0  # seconds between heartbeat sends
 const HEARTBEAT_TIMEOUT := 7.0  # seconds without receiving heartbeat before declaring disconnect
 
@@ -42,6 +48,9 @@ var room_player_number: int = 0
 var reconnect_token: String = ""
 var room_match_started: bool = false
 var just_reconnected: bool = false
+var _session_storage_path: String = SESSION_PATH
+var _match_snapshot_path: String = MATCH_SNAPSHOT_PATH
+var _match_snapshot_backup_path: String = MATCH_SNAPSHOT_BACKUP_PATH
 
 var last_game_address: String = ""
 var last_game_port: int = 0
@@ -56,6 +65,8 @@ var _lobby_status_callback: Callable
 # the shared NetworkManager autoload node) get forwarded to the real handler.
 var lobby_request_handler: Callable
 var room_auth_handler: Callable
+var authority_state_handler: Callable
+var room_message_guard: Callable
 
 # Pending-connection timeout tracking (deadlines in seconds; <= 0 means inactive)
 var _lobby_deadline: float = 0.0
@@ -64,10 +75,42 @@ var _reconnect_active: bool = false
 var _reconnect_deadline: float = 0.0
 var _reconnect_retry_at: float = 0.0
 var _reconnect_attempt_running: bool = false
+var _reconnect_started_at: float = 0.0
+var _reconnect_attempt_count: int = 0
+var _last_reconnect_progress_second: int = -1
+var _direct_protocol_verified: bool = false
+var _connected_emitted: bool = false
+var pending_server_match_state: Dictionary = {}
 
 
 func _ready() -> void:
 	_load_room_session()
+
+
+func use_isolated_session_storage(prefix: String) -> bool:
+	# Integration tests run multiple game processes on one machine. Give each
+	# process its own user:// files so a test can never overwrite a real resume.
+	if not OS.is_debug_build():
+		return false
+	var safe := ""
+	for character in prefix.to_lower():
+		if (character >= "a" and character <= "z") or (character >= "0" and character <= "9") or character in ["-", "_"]:
+			safe += character
+	if safe.is_empty():
+		return false
+	safe = safe.left(48)
+	_session_storage_path = "user://test_active_room_%s.cfg" % safe
+	_match_snapshot_path = "user://test_active_match_%s.json" % safe
+	_match_snapshot_backup_path = _match_snapshot_path + ".bak"
+	room_server_address = ""
+	room_server_port = 0
+	room_code = ""
+	room_player_number = 0
+	reconnect_token = ""
+	room_match_started = false
+	just_reconnected = false
+	_load_room_session()
+	return true
 
 
 func _now() -> float:
@@ -100,6 +143,10 @@ func _process(_delta: float) -> void:
 		_game_deadline = 0.0
 		_fail_game_connection()
 	if _reconnect_active:
+		var elapsed := maxi(0, int(_now() - _reconnect_started_at))
+		if elapsed != _last_reconnect_progress_second:
+			_last_reconnect_progress_second = elapsed
+			reconnect_progress.emit(elapsed, _reconnect_attempt_count)
 		if _now() >= _reconnect_deadline:
 			_finish_reconnect_failure("reconnect_timeout")
 		elif not _reconnect_attempt_running and _now() >= _reconnect_retry_at:
@@ -126,6 +173,9 @@ func _process(_delta: float) -> void:
 # ============================================
 
 func configure_room_session(address: String, port: int, code: String, assigned_player: int, token: String) -> void:
+	var session_changed := room_code != code or room_player_number != assigned_player or reconnect_token != token
+	if session_changed:
+		clear_match_snapshot()
 	room_server_address = address
 	room_server_port = port
 	room_code = code
@@ -151,6 +201,7 @@ func mark_room_match_started() -> void:
 
 
 func clear_room_session() -> void:
+	clear_match_snapshot()
 	room_server_address = ""
 	room_server_port = 0
 	room_code = ""
@@ -160,8 +211,135 @@ func clear_room_session() -> void:
 	just_reconnected = false
 	_reconnect_active = false
 	_reconnect_attempt_running = false
-	if FileAccess.file_exists(SESSION_PATH):
-		DirAccess.remove_absolute(ProjectSettings.globalize_path(SESSION_PATH))
+	if FileAccess.file_exists(_session_storage_path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(_session_storage_path))
+
+
+func save_match_snapshot(state: Dictionary) -> bool:
+	if not has_resumable_match_session() or state.is_empty():
+		return false
+	var payload := {
+		"schema": MATCH_SNAPSHOT_SCHEMA,
+		"room_code": room_code,
+		"player": room_player_number,
+		"saved_at": Time.get_unix_time_from_system(),
+		"state": encode_match_state_for_snapshot(state),
+	}
+	var encoded := JSON.stringify(payload)
+	if encoded.is_empty() or not is_valid_snapshot_payload(JSON.parse_string(encoded)):
+		return false
+	var temp_path := _match_snapshot_path + ".tmp"
+	var file := FileAccess.open(temp_path, FileAccess.WRITE)
+	if file == null:
+		return false
+	file.store_string(encoded)
+	file.flush()
+	file.close()
+	var parsed_disk = JSON.parse_string(_read_text_file(temp_path))
+	if not is_valid_snapshot_payload(parsed_disk):
+		_remove_user_file(temp_path)
+		return false
+	_remove_user_file(_match_snapshot_backup_path)
+	if FileAccess.file_exists(_match_snapshot_path):
+		var backup_error := DirAccess.copy_absolute(
+			ProjectSettings.globalize_path(_match_snapshot_path),
+			ProjectSettings.globalize_path(_match_snapshot_backup_path)
+		)
+		if backup_error != OK:
+			_remove_user_file(temp_path)
+			return false
+	_remove_user_file(_match_snapshot_path)
+	var rename_error := DirAccess.rename_absolute(
+		ProjectSettings.globalize_path(temp_path),
+		ProjectSettings.globalize_path(_match_snapshot_path)
+	)
+	if rename_error != OK:
+		_remove_user_file(temp_path)
+		if FileAccess.file_exists(_match_snapshot_backup_path):
+			DirAccess.copy_absolute(
+				ProjectSettings.globalize_path(_match_snapshot_backup_path),
+				ProjectSettings.globalize_path(_match_snapshot_path)
+			)
+		return false
+	return true
+
+
+func load_match_snapshot() -> Dictionary:
+	if not has_resumable_match_session():
+		return {}
+	var parsed = JSON.parse_string(_read_text_file(_match_snapshot_path))
+	var recovered_backup := false
+	if not is_valid_snapshot_payload(parsed):
+		parsed = JSON.parse_string(_read_text_file(_match_snapshot_backup_path))
+		recovered_backup = is_valid_snapshot_payload(parsed)
+	if not is_valid_snapshot_payload(parsed):
+		return {}
+	var payload: Dictionary = parsed
+	if str(payload.get("room_code", "")) != room_code:
+		return {}
+	if int(payload.get("player", 0)) != room_player_number:
+		return {}
+	if recovered_backup:
+		_remove_user_file(_match_snapshot_path)
+		DirAccess.copy_absolute(
+			ProjectSettings.globalize_path(_match_snapshot_backup_path),
+			ProjectSettings.globalize_path(_match_snapshot_path)
+		)
+	return decode_match_state_from_snapshot(payload.get("state", {}) as Dictionary)
+
+
+func clear_match_snapshot() -> void:
+	_remove_user_file(_match_snapshot_path)
+	_remove_user_file(_match_snapshot_path + ".tmp")
+	_remove_user_file(_match_snapshot_backup_path)
+
+
+func _read_text_file(path: String) -> String:
+	if not FileAccess.file_exists(path):
+		return ""
+	var file := FileAccess.open(path, FileAccess.READ)
+	if file == null:
+		return ""
+	return file.get_as_text()
+
+
+func _remove_user_file(path: String) -> void:
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+
+static func is_valid_snapshot_payload(value: Variant) -> bool:
+	if not (value is Dictionary):
+		return false
+	var payload: Dictionary = value
+	if int(payload.get("schema", 0)) != MATCH_SNAPSHOT_SCHEMA:
+		return false
+	if str(payload.get("room_code", "")).is_empty() or int(payload.get("player", 0)) not in [1, 2]:
+		return false
+	var state = payload.get("state", {})
+	if not (state is Dictionary):
+		return false
+	return state.has("player_field") and state.has("player2_field") \
+		and state.has("player_hand") and state.has("player2_hand") \
+		and state.has("shared_deck") and state.has("state_revision")
+
+
+static func encode_match_state_for_snapshot(state: Dictionary) -> Dictionary:
+	var encoded := state.duplicate(true)
+	# JSON numbers cannot exactly represent every 64-bit RNG state. Decimal
+	# strings keep the post-reconnect random sequence deterministic.
+	for key in ["rng_seed", "rng_state"]:
+		if encoded.has(key):
+			encoded[key] = str(encoded[key])
+	return encoded
+
+
+static func decode_match_state_from_snapshot(state: Dictionary) -> Dictionary:
+	var decoded := state.duplicate(true)
+	for key in ["rng_seed", "rng_state"]:
+		if decoded.has(key):
+			decoded[key] = int(str(decoded[key]))
+	return decoded
 
 
 func _save_room_session() -> void:
@@ -175,12 +353,12 @@ func _save_room_session() -> void:
 	cfg.set_value("room", "token", reconnect_token)
 	cfg.set_value("room", "card_art", server_allows_card_art)
 	cfg.set_value("room", "match_started", room_match_started)
-	cfg.save(SESSION_PATH)
+	cfg.save(_session_storage_path)
 
 
 func _load_room_session() -> void:
 	var cfg := ConfigFile.new()
-	if cfg.load(SESSION_PATH) != OK:
+	if cfg.load(_session_storage_path) != OK:
 		return
 	room_server_address = str(cfg.get_value("room", "address", ""))
 	room_server_port = int(cfg.get_value("room", "port", 0))
@@ -215,6 +393,27 @@ func is_authority() -> bool:
 	if is_dedicated_server:
 		return player_number == 1
 	return is_host
+
+
+static func is_remote_player_claim_valid(local_player: int, claimed_player: int) -> bool:
+	return local_player in [1, 2] and claimed_player == 3 - local_player
+
+
+func _accept_remote_player_claim(claimed_player: int) -> bool:
+	if not is_online or not is_remote_player_claim_valid(player_number, claimed_player):
+		push_warning("Rejected network message with invalid player claim P%d" % claimed_player)
+		return false
+	var sender := multiplayer.get_remote_sender_id()
+	if sender <= 0:
+		return false
+	if not is_dedicated_server and opponent_peer_id > 0 and sender != opponent_peer_id:
+		push_warning("Rejected network message from unexpected peer %d" % sender)
+		return false
+	return true
+
+
+func _accept_remote_intent(claimed_player: int) -> bool:
+	return is_authority() and _accept_remote_player_claim(claimed_player)
 
 
 # ============================================
@@ -318,6 +517,7 @@ func request_lobby_status(callback: Callable) -> void:
 
 
 func _lobby_request(data: Dictionary) -> void:
+	data["protocol"] = AppVersion.PROTOCOL_VERSION
 	rpc_id(1, "lobby_request", JSON.stringify(data))
 
 
@@ -348,11 +548,11 @@ func notify_room_ready() -> void:
 
 
 @rpc("any_peer", "call_remote", "reliable")
-func rpc_room_auth(code: String, assigned_player: int, token: String) -> void:
+func rpc_room_auth(code: String, assigned_player: int, token: String, protocol_version: int) -> void:
 	# Room subprocess only: forward authentication to room_server.gd, which owns
 	# the reconnect tokens and stable P1/P2 slot mapping.
 	if room_auth_handler.is_valid():
-		room_auth_handler.call(multiplayer.get_remote_sender_id(), code, assigned_player, token)
+		room_auth_handler.call(multiplayer.get_remote_sender_id(), code, assigned_player, token, protocol_version)
 
 
 func send_room_auth_result(peer_id: int, accepted: bool, assigned_player: int, reason: String, reconnecting: bool) -> void:
@@ -366,6 +566,8 @@ func rpc_room_auth_result(accepted: bool, assigned_player: int, reason: String, 
 		if _reconnect_active:
 			if reason in ["invalid_token", "invalid_reconnect"]:
 				_finish_reconnect_failure(reason, true)
+			elif reason == "protocol_mismatch":
+				_finish_reconnect_failure(reason)
 			else:
 				_schedule_reconnect_retry(reason)
 		else:
@@ -455,6 +657,11 @@ func lobby_response(json_str: String) -> void:
 	var data = json.get_data()
 	if not data is Dictionary:
 		return
+	var remote_protocol := int(data.get("protocol", AppVersion.PROTOCOL_VERSION))
+	if remote_protocol != AppVersion.PROTOCOL_VERSION:
+		data["status"] = "protocol_mismatch"
+		data["remote_protocol"] = remote_protocol
+		protocol_mismatch.emit(remote_protocol)
 	if data.get("status", "") == "server_status" and _lobby_status_callback.is_valid():
 		_lobby_status_callback.call(data)
 		return
@@ -521,6 +728,9 @@ func _start_match_reconnect() -> void:
 		return
 
 	_reconnect_active = true
+	_reconnect_started_at = _now()
+	_reconnect_attempt_count = 0
+	_last_reconnect_progress_second = -1
 	_reconnect_deadline = _now() + RECONNECT_WINDOW
 	_reconnect_retry_at = _now()
 	_reconnect_attempt_running = false
@@ -541,6 +751,8 @@ func _attempt_match_reconnect() -> void:
 		_finish_reconnect_failure("reconnect_timeout")
 		return
 	_reconnect_attempt_running = true
+	_reconnect_attempt_count += 1
+	reconnect_progress.emit(maxi(0, int(_now() - _reconnect_started_at)), _reconnect_attempt_count)
 	var err := connect_to_lobby(room_server_address, Callable(self, "_on_reconnect_lobby_response"))
 	if err != OK:
 		_schedule_reconnect_retry("lobby_connect_error_%d" % err)
@@ -553,6 +765,8 @@ func _on_reconnect_lobby_response(data: Dictionary) -> void:
 	if status != "ok":
 		if status in ["not_found", "invalid_reconnect"]:
 			_finish_reconnect_failure(status, true)
+		elif status == "protocol_mismatch":
+			_finish_reconnect_failure(status)
 		else:
 			_schedule_reconnect_retry(status if status != "" else "invalid_response")
 		return
@@ -585,6 +799,7 @@ func _finish_reconnect_failure(reason: String, clear_saved_session: bool = false
 	_reconnect_attempt_running = false
 	_reconnect_deadline = 0.0
 	_reconnect_retry_at = 0.0
+	_reconnect_started_at = 0.0
 	_lobby_deadline = 0.0
 	_game_deadline = 0.0
 	_close_game_peer()
@@ -609,17 +824,36 @@ func _on_peer_connected(id: int, source_peer: ENetMultiplayerPeer):
 		if id == 1:
 			# The room transport is not considered ready until the room process
 			# authenticates our saved player slot and reconnect token.
-			rpc_id(1, "rpc_room_auth", room_code, player_number, reconnect_token)
+			rpc_id(1, "rpc_room_auth", room_code, player_number, reconnect_token, AppVersion.PROTOCOL_VERSION)
 		return
-	# Direct P2P has no room-authentication handshake.
-	_game_deadline = 0.0
+	# Direct P2P still verifies the wire protocol before exposing the connection.
 	opponent_peer_id = id
+	_direct_protocol_verified = false
+	_connected_emitted = false
+	rpc_id(id, "rpc_protocol_hello", AppVersion.PROTOCOL_VERSION, player_number)
+	print("Opponent connected: %d" % id)
+
+
+@rpc("any_peer", "call_remote", "reliable")
+func rpc_protocol_hello(version: int, claimed_player: int) -> void:
+	if is_dedicated_server:
+		return
+	if version != AppVersion.PROTOCOL_VERSION:
+		protocol_mismatch.emit(version)
+		game_connection_failed.emit()
+		_close_game_peer()
+		is_online = false
+		return
+	if claimed_player not in [1, 2] or claimed_player == player_number:
+		return
+	_direct_protocol_verified = true
+	_game_deadline = 0.0
 	_heartbeat_active = true
 	_last_heartbeat_sent = _now()
-	# Give the opponent a grace period before we start checking heartbeat timeout
 	_last_heartbeat_received = _now() + HEARTBEAT_TIMEOUT * 0.5
-	connected.emit()
-	print("Opponent connected: %d" % id)
+	if not _connected_emitted:
+		_connected_emitted = true
+		connected.emit()
 
 
 func _on_peer_disconnected(id: int, source_peer: ENetMultiplayerPeer):
@@ -807,65 +1041,135 @@ func rpc_request_initial_state():
 
 @rpc("any_peer", "call_remote")
 func rpc_authority_state(state: Dictionary):
+	if not _allow_room_message("authority_state"):
+		return
+	if authority_state_handler.is_valid():
+		authority_state_handler.call(multiplayer.get_remote_sender_id(), state)
 	EventBus.rpc_authority_state_received.emit(state)
+
+
+func send_server_match_snapshot(peer_id: int, state: Dictionary) -> void:
+	rpc_id(peer_id, "rpc_server_match_snapshot", state)
+
+
+@rpc("authority", "call_remote", "reliable")
+func rpc_server_match_snapshot(state: Dictionary) -> void:
+	pending_server_match_state = state.duplicate(true)
+	server_match_snapshot_received.emit(pending_server_match_state)
+
+
+func take_pending_server_match_state() -> Dictionary:
+	var state := pending_server_match_state.duplicate(true)
+	pending_server_match_state = {}
+	return state
+
+
+func _allow_room_message(kind: String) -> bool:
+	if room_message_guard.is_valid():
+		return bool(room_message_guard.call(multiplayer.get_remote_sender_id(), kind))
+	return true
 
 
 # Reconnect recovery is deliberately independent of P1 authority. Whichever
 # player stayed connected owns the surviving in-memory snapshot and can return
 # it to the stable P1/P2 slot that rejoined.
 @rpc("any_peer", "call_remote", "reliable")
-func rpc_request_resume_state(requesting_player: int, known_revision: int):
-	EventBus.rpc_resume_state_requested.emit(requesting_player, known_revision)
+func rpc_request_resume_state(requesting_player: int, known_revision: int, nonce: String):
+	if not _allow_room_message("resume"):
+		return
+	if nonce.is_empty() or not _accept_remote_player_claim(requesting_player):
+		return
+	EventBus.rpc_resume_state_requested.emit(requesting_player, known_revision, nonce)
 
 
 @rpc("any_peer", "call_remote", "reliable")
-func rpc_resume_state(state: Dictionary, source_player: int, target_player: int):
-	EventBus.rpc_resume_state_received.emit(state, source_player, target_player)
+func rpc_resume_state(state: Dictionary, source_player: int, target_player: int, nonce: String):
+	if not _allow_room_message("resume"):
+		return
+	if nonce.is_empty() or target_player != player_number or not _accept_remote_player_claim(source_player):
+		return
+	EventBus.rpc_resume_state_received.emit(state, source_player, target_player, nonce)
 
 
 @rpc("any_peer", "call_remote", "reliable")
-func rpc_resume_state_ack(player: int, revision: int):
-	EventBus.rpc_resume_state_ack_received.emit(player, revision)
+func rpc_resume_state_ack(player: int, revision: int, nonce: String):
+	if not _allow_room_message("resume"):
+		return
+	if nonce.is_empty() or not _accept_remote_player_claim(player):
+		return
+	EventBus.rpc_resume_state_ack_received.emit(player, revision, nonce)
 
 
 @rpc("any_peer", "call_remote", "reliable")
-func rpc_resume_complete(revision: int):
-	EventBus.rpc_resume_complete_received.emit(revision)
+func rpc_resume_complete(revision: int, source_player: int, nonce: String):
+	if not _allow_room_message("resume"):
+		return
+	if nonce.is_empty() or not _accept_remote_player_claim(source_player):
+		return
+	EventBus.rpc_resume_complete_received.emit(revision, nonce)
 
 
-@rpc("any_peer", "call_remote")
+@rpc("any_peer", "call_remote", "reliable")
 func rpc_intent_summon(hand_index: int, slot_index: int, player: int):
+	if not _allow_room_message("intent"):
+		return
+	if not _accept_remote_intent(player):
+		return
 	EventBus.rpc_intent_summon_received.emit(hand_index, slot_index, player)
 
 
-@rpc("any_peer", "call_remote")
+@rpc("any_peer", "call_remote", "reliable")
 func rpc_intent_summon_skill(slot_index: int, skill_index: int, target_slot: int, player: int):
+	if not _allow_room_message("intent"):
+		return
+	if not _accept_remote_intent(player):
+		return
 	EventBus.rpc_intent_summon_skill_received.emit(slot_index, skill_index, target_slot, player)
 
 
-@rpc("any_peer", "call_remote")
+@rpc("any_peer", "call_remote", "reliable")
 func rpc_intent_attack(source_slot: int, target_slot: int, player: int):
+	if not _allow_room_message("intent"):
+		return
+	if not _accept_remote_intent(player):
+		return
 	EventBus.rpc_intent_attack_received.emit(source_slot, target_slot, player)
 
 
-@rpc("any_peer", "call_remote")
+@rpc("any_peer", "call_remote", "reliable")
 func rpc_intent_activate_skill(slot_index: int, skill_index: int, target_slot: int, player: int):
+	if not _allow_room_message("intent"):
+		return
+	if not _accept_remote_intent(player):
+		return
 	EventBus.rpc_intent_activate_skill_received.emit(slot_index, skill_index, target_slot, player)
 
 
 
-@rpc("any_peer", "call_remote")
+@rpc("any_peer", "call_remote", "reliable")
 func rpc_intent_end_turn(player: int):
+	if not _allow_room_message("intent"):
+		return
+	if not _accept_remote_intent(player):
+		return
 	EventBus.rpc_intent_end_turn_received.emit(player)
 
 
-@rpc("any_peer", "call_remote")
+@rpc("any_peer", "call_remote", "reliable")
 func rpc_intent_discard(location: String, index: int, player: int):
+	if not _allow_room_message("intent"):
+		return
+	if not _accept_remote_intent(player):
+		return
 	EventBus.rpc_intent_discard_received.emit(location, index, player)
 
 
-@rpc("any_peer", "call_remote")
+@rpc("any_peer", "call_remote", "reliable")
 func rpc_intent_move_card(source_slot: int, target_slot: int, player: int):
+	if not _allow_room_message("intent"):
+		return
+	if not _accept_remote_intent(player):
+		return
 	EventBus.rpc_intent_move_received.emit(source_slot, target_slot, player)
 
 
@@ -881,6 +1185,9 @@ func close_connection():
 	_reconnect_deadline = 0.0
 	_reconnect_retry_at = 0.0
 	just_reconnected = false
+	_direct_protocol_verified = false
+	_connected_emitted = false
+	pending_server_match_state = {}
 	_heartbeat_active = false
 	_last_heartbeat_sent = 0.0
 	_last_heartbeat_received = 0.0

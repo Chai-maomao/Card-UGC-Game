@@ -16,6 +16,7 @@ var current_card_data: CardData = null
 var ui_scale: float = 1.0
 var visual_variant: String = "player"
 var _highlighted: bool = false
+var _target_hint: String = "none"
 var _action_glow: Panel = null
 var _action_tween: Tween = null
 
@@ -63,9 +64,10 @@ func set_visual_variant(variant: String) -> void:
 
 func _refresh_visual() -> void:
 	UITheme.apply_slot(self, visual_variant, current_card_data != null)
-	if _highlighted:
-		var gold := Color(0.95, 0.78, 0.32)
-		var style := UITheme.panel_style(Color(0.035, 0.11, 0.16, 0.94), gold, 3, 8, Color(gold.r, gold.g, gold.b, 0.55), 8)
+	if _target_hint != "none" or _highlighted:
+		var hovered := _target_hint == "hover" or _highlighted
+		var edge := Color(0.98, 0.78, 0.28) if hovered else Color(0.20, 0.78, 0.92)
+		var style := UITheme.panel_style(Color(0.035, 0.11, 0.16, 0.94), edge, 4 if hovered else 2, 8, Color(edge.r, edge.g, edge.b, 0.55), 8 if hovered else 4)
 		add_theme_stylebox_override("normal", style)
 		add_theme_stylebox_override("hover", style)
 		add_theme_stylebox_override("pressed", style)
@@ -76,6 +78,15 @@ func set_highlighted(highlighted: bool) -> void:
 	if _highlighted == highlighted:
 		return
 	_highlighted = highlighted
+	_refresh_visual()
+
+
+func set_target_hint(valid: bool, hovered: bool = false) -> void:
+	var next := "hover" if valid and hovered else ("valid" if valid else "none")
+	if _target_hint == next:
+		return
+	_target_hint = next
+	_highlighted = false
 	_refresh_visual()
 
 

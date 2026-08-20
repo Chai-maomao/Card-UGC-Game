@@ -37,55 +37,187 @@ var then_container: VBoxContainer
 var else_container: VBoxContainer
 var cond_slot: PanelContainer
 var _drag_highlight: bool = false
+var _base_bg := Color(0.26, 0.50, 0.68)
+var _base_radius: int = 6
+var _has_socket_notch: bool = false
+var _motion_installed: bool = false
+var _dragging: bool = false
+var _motion_tween: Tween
+var _press_shadow_style: StyleBoxFlat
+var _press_shadow_alpha: float = 0.0
+var _press_tween: Tween
 
 
 static func category_color(category: String) -> Color:
 	match category:
 		"attack":
-			return Color(0.72, 0.27, 0.28)  # red — damage / offense
+			return Color(0.64, 0.18, 0.25)  # crimson — damage / offense
 		"defense":
-			return Color(0.24, 0.58, 0.40)  # green — heal / buffs
+			return Color(0.14, 0.46, 0.34)  # emerald — heal / buffs
 		"utility":
-			return Color(0.26, 0.50, 0.68)  # blue — hand / resources
-	return Color(0.50, 0.38, 0.62)         # purple — advanced / default
+			return Color(0.16, 0.38, 0.64)  # sapphire — hand / resources
+	return Color(0.42, 0.28, 0.58)         # purple — advanced / default
 
 
 static func trigger_color() -> Color:
-	return Color(0.78, 0.55, 0.16)  # orange — events / triggers
+	return Color(0.68, 0.40, 0.10)  # amber — events / triggers
 
 
 static func control_color() -> Color:
-	return Color(0.72, 0.60, 0.16)  # yellow — control / if-else
+	return Color(0.70, 0.32, 0.12)  # orange — control / branching
 
 
 static func stop_color() -> Color:
-	return Color(0.72, 0.18, 0.20)  # red — stop
+	return Color(0.64, 0.12, 0.18)  # red — stop
 
 
 static func repeat_color() -> Color:
-	return Color(0.45, 0.35, 0.68)  # violet — repeat / loop
+	return Color(0.40, 0.25, 0.64)  # violet — repeat / loop
 
 
 static func condition_color() -> Color:
-	return Color(0.28, 0.60, 0.56)  # teal — condition reporters
+	return Color(0.08, 0.48, 0.48)  # teal — condition reporters
+
+
+static func math_color() -> Color:
+	return Color(0.48, 0.27, 0.66)  # purple — numeric expressions
+
+
+static func target_color() -> Color:
+	return Color(0.12, 0.48, 0.72)  # cyan-blue — target reporters
+
+
+static func side_color() -> Color:
+	return Color(0.62, 0.40, 0.12)  # ochre — side reporters
 
 
 func _apply_style(bg: Color, radius: int = 6) -> void:
+	_base_bg = bg
+	_base_radius = radius
+	_apply_rest_style()
+	_install_motion()
+
+
+func _make_block_style(bg: Color) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
 	style.bg_color = bg
-	style.border_color = bg.darkened(0.28)
+	# Stacked blocks sit almost flush. An outward StyleBox shadow from the
+	# lower sibling is drawn over the block above it, producing a dark centre
+	# with an unnaturally bright rim. Keep script blocks shadow-free and use a
+	# restrained dark edge for depth instead.
+	style.border_color = bg.darkened(0.22)
 	style.set_border_width_all(2)
-	style.set_corner_radius_all(radius)
-	# Soft drop shadow gives the blocks the raised "physical puzzle piece" feel
-	# of Scratch; the drag highlight temporarily enlarges it.
-	style.shadow_color = Color(0, 0, 0, 0.28)
-	style.shadow_size = 3
-	style.shadow_offset = Vector2(0, 2)
+	style.set_corner_radius_all(_base_radius)
+	style.shadow_size = 0
 	style.content_margin_left = 10
 	style.content_margin_right = 10
 	style.content_margin_top = 6
 	style.content_margin_bottom = 6
+	return style
+
+
+func _apply_rest_style() -> void:
+	var style := _make_block_style(_base_bg)
+	if _has_socket_notch:
+		style.border_width_bottom = 4
+		style.border_color = _base_bg.darkened(0.25)
 	add_theme_stylebox_override("panel", style)
+
+
+func _install_motion() -> void:
+	if _motion_installed:
+		return
+	_motion_installed = true
+	resized.connect(_update_motion_pivot)
+	mouse_entered.connect(_on_block_mouse_entered)
+	mouse_exited.connect(_on_block_mouse_exited)
+	call_deferred("_play_appear_motion")
+
+
+func _update_motion_pivot() -> void:
+	pivot_offset = size * 0.5
+
+
+func _play_appear_motion() -> void:
+	if not is_inside_tree():
+		return
+	_update_motion_pivot()
+	modulate.a = 0.0
+	scale = Vector2(0.985, 0.985)
+	var tween := create_tween().set_parallel(true)
+	tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tween.tween_property(self, "modulate:a", 1.0, 0.14)
+	tween.tween_property(self, "scale", Vector2.ONE, 0.16)
+
+
+func _on_block_mouse_entered() -> void:
+	if is_hat or _dragging or (get_viewport() != null and get_viewport().gui_is_dragging()):
+		return
+	_animate_motion(Vector2(1.008, 1.008), Color(1.035, 1.035, 1.035, 1.0), 0.10)
+
+
+func _on_block_mouse_exited() -> void:
+	if _dragging:
+		return
+	_animate_motion(Vector2.ONE, Color.WHITE, 0.10)
+
+
+func _animate_motion(target_scale: Vector2, target_modulate: Color, duration: float) -> void:
+	_update_motion_pivot()
+	if _motion_tween != null and _motion_tween.is_valid():
+		_motion_tween.kill()
+	_motion_tween = create_tween().set_parallel(true)
+	_motion_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_motion_tween.tween_property(self, "scale", target_scale, duration)
+	_motion_tween.tween_property(self, "modulate", target_modulate, duration)
+
+
+func _play_drop_pulse() -> void:
+	_update_motion_pivot()
+	scale = Vector2(1.025, 1.025)
+	_animate_motion(Vector2.ONE, Color.WHITE, 0.16)
+
+
+# Press feedback is drawn by the block itself. A child MarginContainer would
+# also inherit PanelContainer's content margins, turning a requested 3px inset
+# into a large 10px+ gap on C-shaped / repeat blocks.
+func _ensure_press_overlay() -> void:
+	if _press_shadow_style != null:
+		return
+	_press_shadow_style = StyleBoxFlat.new()
+	_press_shadow_style.bg_color = Color(0.015, 0.02, 0.03, 1.0)
+	_press_shadow_style.set_corner_radius_all(maxi(2, _base_radius - 2))
+
+
+func _draw() -> void:
+	if _press_shadow_style == null or _press_shadow_alpha <= 0.001:
+		return
+	var inset := 3.0
+	var shadow_size := size - Vector2(inset * 2.0, inset * 2.0)
+	if shadow_size.x <= 0.0 or shadow_size.y <= 0.0:
+		return
+	_press_shadow_style.bg_color.a = 0.24 * _press_shadow_alpha
+	draw_style_box(_press_shadow_style, Rect2(Vector2(inset, inset), shadow_size))
+
+
+func _set_press_shadow_alpha(value: float) -> void:
+	_press_shadow_alpha = value
+	queue_redraw()
+
+
+func _set_press_shadow(on: bool, immediate: bool = false) -> void:
+	if is_hat:
+		return
+	_ensure_press_overlay()
+	if _press_tween != null and _press_tween.is_valid():
+		_press_tween.kill()
+	var target_alpha := 1.0 if on else 0.0
+	if immediate:
+		_set_press_shadow_alpha(target_alpha)
+		return
+	_press_tween = create_tween()
+	_press_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_press_tween.tween_method(_set_press_shadow_alpha, _press_shadow_alpha, target_alpha, 0.045 if on else 0.08)
 
 
 # Puzzle "socket" cue: a thicker, darker bottom edge suggests the notch where
@@ -93,13 +225,8 @@ func _apply_style(bg: Color, radius: int = 6) -> void:
 # instead of loose cards. Blocks that stack below keep the notch; the event
 # hat (top of the stack) and the stop block do not.
 func _apply_socket_notch() -> void:
-	var current: StyleBox = get_theme_stylebox("panel")
-	if not (current is StyleBoxFlat):
-		return
-	var st: StyleBoxFlat = (current as StyleBoxFlat).duplicate()
-	st.border_width_bottom = 4
-	st.border_color = st.border_color.darkened(0.18)
-	add_theme_stylebox_override("panel", st)
+	_has_socket_notch = true
+	_apply_rest_style()
 
 
 func _make_label(text: String, size: int = 13) -> Label:
@@ -110,6 +237,9 @@ func _make_label(text: String, size: int = 13) -> Label:
 	# Single-line by default: autowrap inside an HBox collapses the minimum
 	# width to 1px and inflates the row height (text becomes invisible).
 	lbl.autowrap_mode = TextServer.AUTOWRAP_OFF
+	# Decorative text must not become the drag target. Ignoring pointer hits
+	# keeps the enclosing block's valid-drop outline stable over its full area.
+	lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return lbl
 
 
@@ -141,6 +271,9 @@ func _make_icon_button(text: String) -> Button:
 	pressed_st.bg_color = Color(1, 1, 1, 0.07)
 	btn.add_theme_stylebox_override("pressed", pressed_st)
 	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	# The button remains clickable, while drag/drop lookup can continue to the
+	# enclosing block instead of making its cyan outline flicker off.
+	btn.mouse_filter = Control.MOUSE_FILTER_PASS
 	btn.tooltip_text = text
 	return btn
 
@@ -162,6 +295,7 @@ func set_order(n: int) -> void:
 	badge.add_theme_color_override("font_color", Color(1, 1, 1, 0.72))
 	badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	badge.custom_minimum_size = Vector2(18, 0)
+	badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	(target as HBoxContainer).add_child(badge)
 	(target as HBoxContainer).move_child(badge, 0)
 
@@ -242,6 +376,7 @@ func setup_effect(eff: Dictionary, path: Array) -> void:
 	var category: String = str(SkillRegistry.effect_meta(effect_id).get("category", "utility"))
 	_apply_style(category_color(category))
 	_apply_socket_notch()
+	mouse_default_cursor_shape = Control.CURSOR_DRAG
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 	var box := VBoxContainer.new()
@@ -458,6 +593,7 @@ func setup_if_else(eff: Dictionary, path: Array) -> void:
 	has_else = str(eff.get("effect", "")) == SkillEngine.EFFECT_IF_ELSE
 	_apply_style(control_color(), 8)
 	_apply_socket_notch()
+	mouse_default_cursor_shape = Control.CURSOR_DRAG
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 	var outer := VBoxContainer.new()
@@ -467,14 +603,11 @@ func setup_if_else(eff: Dictionary, path: Array) -> void:
 
 	var head := HBoxContainer.new()
 	head.add_theme_constant_override("separation", 4)
-	# The yellow control fill is light — dark text reads far better than white.
 	var if_lbl := _make_label(Locale.t("skill_editor.if_word"), 13)
-	if_lbl.add_theme_color_override("font_color", Color(0.16, 0.12, 0.04))
 	head.add_child(if_lbl)
 	cond_slot = _make_cond_slot()
 	head.add_child(cond_slot)
 	var then_lbl := _make_label(Locale.t("skill_editor.then_word"), 13)
-	then_lbl.add_theme_color_override("font_color", Color(0.16, 0.12, 0.04))
 	head.add_child(then_lbl)
 	# No edit button: the condition is edited inline (Scratch-style boolean
 	# block with number slots), not via a legacy condition popup.
@@ -482,13 +615,11 @@ func setup_if_else(eff: Dictionary, path: Array) -> void:
 	outer.add_child(head)
 
 	var satisfy_lbl := _make_label(Locale.t("skill_editor.satisfy_label"), 12)
-	satisfy_lbl.add_theme_color_override("font_color", Color(0.16, 0.12, 0.04))
 	outer.add_child(satisfy_lbl)
 	then_container = _make_slot(outer)
 
 	if has_else:
 		var else_lbl := _make_label(Locale.t("skill_editor.else_label"), 12)
-		else_lbl.add_theme_color_override("font_color", Color(0.16, 0.12, 0.04))
 		outer.add_child(else_lbl)
 		else_container = _make_slot(outer)
 
@@ -500,6 +631,7 @@ func setup_repeat_block(eff: Dictionary, path: Array) -> void:
 	_effect = eff
 	_apply_style(repeat_color(), 8)
 	_apply_socket_notch()
+	mouse_default_cursor_shape = Control.CURSOR_DRAG
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
 
 	var outer := VBoxContainer.new()
@@ -828,6 +960,7 @@ func setup_stop_block(path: Array) -> void:
 	effect_path = path
 	_effect = {"effect": SkillEngine.EFFECT_STOP}
 	_apply_style(stop_color())
+	mouse_default_cursor_shape = Control.CURSOR_DRAG
 	var head := HBoxContainer.new()
 	var title := _make_label(Locale.t("skill_editor.stop_word"), 13)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -842,6 +975,7 @@ func _make_badge(text: String) -> Label:
 	badge.add_theme_font_size_override("font_size", 11)
 	# Single line (autowrap inside a flow row collapses the min width to 1px).
 	badge.autowrap_mode = TextServer.AUTOWRAP_OFF
+	badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var st := StyleBoxFlat.new()
 	st.bg_color = Color(1, 1, 1, 0.18)
 	st.set_corner_radius_all(3)
@@ -882,10 +1016,16 @@ func _get_drag_data(_at_position: Vector2):
 	if not draggable or is_hat or _effect.is_empty():
 		return null
 	var preview := duplicate()
-	preview.modulate.a = 0.7
+	preview.modulate = Color(1.05, 1.05, 1.05, 0.94)
+	preview.scale = Vector2(1.015, 1.015)
+	preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var drag_control := Control.new()
+	drag_control.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	drag_control.add_child(preview)
 	set_drag_preview(drag_control)
+	_set_press_shadow(false, true)
+	_dragging = true
+	_animate_motion(Vector2(0.975, 0.975), Color(0.72, 0.76, 0.84, 0.48), 0.08)
 	return {"type": "effect_block", "effect": _effect.duplicate(true), "from_path": effect_path}
 
 
@@ -924,20 +1064,16 @@ func _set_drag_highlight(on: bool) -> void:
 	if _drag_highlight == on:
 		return
 	_drag_highlight = on
-	var current: StyleBox = get_theme_stylebox("panel")
-	var st: StyleBoxFlat = current.duplicate()
 	if on:
-		st.border_color = Color(1, 1, 1, 0.95)
+		var st := _make_block_style(_base_bg.lightened(0.04))
+		st.border_color = Color(0.36, 0.88, 1.0, 0.98)
 		st.set_border_width_all(3)
-		st.shadow_color = Color(1, 1, 1, 0.3)
-		st.shadow_size = 8
+		# Do not add an outward glow here: it overlaps neighbouring blocks in a
+		# tight stack. The cyan border is sufficient drop feedback.
+		st.shadow_size = 0
+		add_theme_stylebox_override("panel", st)
 	else:
-		# Restore the original border tint based on block category (shadow was
-		# cloned from the resting style, so it needs no special handling).
-		var base: Color = st.bg_color
-		st.border_color = base.darkened(0.28)
-		st.set_border_width_all(2)
-	add_theme_stylebox_override("panel", st)
+		_apply_rest_style()
 
 
 # Dropping onto a block inserts the dragged block before/after this block
@@ -951,6 +1087,7 @@ func _drop_data(at_position: Vector2, data) -> void:
 		return
 	var insert_after: bool = at_position.y > size.y * 0.5
 	drop_requested.emit(from_path, effect_path, insert_after, data)
+	_play_drop_pulse()
 
 
 # Removes this block's drop highlight and hides the shared insertion line.
@@ -963,7 +1100,10 @@ func _clear_drag_feedback() -> void:
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_DRAG_END:
+		_dragging = false
+		_set_press_shadow(false, true)
 		_set_drag_highlight(false)
+		_animate_motion(Vector2.ONE, Color.WHITE, 0.12)
 	elif what == NOTIFICATION_MOUSE_EXIT:
 		# During a drag the GUI fires MOUSE_EXIT when the pointer leaves a
 		# block — clear its highlight and hide the insertion line. A child
@@ -978,7 +1118,16 @@ func _notification(what: int) -> void:
 # Right-click a block to open the duplicate/delete context menu.
 func _gui_input(event: InputEvent) -> void:
 	var mouse_ev: InputEventMouseButton = event as InputEventMouseButton
-	if mouse_ev != null and mouse_ev.button_index == MOUSE_BUTTON_RIGHT and mouse_ev.pressed:
+	if mouse_ev == null:
+		return
+	if mouse_ev.button_index == MOUSE_BUTTON_RIGHT and mouse_ev.pressed:
 		var at := get_global_rect().position + mouse_ev.position
 		context_requested.emit(effect_path, at)
 		accept_event()
+	elif mouse_ev.button_index == MOUSE_BUTTON_LEFT and not is_hat:
+		if mouse_ev.pressed:
+			_set_press_shadow(true)
+			_animate_motion(Vector2(0.992, 0.992), Color.WHITE, 0.05)
+		elif not _dragging:
+			_set_press_shadow(false)
+			_on_block_mouse_entered()

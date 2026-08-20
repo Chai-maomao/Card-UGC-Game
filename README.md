@@ -25,7 +25,7 @@
 - **直连 P2P**：通过 IP/端口直接连接
 - **房间号联机**：通过房间服务器中转
 - **专用服务器**：支持独立服务器托管
-- **断线检测**：3 秒健康检查 + peer_disconnected 信号双重保障
+- **断线续局**：心跳与连接事件双重检测；房间号模式保留稳定席位和本地战局快照，可在断线或程序重启后继续
 
 ### 技能引擎
 - **触发时机**：召唤、攻击、受伤、死亡、激活、回合开始/结束
@@ -36,7 +36,7 @@
 
 ## 技术栈
 
-- **引擎**：Godot 4.5+（GDScript）
+- **引擎**：Godot 4.6.3+（GDScript；项目元数据兼容 4.7）
 - **网络**：ENetMultiplayerPeer（P2P） + 自建房间服务器
 - **国际化**：内置中英双语切换
 - **无外部依赖**：纯 Godot 项目，无需第三方库
@@ -73,7 +73,7 @@
 ## 如何运行
 
 ### 玩家
-1. 安装 [Godot 4.5+](https://godotengine.org/download/)
+1. 安装 [Godot 4.6.3+](https://godotengine.org/download/)
 2. 用 Godot 打开项目文件夹
 3. 按 F5 运行（或导出为可执行文件）
 
@@ -81,7 +81,7 @@
 ```bash
 git clone https://github.com/Chai-maomao/Card-UGC-Game.git
 cd Card-UGC-Game
-# 用 Godot 4.5+ 打开 project.godot
+# 用 Godot 4.6.3+ 打开 project.godot
 ```
 
 ### 启动专用服务器（可选）
@@ -89,12 +89,21 @@ cd Card-UGC-Game
 start_server.bat
 ```
 
+### 自动测试
+```bash
+# 运行所有无界面回归场景
+GODOT_BIN=/path/to/godot ./scripts/run_tests.sh
+
+# 启动本地大厅和两个客户端，验证断线后令牌重连
+GODOT_BIN=/path/to/godot ./scripts/run_reconnect_integration.sh
+```
+
 ## 战斗规则
 
-- 起始 HP：80（可在战斗配置中调整）
-- 起始圣水：1（每回合 +1，上限 10）
+- 起始 HP：30（可在战斗配置中调整）
+- 起始圣水：4（默认每回合 +2，上限 10）
 - 手牌上限：6
-- 抽牌：每回合开始抽 1 张
+- 抽牌：默认每回合开始抽 2 张（可在战斗配置中调整）
 - 攻击：直接攻击卡牌或本体（无嘲讽时）
 - 胜利条件：将对方 HP 降至 0
 
@@ -106,7 +115,7 @@ start_server.bat
 | 练习 | 单人 vs AI | 玩家为主机 |
 | 直连 | IP + 端口连接 | 房主为主机 |
 | 房间号 | 通过房间服务器中转 | P1 为主机 |
-| 专用服务器 | 独立服务器托管 | 服务器为主机 |
+| 专用服务器 | 独立房间进程负责认证与中转 | P1 为战局权威端 |
 
 **仅 P1（主机）可自定义战斗规则**，包括起始 HP、圣水上限、战败补偿等。
 

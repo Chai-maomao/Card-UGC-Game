@@ -24,8 +24,7 @@ signal skill3_requested
 @onready var skill3_btn = $ActionButtons/Skill3Button
 
 var current_card_data: CardData = null
-var buff_dots: HBoxContainer
-var silence_label: Label
+var status_icons: HBoxContainer
 var ui_scale: float = 1.0
 var _is_layout_applying: bool = false
 # Intent behind action_buttons visibility (true = show in battle): silence
@@ -72,14 +71,14 @@ func apply_ui_scale(scale_value: float) -> void:
 		_scale_child_rect(gender_label, 72, 24, 114, 40)
 		_scale_child_rect(hp_label, 6, 42, 94, 72)
 		_scale_child_rect(atk_label, 6, 58, 94, 72)
-		_scale_child_rect(action_buttons, 6, 82, 114, 158)
+		_scale_child_rect(action_buttons, 6, 88, 114, 158)
 	else:
 		_scale_child_rect(name_label, 6, 4, 114, 22)
 		_scale_child_rect(cost_label, 6, 26, 58, 40)
 		_scale_child_rect(gender_label, 72, 24, 114, 40)
 		_scale_child_rect(hp_label, 6, 42, 94, 56)
 		_scale_child_rect(atk_label, 6, 58, 94, 72)
-		_scale_child_rect(action_buttons, 6, 82, 114, 158)
+		_scale_child_rect(action_buttons, 6, 88, 114, 158)
 	if name_label:
 		name_label.add_theme_font_size_override("font_size", max(10, int(13 * ui_scale)))
 	if gender_label:
@@ -96,12 +95,9 @@ func apply_ui_scale(scale_value: float) -> void:
 			button.add_theme_font_size_override("font_size", max(9, int(10 * ui_scale)))
 	if action_buttons:
 		action_buttons.add_theme_constant_override("separation", max(1, int(2 * ui_scale)))
-	if buff_dots:
-		buff_dots.position = Vector2(6, 74) * ui_scale
-		buff_dots.add_theme_constant_override("separation", max(1, int(2 * ui_scale)))
-	if silence_label:
-		silence_label.position = Vector2(6, 140) * ui_scale
-		silence_label.add_theme_font_size_override("font_size", max(10, int(13 * ui_scale)))
+	if status_icons:
+		status_icons.position = Vector2(6, 73) * ui_scale
+		status_icons.add_theme_constant_override("separation", max(1, int(1 * ui_scale)))
 	_apply_card_visual_style()
 	_update_card_layout_for_type()
 	_is_layout_applying = false
@@ -155,20 +151,13 @@ func _apply_card_visual_style() -> void:
 
 
 func _ready():
-	# Buff indicator dots
-	buff_dots = HBoxContainer.new()
-	buff_dots.add_theme_constant_override("separation", 2)
-	buff_dots.position = Vector2(6, 74)
-	add_child(buff_dots)
-
-	# Silence indicator
-	silence_label = Label.new()
-	silence_label.text = Locale.t("card.silenced")
-	silence_label.add_theme_color_override("font_color", Color(1.0, 0.2, 0.2))
-	silence_label.add_theme_font_size_override("font_size", 13)
-	silence_label.position = Vector2(6, 140)
-	silence_label.visible = false
-	add_child(silence_label)
+	# Compact status strip sits below the stat lines; actions start at y=88, so
+	# the font-backed badges have a measured 2px gap from the buttons below.
+	status_icons = HBoxContainer.new()
+	status_icons.add_theme_constant_override("separation", 1)
+	status_icons.position = Vector2(6, 73)
+	status_icons.mouse_filter = Control.MOUSE_FILTER_PASS
+	add_child(status_icons)
 
 	if normal_atk_btn:
 		normal_atk_btn.pressed.connect(func(): attack_requested.emit())
@@ -200,7 +189,7 @@ func _on_hover_enter() -> void:
 	z_index = 20
 	pivot_offset = Vector2(size.x * 0.5, size.y)
 	_hover_tween = create_tween()
-	_hover_tween.tween_property(self, "scale", Vector2(1.14, 1.14), 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	_hover_tween.tween_property(self, "scale", Vector2(1.06, 1.06), 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 
 
 func _on_hover_exit() -> void:
@@ -223,9 +212,8 @@ func set_card(card_data: CardData):
 		if hp_label: hp_label.text = ""
 		if atk_label: atk_label.text = ""
 		if action_buttons: action_buttons.visible = false
-		if silence_label: silence_label.visible = false
 		self.modulate = Color.WHITE
-		_clear_buff_dots()
+		_clear_status_icons()
 		return
 
 	_update_card_layout_for_type()
@@ -275,7 +263,7 @@ func set_card(card_data: CardData):
 			if atk_label:
 				atk_label.text = Locale.t("card.atk", [eff_atk])
 
-	_update_buff_dots()
+	_update_status_icons()
 	_update_skill_buttons()
 	if card_data.is_spell() and card_data.skills.size() > 0:
 		tooltip_text = _TextFormatter.format_skill_tooltip(SpellRules.spell_skill(card_data))
@@ -283,8 +271,6 @@ func set_card(card_data: CardData):
 		tooltip_text = Locale.t("card.parasite_tooltip", [card_data.hp, card_data.atk])
 	else:
 		tooltip_text = _parasite_tooltip(card_data)
-	if silence_label:
-		silence_label.visible = card_data.is_silenced()
 	if action_buttons:
 		action_buttons.visible = _actions_visible and not card_data.is_silenced()
 	self.modulate = Color(0.5, 0.5, 0.5) if card_data.is_silenced() else Color.WHITE
@@ -318,50 +304,136 @@ func _card_type_text(card_data: CardData) -> String:
 	return _gender_text(card_data.gender)
 
 
-func _clear_buff_dots():
-	if buff_dots == null:
+func _clear_status_icons() -> void:
+	if status_icons == null:
 		return
-	for child in buff_dots.get_children():
+	for child in status_icons.get_children():
 		child.queue_free()
 
 
-func _update_buff_dots():
-	if buff_dots == null or current_card_data == null:
+func _update_status_icons() -> void:
+	if status_icons == null or current_card_data == null:
 		return
-	_clear_buff_dots()
+	_clear_status_icons()
+	var entries: Array[Dictionary] = []
+	var grouped: Dictionary = {
+		"positive": [],
+		"negative": [],
+		"neutral": [],
+	}
 	for eff in current_card_data.status_effects:
 		var val: int = eff.get("value", 0)
 		if val <= 0:
 			continue
-		var dot := ColorRect.new()
-		dot.custom_minimum_size = Vector2(10, 10) * ui_scale
-		if eff.get("buff_id", "") == SkillEngine.BUFF_TAUNT:
-			dot.color = Color(0.3, 0.5, 1.0)  # blue for taunt
-		elif eff.get("buff_id", "") == SkillEngine.BUFF_SILENCE:
-			dot.color = Color(0.9, 0.2, 0.2)  # red for silence
-		elif eff.get("buff_id", "") == SkillEngine.BUFF_MANA_REFUND:
-			dot.color = Color(0.2, 0.8, 1.0)
-		elif eff.get("buff_id", "") == SkillEngine.BUFF_MISFORTUNE:
-			dot.color = Color(0.3, 0.3, 0.3)  # dark grey for misfortune
-		elif eff.get("buff_id", "") == SkillEngine.BUFF_POISON:
-			dot.color = Color(0.7, 0.4, 0.85)  # purple for poison
-		elif eff.get("buff_id", "") == SkillEngine.BUFF_STUN:
-			dot.color = Color(0.95, 0.9, 0.35)  # yellow for stun
-		else:
-			dot.color = Color.GREEN
-		dot.tooltip_text = _format_buff_tooltip(eff)
-		buff_dots.add_child(dot)
+		var buff_id: String = eff.get("buff_id", "")
+		var polarity: String = SkillRegistry.buff_polarity(buff_id)
+		if not grouped.has(polarity):
+			polarity = "neutral"
+		(grouped[polarity] as Array).append(eff)
+	for polarity in ["positive", "negative", "neutral"]:
+		var effects: Array = grouped[polarity]
+		if effects.is_empty():
+			continue
+		var visual := _status_visual(polarity)
+		var tooltip_lines: Array[String] = []
+		for effect in effects:
+			tooltip_lines.append(_format_buff_tooltip(effect))
+		var symbol: String = visual.symbol
+		if effects.size() > 1:
+			symbol += str(effects.size())
+		entries.append({
+			"symbol": symbol,
+			"color": visual.color,
+			"tooltip": "\n".join(tooltip_lines),
+		})
+	var parasite_tooltips: Array[String] = []
 	for parasite in current_card_data.parasite_cards:
 		if not parasite is CardData:
 			continue
 		var p: CardData = parasite
 		if p.skills.is_empty():
 			continue
-		var dot := ColorRect.new()
-		dot.custom_minimum_size = Vector2(10, 10) * ui_scale
-		dot.color = Color(1.0, 0.74, 0.18)
-		dot.tooltip_text = _format_parasite_passive_tooltip(p)
-		buff_dots.add_child(dot)
+		parasite_tooltips.append(_format_parasite_passive_tooltip(p))
+	if not parasite_tooltips.is_empty():
+		var parasite_symbol := "⛓"
+		if parasite_tooltips.size() > 1:
+			parasite_symbol += str(parasite_tooltips.size())
+		entries.append({
+			"symbol": parasite_symbol,
+			"color": Color(1.0, 0.74, 0.18),
+			"tooltip": "\n\n".join(parasite_tooltips),
+		})
+
+	# Six compact badges fit inside the 108px strip. If a heavily modified card
+	# exceeds that, reserve the final badge for a combined overflow indicator.
+	const MAX_VISIBLE_STATUS_BADGES := 6
+	var visible_count: int = min(entries.size(), MAX_VISIBLE_STATUS_BADGES)
+	if entries.size() > MAX_VISIBLE_STATUS_BADGES:
+		visible_count = MAX_VISIBLE_STATUS_BADGES - 1
+	for i in range(visible_count):
+		var entry: Dictionary = entries[i]
+		status_icons.add_child(_make_status_badge(
+			entry.get("symbol", "•"),
+			entry.get("color", Color.WHITE),
+			entry.get("tooltip", "")
+		))
+	if entries.size() > MAX_VISIBLE_STATUS_BADGES:
+		var hidden_tooltips: Array[String] = []
+		for i in range(visible_count, entries.size()):
+			hidden_tooltips.append(entries[i].get("tooltip", ""))
+		status_icons.add_child(_make_status_badge(
+			"+%d" % (entries.size() - visible_count),
+			Color(0.72, 0.78, 0.88),
+			"\n\n".join(hidden_tooltips)
+		))
+
+
+func _status_visual(polarity: String) -> Dictionary:
+	match polarity:
+		"positive":
+			return {"symbol": "↑", "color": Color(0.35, 0.95, 0.5)}
+		"negative":
+			return {"symbol": "↓", "color": Color(0.95, 0.34, 0.42)}
+	return {"symbol": "•", "color": Color(0.72, 0.78, 0.88)}
+
+
+func _make_status_badge(symbol: String, color: Color, tooltip: String) -> PanelContainer:
+	var badge := PanelContainer.new()
+	var badge_width: float = 16.0 if symbol.length() > 1 else 11.0
+	badge.custom_minimum_size = Vector2(badge_width, 9) * ui_scale
+	badge.tooltip_text = tooltip
+	badge.mouse_filter = Control.MOUSE_FILTER_STOP
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.025, 0.035, 0.055, 0.94)
+	style.border_color = color
+	var border_width: int = max(1, int(ui_scale))
+	style.border_width_left = border_width
+	style.border_width_top = border_width
+	style.border_width_right = border_width
+	style.border_width_bottom = border_width
+	var radius: int = max(2, int(2 * ui_scale))
+	style.corner_radius_top_left = radius
+	style.corner_radius_top_right = radius
+	style.corner_radius_bottom_right = radius
+	style.corner_radius_bottom_left = radius
+	badge.add_theme_stylebox_override("panel", style)
+	var label := Label.new()
+	label.text = symbol
+	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	var is_polarity_arrow := symbol.begins_with("↑") or symbol.begins_with("↓")
+	label.add_theme_font_size_override("font_size", max(7, int((8 if is_polarity_arrow else 7) * ui_scale)))
+	label.add_theme_color_override("font_color", color.lightened(0.18))
+	if is_polarity_arrow:
+		# A one-pixel same-colour outline gives the thin font arrow a readable
+		# shaft at card scale without enlarging the badge or shifting its centre.
+		label.add_theme_color_override("font_outline_color", color.lightened(0.18))
+		label.add_theme_constant_override("outline_size", max(1, int(ui_scale)))
+	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	badge.add_child(label)
+	return badge
 
 
 func _format_parasite_passive_tooltip(parasite: CardData) -> String:
@@ -491,15 +563,21 @@ func _update_skill_buttons():
 # on_activate skill on a card that has already attacked.
 func _apply_skill_button_state(btn: Button, skill: Dictionary, skill_index: int) -> void:
 	var unavailable := false
+	var unavailable_reason := ""
 	var trig: String = skill.get("trigger", "")
 	if current_card_data.skills_used.has(skill_index):
 		unavailable = true
+		unavailable_reason = Locale.t("card.skill_used")
 	elif trig == SkillEngine.TRIGGER_ON_SUMMON and not current_card_data.summoned_this_turn:
 		unavailable = true
+		unavailable_reason = Locale.t("card.skill_summon_window")
 	elif trig == SkillEngine.TRIGGER_ON_ACTIVATE and current_card_data.has_attacked:
 		unavailable = true
+		unavailable_reason = Locale.t("card.skill_action_spent")
 	btn.disabled = unavailable
 	btn.modulate = Color(0.5, 0.5, 0.5) if unavailable else Color.WHITE
+	var base_tooltip := _TextFormatter.format_skill_tooltip(skill)
+	btn.tooltip_text = "%s\n\n%s" % [base_tooltip, unavailable_reason] if unavailable else base_tooltip
 
 
 func _auto_hide_if_enemy():

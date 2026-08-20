@@ -109,6 +109,8 @@ func _add_section(palette_vbox: VBoxContainer, title_text: String, default_open:
 	pressed_st.bg_color = Color(0.25, 0.30, 0.42, 0.30)
 	header.add_theme_stylebox_override("pressed", pressed_st)
 	header.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	header.set_meta("section_title", title_text)
+	header.set_meta("user_open", default_open)
 	palette_vbox.add_child(header)
 
 	var box := VBoxContainer.new()
@@ -118,6 +120,7 @@ func _add_section(palette_vbox: VBoxContainer, title_text: String, default_open:
 
 	header.pressed.connect(func():
 		box.visible = not box.visible
+		header.set_meta("user_open", box.visible)
 		header.text = "%s %s" % ["-" if box.visible else "+", title_text]
 	)
 
@@ -135,23 +138,9 @@ func palette_button(text: String, color: Color, cb: Callable, effect_id: String 
 	btn.text = text
 	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	btn.add_theme_font_size_override("font_size", 13)
-	var st := StyleBoxFlat.new()
-	st.bg_color = color
-	st.border_color = color.darkened(0.25)
-	st.set_border_width_all(1)
-	st.set_corner_radius_all(5)
-	st.content_margin_left = 8
-	st.content_margin_top = 5
-	st.content_margin_bottom = 5
-	btn.add_theme_stylebox_override("normal", st)
-	var hover: StyleBoxFlat = st.duplicate()
-	hover.bg_color = color.lightened(0.12)
-	btn.add_theme_stylebox_override("hover", hover)
-	var pressed: StyleBoxFlat = st.duplicate()
-	pressed.bg_color = color.darkened(0.12)
-	btn.add_theme_stylebox_override("pressed", pressed)
-	btn.add_theme_color_override("font_color", Color(1, 1, 1, 0.97))
+	_apply_palette_style(btn, color, 6)
 	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+	btn.tooltip_text = Locale.t("skill_editor.hint_click")
 	btn.pressed.connect(cb)
 	return btn
 
@@ -167,22 +156,7 @@ func variable_palette_button(text: String, var_id: String) -> Button:
 	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	btn.add_theme_font_size_override("font_size", 13)
 	var color := SkillBlock.condition_color()
-	var st := StyleBoxFlat.new()
-	st.bg_color = color
-	st.border_color = color.darkened(0.25)
-	st.set_border_width_all(1)
-	st.set_corner_radius_all(12)
-	st.content_margin_left = 10
-	st.content_margin_top = 5
-	st.content_margin_bottom = 5
-	btn.add_theme_stylebox_override("normal", st)
-	var hover: StyleBoxFlat = st.duplicate()
-	hover.bg_color = color.lightened(0.12)
-	btn.add_theme_stylebox_override("hover", hover)
-	var pressed: StyleBoxFlat = st.duplicate()
-	pressed.bg_color = color.darkened(0.12)
-	btn.add_theme_stylebox_override("pressed", pressed)
-	btn.add_theme_color_override("font_color", Color(1, 1, 1, 0.97))
+	_apply_palette_style(btn, color, 14, false)
 	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	btn.tooltip_text = Locale.t("skill_editor.variable_drag_hint")
 	btn.pressed.connect(func(): pass)
@@ -200,22 +174,7 @@ func boolean_palette_button(text: String, kind: String) -> Button:
 	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	btn.add_theme_font_size_override("font_size", 13)
 	var color := SkillBlock.condition_color()
-	var st := StyleBoxFlat.new()
-	st.bg_color = color
-	st.border_color = color.darkened(0.25)
-	st.set_border_width_all(1)
-	st.set_corner_radius_all(8)
-	st.content_margin_left = 8
-	st.content_margin_top = 5
-	st.content_margin_bottom = 5
-	btn.add_theme_stylebox_override("normal", st)
-	var hover: StyleBoxFlat = st.duplicate()
-	hover.bg_color = color.lightened(0.12)
-	btn.add_theme_stylebox_override("hover", hover)
-	var pressed: StyleBoxFlat = st.duplicate()
-	pressed.bg_color = color.darkened(0.12)
-	btn.add_theme_stylebox_override("pressed", pressed)
-	btn.add_theme_color_override("font_color", Color(1, 1, 1, 0.97))
+	_apply_palette_style(btn, color, 9)
 	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	btn.tooltip_text = Locale.t("skill_editor.condition_drag_hint")
 	btn.pressed.connect(func(): pass)
@@ -235,23 +194,8 @@ func target_palette_button(text: String, id: String, is_target: bool) -> Button:
 	btn.text = text
 	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	btn.add_theme_font_size_override("font_size", 13)
-	var color: Color = Color(0.30, 0.50, 0.80) if is_target else Color(0.62, 0.52, 0.30)
-	var st := StyleBoxFlat.new()
-	st.bg_color = color
-	st.border_color = color.darkened(0.25)
-	st.set_border_width_all(1)
-	st.set_corner_radius_all(12)
-	st.content_margin_left = 10
-	st.content_margin_top = 5
-	st.content_margin_bottom = 5
-	btn.add_theme_stylebox_override("normal", st)
-	var hover: StyleBoxFlat = st.duplicate()
-	hover.bg_color = color.lightened(0.12)
-	btn.add_theme_stylebox_override("hover", hover)
-	var pressed: StyleBoxFlat = st.duplicate()
-	pressed.bg_color = color.darkened(0.12)
-	btn.add_theme_stylebox_override("pressed", pressed)
-	btn.add_theme_color_override("font_color", Color(1, 1, 1, 0.97))
+	var color: Color = SkillBlock.target_color() if is_target else SkillBlock.side_color()
+	_apply_palette_style(btn, color, 14, false)
 	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	btn.tooltip_text = Locale.t("skill_editor.target_drag_hint")
 	btn.pressed.connect(func(): pass)
@@ -269,23 +213,8 @@ func expr_palette_button(text: String, kind: String) -> Button:
 	btn.text = text
 	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	btn.add_theme_font_size_override("font_size", 13)
-	var color := Color(0.45, 0.35, 0.68)  # violet — math / operators
-	var st := StyleBoxFlat.new()
-	st.bg_color = color
-	st.border_color = color.darkened(0.25)
-	st.set_border_width_all(1)
-	st.set_corner_radius_all(12)
-	st.content_margin_left = 10
-	st.content_margin_top = 5
-	st.content_margin_bottom = 5
-	btn.add_theme_stylebox_override("normal", st)
-	var hover: StyleBoxFlat = st.duplicate()
-	hover.bg_color = color.lightened(0.12)
-	btn.add_theme_stylebox_override("hover", hover)
-	var pressed: StyleBoxFlat = st.duplicate()
-	pressed.bg_color = color.darkened(0.12)
-	btn.add_theme_stylebox_override("pressed", pressed)
-	btn.add_theme_color_override("font_color", Color(1, 1, 1, 0.97))
+	var color := SkillBlock.math_color()
+	_apply_palette_style(btn, color, 14, false)
 	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	btn.tooltip_text = Locale.t("skill_editor.math_drag_hint")
 	btn.pressed.connect(func(): pass)
@@ -317,26 +246,49 @@ func logic_palette_button(text: String, kind: String) -> Button:
 	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	btn.add_theme_font_size_override("font_size", 13)
 	var color := SkillBlock.condition_color().darkened(0.15)
-	var st := StyleBoxFlat.new()
-	st.bg_color = color
-	st.border_color = color.darkened(0.25)
-	st.set_border_width_all(1)
-	st.set_corner_radius_all(10)
-	st.content_margin_left = 10
-	st.content_margin_top = 5
-	st.content_margin_bottom = 5
-	btn.add_theme_stylebox_override("normal", st)
-	var hover: StyleBoxFlat = st.duplicate()
-	hover.bg_color = color.lightened(0.12)
-	btn.add_theme_stylebox_override("hover", hover)
-	var pressed: StyleBoxFlat = st.duplicate()
-	pressed.bg_color = color.darkened(0.12)
-	btn.add_theme_stylebox_override("pressed", pressed)
-	btn.add_theme_color_override("font_color", Color(1, 1, 1, 0.97))
+	_apply_palette_style(btn, color, 12, false)
 	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	btn.tooltip_text = Locale.t("skill_editor.logic_drag_hint")
 	btn.pressed.connect(func(): pass)
 	return btn
+
+
+# One visual language for every palette block: a darker material base,
+# semantic edge and lifted hover state. Keep horizontal borders and padding
+# symmetric so pressed/focus layers cover the button evenly on both sides.
+func _apply_palette_style(btn: Button, color: Color, radius: int, _left_accent: bool = true) -> void:
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = color.darkened(0.08)
+	normal.border_color = color.darkened(0.22)
+	normal.set_border_width_all(1)
+	normal.set_corner_radius_all(radius)
+	normal.shadow_size = 0
+	normal.content_margin_left = 9
+	normal.content_margin_right = 9
+	normal.content_margin_top = 5
+	normal.content_margin_bottom = 5
+	btn.add_theme_stylebox_override("normal", normal)
+
+	var hover: StyleBoxFlat = normal.duplicate()
+	hover.bg_color = color.lightened(0.08)
+	hover.border_color = color.lightened(0.14)
+	hover.shadow_size = 0
+	btn.add_theme_stylebox_override("hover", hover)
+
+	var pressed: StyleBoxFlat = normal.duplicate()
+	pressed.bg_color = color.darkened(0.18)
+	pressed.border_color = color.lightened(0.08)
+	pressed.shadow_size = 0
+	pressed.content_margin_top = 6
+	pressed.content_margin_bottom = 4
+	btn.add_theme_stylebox_override("pressed", pressed)
+
+	# Focus must not paint another filled StyleBox over the current button
+	# state; that overlay exposed the old asymmetric left/right border widths.
+	btn.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	btn.add_theme_color_override("font_color", Color(1, 1, 1, 0.97))
+	btn.add_theme_color_override("font_hover_color", Color.WHITE)
+	btn.add_theme_color_override("font_pressed_color", Color(0.92, 0.95, 1.0))
 
 
 func logic_label(kind: String) -> String:

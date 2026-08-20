@@ -25,16 +25,22 @@ const _TargetResolver = preload("res://SkillTargetResolver.gd")
 
 @onready var enemy_side_ui = $CanvasLayer/MainBackground/MainLayout/EnemySide
 @onready var player_side_ui = $CanvasLayer/MainBackground/MainLayout/PlayerSide
-@onready var mana_label = $CanvasLayer/MainBackground/MainLayout/MiddleInfoBar/InfoHBox/ManaLabel
-@onready var status_toggle_button = $CanvasLayer/MainBackground/MainLayout/MiddleInfoBar/InfoHBox/StatusToggleButton
+@onready var turn_label = $CanvasLayer/MainBackground/MainLayout/MiddleInfoBar/InfoHBox/TurnLabel
 @onready var end_turn_button = $CanvasLayer/MainBackground/MainLayout/MiddleInfoBar/InfoHBox/EndTurnButton
 @onready var attack_arrow = $CanvasLayer/AttackArrow
-@onready var hand_container = $CanvasLayer/MainBackground/MainLayout/HandArea/HandScroll/HandContainer
+@onready var bottom_dock = $CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock
+@onready var pile_column = $CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock/PileColumn
+@onready var hand_area = $CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock/HandArea
+@onready var hand_content = $CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock/HandArea/HandContent
+@onready var hand_container = $CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock/HandArea/HandContent/HandScroll/HandContainer
 @onready var splash_panel = $CanvasLayer/SplashPanel
 @onready var splash_art = $CanvasLayer/SplashPanel/SplashArt
 @onready var splash_name = $CanvasLayer/SplashPanel/SplashName
 @onready var splash_text = $CanvasLayer/SplashPanel/SplashText
-@onready var discard_zone = $CanvasLayer/DiscardZone
+@onready var discard_column = $CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock/DiscardColumn
+@onready var discard_zone = $CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock/DiscardColumn/DiscardZone
+@onready var enemy_status_hud = $CanvasLayer/MainBackground/MainLayout/EnemyStatusRow/EnemyStatusHUD
+@onready var player_status_hud = $CanvasLayer/MainBackground/MainLayout/PlayerStatusRow/PlayerStatusHUD
 
 var splash_tween: Tween
 var turn_cover: ColorRect
@@ -47,7 +53,15 @@ var toast_label: Label
 var toast_tween: Tween
 var combat_broadcast_label: Label
 var combat_broadcast_tween: Tween
-var show_enemy_status: bool = false
+var action_log_button: Button
+var abandon_battle_button: Button
+var action_log_panel: PanelContainer
+var action_log_text: RichTextLabel
+var _action_log_entries: Array[String] = []
+var reconnect_leave_button: Button
+var _reconnect_elapsed_seconds: int = 0
+var _reconnect_attempt: int = 0
+var _history_recorded: bool = false
 var practice_ai_running: bool = false
 var battle_finished: bool = false
 var _turn_ending: bool = false  # 防止短时间内重复点击结束按钮
@@ -58,14 +72,17 @@ var _action_damage_events: Array = []
 var _action_parasite_events: Array = []
 var _action_failed_events: Array = []
 var _end_turn_pulse: Tween = null
-var _mana_pop_tween: Tween = null
-var _mana_last_text: String = ""
+var _turn_pop_tween: Tween = null
+var _turn_last_text: String = ""
 const BASE_VIEWPORT_SIZE := Vector2(1152, 648)
 const BASE_CARD_SIZE := Vector2(120, 160)
 const BASE_SLOT_SIZE := BASE_CARD_SIZE
-const BASE_PILE_BUTTON_SIZE := Vector2(120, 50)
+const BASE_PILE_BUTTON_SIZE := Vector2(112, 44)
 const BASE_DEBUG_BUTTON_SIZE := Vector2(130, 50)
-const BASE_HELP_BUTTON_SIZE := Vector2(90, 50)
+const BASE_HELP_BUTTON_SIZE := Vector2(90, 38)
+const RESUME_SYNC_TIMEOUT := 15.0
+const RESUME_REQUEST_INTERVAL := 1.5
+const RESUME_MAX_REQUESTS := 8
 
 
 func _ui_scale() -> float:
@@ -90,25 +107,85 @@ func _scale_control(control: Control, base_size: Vector2) -> void:
 func _apply_theme() -> void:
 	UITheme.apply_panel($CanvasLayer/MainBackground, "battle")
 	UITheme.apply_panel($CanvasLayer/MainBackground/MainLayout/MiddleInfoBar, "gold")
-	UITheme.apply_panel($CanvasLayer/MainBackground/MainLayout/HandArea/HandBackdrop, "hand")
+	UITheme.apply_panel(hand_area.get_node("HandBackdrop"), "hand")
 	UITheme.apply_panel(discard_zone, "dark")
 	UITheme.apply_panel(splash_panel, "gold")
-	UITheme.apply_label(mana_label)
-	UITheme.apply_button(status_toggle_button, "secondary")
+	UITheme.apply_label(turn_label)
+	_apply_status_hud_theme(enemy_status_hud, true, false)
+	_apply_status_hud_theme(player_status_hud, false, false)
 	# End-turn gets its own attention pulse, so skip the generic hover hook.
 	UITheme.apply_button(end_turn_button, "primary", false)
 	for btn in [draw_pile_btn, discard_pile_btn, debug_state_btn, help_btn]:
 		UITheme.apply_button(btn, "secondary")
-	var discard_label := $CanvasLayer/DiscardZone/DiscardLabel
+	var discard_label := discard_zone.get_node("DiscardLabel")
 	UITheme.apply_label(discard_label)
 	UITheme.apply_title(splash_name, 18)
 	UITheme.apply_label(splash_text)
 
 
+func _apply_status_hud_theme(hud: Panel, enemy: bool, active: bool) -> void:
+	if hud == null:
+		return
+	var faction_color: Color = UITheme.COLOR_ENEMY if enemy else UITheme.COLOR_PLAYER
+	var border_color: Color = UITheme.COLOR_GOLD if active else faction_color
+	var fill_color := Color(0.105, 0.045, 0.08, 0.94) if enemy else Color(0.025, 0.095, 0.14, 0.94)
+	var glow := Color(border_color.r, border_color.g, border_color.b, 0.30 if active else 0.12)
+	hud.add_theme_stylebox_override("panel", UITheme.panel_style(
+		fill_color, border_color, 2 if active else 1, 9, glow, 4 if active else 2
+	))
+
+	var content := hud.get_node("Margin/Content") as HBoxContainer
+	var side_label := content.get_node("SideLabel") as Label
+	var hp_label := content.get_node("HpLabel") as Label
+	var mana_value_label := content.get_node("ManaLabel") as Label
+	var hand_label := content.get_node("HandLabel") as Label
+	for label in [side_label, hp_label, mana_value_label, hand_label]:
+		UITheme.apply_label(label)
+	side_label.add_theme_color_override("font_color", border_color.lightened(0.22))
+	hp_label.add_theme_color_override("font_color", Color(1.0, 0.50, 0.48))
+	mana_value_label.add_theme_color_override("font_color", Color(0.40, 0.86, 1.0))
+	hand_label.add_theme_color_override("font_color", UITheme.COLOR_TEXT_MUTED)
+
+	var hp_bar := content.get_node("HpBar") as ProgressBar
+	var mana_bar := content.get_node("ManaBar") as ProgressBar
+	_style_status_bar(hp_bar, Color(0.88, 0.24, 0.24))
+	_style_status_bar(mana_bar, Color(0.20, 0.72, 0.88))
+
+
+func _style_status_bar(bar: ProgressBar, fill_color: Color) -> void:
+	if bar == null:
+		return
+	bar.add_theme_stylebox_override("background", UITheme.panel_style(
+		Color(0.025, 0.03, 0.045, 0.90), Color(0.20, 0.24, 0.31, 0.85), 1, 7
+	))
+	bar.add_theme_stylebox_override("fill", UITheme.panel_style(
+		fill_color, fill_color.lightened(0.20), 1, 7
+	))
+
+
+func _scale_status_hud(hud: Panel, scale_value: float) -> void:
+	if hud == null:
+		return
+	hud.custom_minimum_size = Vector2(720, 38) * scale_value
+	var margin := hud.get_node("Margin") as MarginContainer
+	margin.add_theme_constant_override("margin_left", max(7, int(14 * scale_value)))
+	margin.add_theme_constant_override("margin_right", max(7, int(14 * scale_value)))
+	var content := hud.get_node("Margin/Content") as HBoxContainer
+	content.add_theme_constant_override("separation", max(4, int(10 * scale_value)))
+	var label_size: int = max(9, int(13 * scale_value))
+	for label in [content.get_node("SideLabel"), content.get_node("HpLabel"), content.get_node("ManaLabel"), content.get_node("HandLabel")]:
+		(label as Label).add_theme_font_size_override("font_size", label_size)
+	content.get_node("SideLabel").custom_minimum_size = Vector2(72 * scale_value, 0)
+	content.get_node("HpLabel").custom_minimum_size = Vector2(108 * scale_value, 0)
+	content.get_node("HpBar").custom_minimum_size = Vector2(128, 14) * scale_value
+	content.get_node("ManaLabel").custom_minimum_size = Vector2(108 * scale_value, 0)
+	content.get_node("ManaBar").custom_minimum_size = Vector2(104, 14) * scale_value
+	content.get_node("HandLabel").custom_minimum_size = Vector2(104 * scale_value, 0)
+
+
 func _apply_responsive_layout() -> void:
 	var s := _ui_scale()
 	var viewport_size := get_viewport_rect().size
-	var bottom_y: float = max(0.0, viewport_size.y - 48.0 * s)
 
 	# Slots
 	for slot in _my_slots_ui() + _their_slots_ui():
@@ -124,62 +201,101 @@ func _apply_responsive_layout() -> void:
 		for card_ui in hand_container.get_children():
 			_scale_control(card_ui, BASE_CARD_SIZE)
 
-	# Middle info bar (mana label + buttons)
-	if mana_label:
-		mana_label.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	if status_toggle_button:
-		status_toggle_button.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-		status_toggle_button.custom_minimum_size = Vector2(120 * s, 0)
+	# Fixed player/opponent HUDs and middle turn controls.
+	_scale_status_hud(enemy_status_hud, s)
+	_scale_status_hud(player_status_hud, s)
+	if turn_label:
+		turn_label.add_theme_font_size_override("font_size", max(10, int(14 * s)))
 	if end_turn_button:
 		end_turn_button.add_theme_font_size_override("font_size", max(10, int(14 * s)))
 	var info_hbox := $CanvasLayer/MainBackground/MainLayout/MiddleInfoBar/InfoHBox
 	info_hbox.add_theme_constant_override("separation", int(20 * s))
 
 	# Spacers
-	$CanvasLayer/MainBackground/MainLayout/TopSpacer.custom_minimum_size = Vector2(0, 12 * s)
-	$CanvasLayer/MainBackground/MainLayout/MidSpacer.custom_minimum_size = Vector2(0, 8 * s)
-	$CanvasLayer/MainBackground/MainLayout/BottomSpacer.custom_minimum_size = Vector2(0, 6 * s)
+	$CanvasLayer/MainBackground/MainLayout/TopSpacer.custom_minimum_size = Vector2(0, 4 * s)
+	$CanvasLayer/MainBackground/MainLayout/EnemyStatusRow.custom_minimum_size = Vector2(0, 40 * s)
+	$CanvasLayer/MainBackground/MainLayout/MidSpacer.custom_minimum_size = Vector2(0, 6 * s)
+	$CanvasLayer/MainBackground/MainLayout/MiddleInfoBar.custom_minimum_size = Vector2(720, 48) * s
+	$CanvasLayer/MainBackground/MainLayout/BottomSpacer.custom_minimum_size = Vector2(0, 4 * s)
+	$CanvasLayer/MainBackground/MainLayout/PlayerStatusRow.custom_minimum_size = Vector2(0, 40 * s)
 	$CanvasLayer/MainBackground/MainLayout/HandSpacer.custom_minimum_size = Vector2(0, 4 * s)
-	$CanvasLayer/MainBackground/MainLayout/HandArea.custom_minimum_size = Vector2(0, 170 * s)
+	$CanvasLayer/MainBackground/MainLayout/BottomDockMargin.custom_minimum_size = Vector2(0, 154 * s)
+	$CanvasLayer/MainBackground/MainLayout/BottomDockMargin.add_theme_constant_override("margin_left", int(18 * s))
+	$CanvasLayer/MainBackground/MainLayout/BottomDockMargin.add_theme_constant_override("margin_right", int(18 * s))
+	$CanvasLayer/MainBackground/MainLayout/BottomDockMargin.add_theme_constant_override("margin_bottom", int(8 * s))
+	bottom_dock.add_theme_constant_override("separation", int(12 * s))
+	pile_column.custom_minimum_size = Vector2(112 * s, 0)
+	pile_column.add_theme_constant_override("separation", int(8 * s))
+	hand_area.custom_minimum_size = Vector2(0, 154 * s)
+	hand_content.add_theme_constant_override("margin_left", int(8 * s))
+	hand_content.add_theme_constant_override("margin_top", int(8 * s))
+	hand_content.add_theme_constant_override("margin_right", int(8 * s))
+	hand_content.add_theme_constant_override("margin_bottom", int(8 * s))
+	discard_column.custom_minimum_size = Vector2(150 * s, 0)
+	call_deferred("_align_player_aura")
 
-	# Pile buttons (bottom-left)
-	var pile_gap := 10.0 * s
-	var pile_x := 20.0 * s
+	# Pile buttons live in the left dock column, so they never cover the hand.
 	if draw_pile_btn:
 		UITheme.apply_button(draw_pile_btn, "secondary")
 		_scale_control(draw_pile_btn, BASE_PILE_BUTTON_SIZE)
-		draw_pile_btn.position = Vector2(pile_x, bottom_y)
 		draw_pile_btn.add_theme_font_size_override("font_size", max(9, int(12 * s)))
-		pile_x += BASE_PILE_BUTTON_SIZE.x * s + pile_gap
 	if discard_pile_btn:
 		UITheme.apply_button(discard_pile_btn, "secondary")
 		_scale_control(discard_pile_btn, BASE_PILE_BUTTON_SIZE)
-		discard_pile_btn.position = Vector2(pile_x, bottom_y)
 		discard_pile_btn.add_theme_font_size_override("font_size", max(9, int(12 * s)))
-		pile_x += BASE_PILE_BUTTON_SIZE.x * s + pile_gap
 	if debug_state_btn:
 		UITheme.apply_button(debug_state_btn, "secondary")
 		_scale_control(debug_state_btn, BASE_DEBUG_BUTTON_SIZE)
-		debug_state_btn.position = Vector2(pile_x, bottom_y)
 		debug_state_btn.add_theme_font_size_override("font_size", max(9, int(12 * s)))
-		pile_x += BASE_DEBUG_BUTTON_SIZE.x * s + pile_gap
 	if help_btn:
 		UITheme.apply_button(help_btn, "secondary")
 		_scale_control(help_btn, BASE_HELP_BUTTON_SIZE)
-		help_btn.position = Vector2(pile_x, bottom_y)
+		help_btn.position = Vector2(viewport_size.x - (BASE_HELP_BUTTON_SIZE.x + 16.0) * s, 10.0 * s)
 		help_btn.add_theme_font_size_override("font_size", max(9, int(12 * s)))
+	if action_log_button:
+		UITheme.apply_button(action_log_button, "secondary")
+		action_log_button.custom_minimum_size = Vector2(90, 38) * s
+		action_log_button.size = action_log_button.custom_minimum_size
+		action_log_button.position = Vector2(viewport_size.x - 220.0 * s, 10.0 * s)
+		action_log_button.add_theme_font_size_override("font_size", max(9, int(12 * s)))
+	if abandon_battle_button:
+		UITheme.apply_button(abandon_battle_button, "danger")
+		abandon_battle_button.custom_minimum_size = Vector2(104, 38) * s
+		abandon_battle_button.size = abandon_battle_button.custom_minimum_size
+		abandon_battle_button.position = Vector2(viewport_size.x - 338.0 * s, 10.0 * s)
+		abandon_battle_button.add_theme_font_size_override("font_size", max(9, int(12 * s)))
+	if action_log_panel:
+		action_log_panel.position = Vector2(viewport_size.x - 376.0 * s, 56.0 * s)
+		action_log_panel.size = Vector2(360, 170) * s
 	_scale_toast()
 	_update_wait_hint_layout()
 
-	# Discard zone (bottom-right anchored – offsets only, no size)
+	# Discard drop target lives in the right dock column.
 	if discard_zone:
-		discard_zone.offset_left = -170.0 * s
-		discard_zone.offset_top = -80.0 * s
-		discard_zone.offset_right = 0.0
-		discard_zone.offset_bottom = 0.0
-		var discard_label := $CanvasLayer/DiscardZone/DiscardLabel
+		discard_zone.custom_minimum_size = Vector2(150, 72) * s
+		var discard_label := discard_zone.get_node("DiscardLabel")
 		discard_label.text = Locale.t("battle.discard_zone")
 		discard_label.add_theme_font_size_override("font_size", max(10, int(18 * s)))
+
+
+func _align_player_aura() -> void:
+	var background := $CanvasLayer/MainBackground as Control
+	var player_aura := $CanvasLayer/MainBackground/PlayerAura as Control
+	var enemy_aura := $CanvasLayer/MainBackground/EnemyAura as Control
+	if background == null or player_aura == null or enemy_aura == null or player_side_ui == null or enemy_side_ui == null:
+		return
+	# Local gradients identify the two lanes without dividing the battlefield
+	# into hard cyan/black bands. Their transparent edges always sit outside the
+	# cards, so no colour boundary can cut through a card body.
+	var pad := 26.0 * _ui_scale()
+	for pair in [[enemy_aura, enemy_side_ui], [player_aura, player_side_ui]]:
+		var aura: Control = pair[0]
+		var row: Control = pair[1]
+		var row_top: float = row.global_position.y - background.global_position.y
+		aura.anchor_top = 0.0
+		aura.anchor_bottom = 0.0
+		aura.offset_top = row_top - pad
+		aura.offset_bottom = row_top + row.size.y + pad
 
 
 func _on_viewport_size_changed() -> void:
@@ -268,6 +384,7 @@ func _broadcast_authority_state(label: String) -> void:
 	_print_authority_state(label)
 	if NetworkManager.is_online and NetworkManager.is_authority():
 		var state: Dictionary = game.export_initial_state()
+		NetworkManager.save_match_snapshot(state)
 		# Ship combat feedback from this action so the non-authority can replay
 		# presentation without running combat logic itself.
 		state["_hp_events"] = _pending_hp_events.duplicate()
@@ -285,6 +402,7 @@ func _commit_authority_state(label: String) -> void:
 
 func _apply_authority_state(state: Dictionary, label: String = "authority") -> void:
 	game.apply_initial_state(state)
+	NetworkManager.save_match_snapshot(game.export_initial_state())
 	_restore_local_art_paths()
 	remote_arrow_source = -1
 	remote_arrow_target = -1
@@ -368,8 +486,15 @@ func _ready():
 	game = load("res://GameState.gd").new()
 	_init_network()
 	game.init_game(Callable(self, "_on_game_draw_cards"))
+	if NetworkManager.just_reconnected:
+		var saved_state := NetworkManager.load_match_snapshot()
+		if not saved_state.is_empty():
+			game.apply_initial_state(saved_state)
+	elif NetworkManager.is_online and NetworkManager.is_authority():
+		NetworkManager.save_match_snapshot(game.export_initial_state())
 	_build_turn_cover()
 	_build_pile_buttons()
+	_build_action_log()
 	_apply_theme()
 	if $CanvasLayer/MainBackground:
 		$CanvasLayer/MainBackground.mouse_filter = Control.MOUSE_FILTER_PASS
@@ -408,8 +533,6 @@ func _ready():
 	if end_turn_button:
 		end_turn_button.text = Locale.t("battle.end_turn")
 		end_turn_button.pressed.connect(_on_end_turn_pressed)
-	if status_toggle_button:
-		status_toggle_button.pressed.connect(_on_status_toggle_pressed)
 
 	if discard_zone and discard_zone.has_signal("card_discarded"):
 		discard_zone.card_discarded.connect(_on_card_discarded)
@@ -436,6 +559,9 @@ func _ready():
 	update_entire_screen()
 	_play_opening_draw_feedback.call_deferred()
 	if NetworkManager.is_online:
+		var server_state := NetworkManager.take_pending_server_match_state()
+		if not server_state.is_empty() and int(server_state.get("state_revision", -1)) >= game.state_revision:
+			_apply_authority_state(server_state, "room server recovery")
 		if NetworkManager.just_reconnected:
 			_local_slot_rejoined = true
 			match_paused = true
@@ -522,6 +648,7 @@ func _show_toast(key: String, args := []) -> void:
 func _show_combat_broadcast(text: String) -> void:
 	if text.strip_edges() == "":
 		return
+	_append_action_log(text)
 	if toast_label == null:
 		_build_toast()
 	toast_label.text = text
@@ -533,6 +660,114 @@ func _show_combat_broadcast(text: String) -> void:
 	toast_tween.tween_property(toast_label, "modulate:a", 1.0, 0.06)
 	toast_tween.tween_interval(3.1)
 	toast_tween.tween_property(toast_label, "modulate:a", 0.0, 0.14)
+
+
+func _build_action_log() -> void:
+	abandon_battle_button = Button.new()
+	abandon_battle_button.text = Locale.t("battle.abandon_battle")
+	UITheme.apply_button(abandon_battle_button, "danger")
+	abandon_battle_button.pressed.connect(_show_abandon_confirmation)
+	$CanvasLayer.add_child(abandon_battle_button)
+	action_log_button = Button.new()
+	action_log_button.text = Locale.t("battle.action_log")
+	UITheme.apply_button(action_log_button, "secondary")
+	$CanvasLayer.add_child(action_log_button)
+	action_log_panel = PanelContainer.new()
+	action_log_panel.visible = false
+	action_log_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	UITheme.apply_panel(action_log_panel, "dark")
+	action_log_text = RichTextLabel.new()
+	action_log_text.bbcode_enabled = false
+	action_log_text.fit_content = false
+	action_log_text.scroll_active = true
+	action_log_text.add_theme_font_size_override("normal_font_size", 13)
+	action_log_panel.add_child(action_log_text)
+	$CanvasLayer.add_child(action_log_panel)
+	action_log_button.pressed.connect(func(): action_log_panel.visible = not action_log_panel.visible)
+
+
+func _show_abandon_confirmation() -> void:
+	var popup := UITheme.make_popup_layer(self, 140)
+	var layer: CanvasLayer = popup["layer"]
+	var panel := PanelContainer.new()
+	panel.anchor_left = 0.5
+	panel.anchor_right = 0.5
+	panel.anchor_top = 0.5
+	panel.anchor_bottom = 0.5
+	panel.offset_left = -230
+	panel.offset_top = -105
+	panel.offset_right = 230
+	panel.offset_bottom = 105
+	UITheme.apply_panel(panel, "gold")
+	layer.add_child(panel)
+	var margin := MarginContainer.new()
+	for side in ["margin_left", "margin_top", "margin_right", "margin_bottom"]:
+		margin.add_theme_constant_override(side, 22)
+	panel.add_child(margin)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 16)
+	margin.add_child(box)
+	var title := Label.new()
+	title.text = Locale.t("battle.abandon_confirm_title")
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UITheme.apply_title(title, 24)
+	box.add_child(title)
+	var body := Label.new()
+	body.text = Locale.t("battle.abandon_confirm_online" if NetworkManager.is_online else "battle.abandon_confirm_solo")
+	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UITheme.apply_label(body, true)
+	box.add_child(body)
+	var row := HBoxContainer.new()
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 14)
+	box.add_child(row)
+	var cancel_btn := Button.new()
+	cancel_btn.text = Locale.t("common.cancel")
+	UITheme.apply_button(cancel_btn, "secondary")
+	cancel_btn.pressed.connect(layer.queue_free)
+	row.add_child(cancel_btn)
+	var confirm_btn := Button.new()
+	confirm_btn.text = Locale.t("battle.abandon_confirm")
+	UITheme.apply_button(confirm_btn, "danger")
+	confirm_btn.pressed.connect(func():
+		layer.queue_free()
+		_abandon_battle_now()
+	)
+	row.add_child(confirm_btn)
+	UITheme.animate_popup_enter(panel)
+
+
+func _abandon_battle_now() -> void:
+	_record_match_history("forfeit", "")
+	battle_finished = true
+	practice_ai_running = false
+	cancel_attack()
+	if PlayerData.is_card_playtest_active():
+		NetworkManager.close_connection()
+		PlayerData.restore_after_card_playtest()
+		UIMotion.change_scene("res://CardEditor.tscn")
+		return
+	if NetworkManager.is_online or NetworkManager.has_saved_room_session():
+		NetworkManager.close_connection()
+		NetworkManager.clear_room_session()
+		UIMotion.change_scene("res://MultiplayerMenu.tscn")
+		return
+	NetworkManager.close_connection()
+	UIMotion.change_scene("res://MainMenu.tscn")
+
+
+func _append_action_log(text: String) -> void:
+	if action_log_text == null:
+		return
+	_action_log_entries.push_front(text.strip_edges())
+	if _action_log_entries.size() > 20:
+		_action_log_entries.resize(20)
+	var lines: Array[String] = []
+	for i in range(_action_log_entries.size()):
+		lines.append("%02d  %s" % [_action_log_entries.size() - i, _action_log_entries[i]])
+	action_log_text.text = "\n\n".join(lines)
+	action_log_button.text = "%s · %d" % [Locale.t("battle.action_log"), _action_log_entries.size()]
 
 
 # ============================================
@@ -1995,11 +2230,6 @@ func _practice_ai_best_target_slot(attacker: CardData = null) -> int:
 	return best_slot
 
 
-func _on_status_toggle_pressed():
-	show_enemy_status = not show_enemy_status
-	update_entire_screen()
-
-
 # ============================================
 # Helpers
 # ============================================
@@ -2145,8 +2375,8 @@ func _show_result(result: String):
 		_end_turn_pulse = null
 	if end_turn_button:
 		end_turn_button.scale = Vector2.ONE
-	if mana_label:
-		mana_label.text = "[ %s ]" % _result_title(result)
+	if turn_label:
+		turn_label.text = "[ %s ]" % _result_title(result)
 	if end_turn_button:
 		end_turn_button.disabled = true
 	_show_battle_result_page(result)
@@ -2416,7 +2646,7 @@ func _show_zero_cost_selection_popup(candidates: Array, count: int, hand: Array 
 	box.add_child(close_btn)
 
 
-func _show_disconnect_result_page() -> void:
+func _show_disconnect_result_page(resume_sync_failed: bool = false) -> void:
 	var old_layer := $CanvasLayer.get_node_or_null("BattleResultLayer")
 	if old_layer:
 		old_layer.queue_free()
@@ -2457,13 +2687,13 @@ func _show_disconnect_result_page() -> void:
 	margin.add_child(box)
 
 	var title := Label.new()
-	title.text = Locale.t("result.connection_lost_title")
+	title.text = Locale.t("result.resume_failed_title") if resume_sync_failed else Locale.t("result.connection_lost_title")
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	UITheme.apply_title(title, 36)
 	box.add_child(title)
 
 	var body := Label.new()
-	body.text = Locale.t("result.connection_lost_body")
+	body.text = Locale.t("result.resume_failed_body") if resume_sync_failed else Locale.t("result.connection_lost_body")
 	body.name = "BodyLabel"
 	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -2475,6 +2705,14 @@ func _show_disconnect_result_page() -> void:
 	button_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	button_row.add_theme_constant_override("separation", 18)
 	box.add_child(button_row)
+
+	if resume_sync_failed:
+		var retry_btn := Button.new()
+		retry_btn.text = Locale.t("result.retry_resume")
+		retry_btn.custom_minimum_size = Vector2(170, 48)
+		UITheme.apply_button(retry_btn, "primary")
+		retry_btn.pressed.connect(_on_resume_retry_pressed)
+		button_row.add_child(retry_btn)
 
 	var multiplayer_btn := Button.new()
 	multiplayer_btn.text = Locale.t("result.back_multiplayer")
@@ -2545,6 +2783,7 @@ func _result_mode_text() -> String:
 
 
 func _show_battle_result_page(result: String) -> void:
+	_record_match_history("victory" if _did_local_player_win(result) else ("finished" if not NetworkManager.is_online and PlayerData.battle_mode != "practice" else "defeat"), result)
 	var old_layer := $CanvasLayer.get_node_or_null("BattleResultLayer")
 	if old_layer:
 		old_layer.queue_free()
@@ -2622,10 +2861,18 @@ func _show_battle_result_page(result: String) -> void:
 	button_row.add_theme_constant_override("separation", 18)
 	box.add_child(button_row)
 
+	if PlayerData.is_card_playtest_active():
+		var edit_btn := Button.new()
+		edit_btn.text = Locale.t("result.back_editor")
+		edit_btn.custom_minimum_size = Vector2(170, 48)
+		UITheme.apply_button(edit_btn, "primary")
+		edit_btn.pressed.connect(_on_result_back_editor_pressed)
+		button_row.add_child(edit_btn)
+
 	var again_btn := Button.new()
 	again_btn.text = Locale.t("result.play_again")
 	again_btn.custom_minimum_size = Vector2(160, 48)
-	UITheme.apply_button(again_btn, "primary")
+	UITheme.apply_button(again_btn, "secondary" if PlayerData.is_card_playtest_active() else "primary")
 	again_btn.pressed.connect(_on_result_play_again_pressed)
 	button_row.add_child(again_btn)
 
@@ -2658,6 +2905,11 @@ func _on_result_play_again_pressed() -> void:
 	get_tree().reload_current_scene()
 
 
+func _on_result_back_editor_pressed() -> void:
+	if PlayerData.restore_after_card_playtest():
+		UIMotion.change_scene("res://CardEditor.tscn")
+
+
 func _on_result_back_menu_pressed() -> void:
 	NetworkManager.close_connection()
 	UIMotion.change_scene("res://MainMenu.tscn")
@@ -2667,29 +2919,43 @@ func _on_result_back_menu_pressed() -> void:
 # UI refresh
 # ============================================
 
+func _update_status_hud(hud: Panel, field: BattleField, hand_size: int, enemy: bool, active: bool) -> void:
+	if hud == null or field == null:
+		return
+	var content := hud.get_node("Margin/Content") as HBoxContainer
+	(content.get_node("SideLabel") as Label).text = Locale.t("battle.enemy") if enemy else Locale.t("battle.you")
+	(content.get_node("HpLabel") as Label).text = Locale.t("battle.hp_value", [field.player_hp, field.max_player_hp])
+	(content.get_node("ManaLabel") as Label).text = Locale.t("battle.mana_value", [field.get_total_mana(), field.max_mana])
+	(content.get_node("HandLabel") as Label).text = Locale.t("battle.hand_count", [hand_size, SkillEngine.MAX_HAND_SIZE])
+
+	var hp_bar := content.get_node("HpBar") as ProgressBar
+	hp_bar.max_value = max(1, field.max_player_hp)
+	hp_bar.value = clamp(field.player_hp, 0, field.max_player_hp)
+	var mana_bar := content.get_node("ManaBar") as ProgressBar
+	mana_bar.max_value = max(1, max(field.max_mana, field.get_total_mana()))
+	mana_bar.value = max(0, field.get_total_mana())
+	_apply_status_hud_theme(hud, enemy, active)
+
+
+func _update_battle_status_huds() -> void:
+	if game == null:
+		return
+	var my_turn_active: bool = game.is_player_turn and game.current_player == _view_player()
+	var enemy_turn_active: bool = game.is_player_turn and not my_turn_active
+	_update_status_hud(player_status_hud, _my_field(), _my_hand().size(), false, my_turn_active)
+	_update_status_hud(enemy_status_hud, _their_field(), _hand_for_player(_opponent_player()).size(), true, enemy_turn_active)
+
+
 func update_entire_screen():
 	if battle_finished:
 		return
-	if mana_label:
+	if turn_label:
 		if game.is_player_turn:
-			var viewed_player := _view_player()
-			if NetworkManager.is_online and show_enemy_status:
-				viewed_player = _opponent_player()
-			var f = _field_for_player(viewed_player)
-			var hand_size := _hand_for_player(viewed_player).size()
-			var view_text := Locale.t("battle.view_turn", [game.current_player])
-			if NetworkManager.is_online:
-				var who := Locale.t("battle.enemy") if show_enemy_status else Locale.t("battle.you")
-				view_text = Locale.t("battle.viewing", [viewed_player, who])
-			mana_label.text = Locale.t("battle.status_line", [
-				view_text, f.get_total_mana(), f.max_mana,
-				f.player_hp, hand_size, 6, game.turn_number
-			])
+			var turn_owner := Locale.t("battle.your_turn") if game.current_player == _view_player() else Locale.t("battle.opponent_turn")
+			turn_label.text = "%s  ·  %s" % [Locale.t("battle.turn_label", [game.turn_number]), turn_owner]
 		else:
-			mana_label.text = Locale.t("battle.switching")
-	if status_toggle_button:
-		status_toggle_button.visible = NetworkManager.is_online
-		status_toggle_button.text = Locale.t("battle.enemy_info") if not show_enemy_status else Locale.t("battle.my_info")
+			turn_label.text = Locale.t("battle.switching")
+	_update_battle_status_huds()
 	if end_turn_button:
 		end_turn_button.disabled = match_paused or not game.is_player_turn or (NetworkManager.is_online and game.current_player != my_player)
 
@@ -2728,7 +2994,7 @@ func _refresh_hand_castability() -> void:
 
 
 # Attention pulse on the end-turn button while the player can act, and a soft
-# pop on the status line whenever its text changes (mana spent, turn advanced).
+# pop on the turn label whenever the active turn changes.
 func _update_ui_state_motion() -> void:
 	if end_turn_button != null:
 		var want_pulse: bool = not battle_finished and end_turn_button.visible and not end_turn_button.disabled
@@ -2743,17 +3009,18 @@ func _update_ui_state_motion() -> void:
 				_end_turn_pulse.kill()
 				_end_turn_pulse = null
 			end_turn_button.scale = Vector2.ONE
-	if mana_label != null and mana_label.text != "" and mana_label.text != _mana_last_text:
-		_mana_last_text = mana_label.text
-		if _mana_pop_tween and _mana_pop_tween.is_valid():
-			_mana_pop_tween.kill()
-		mana_label.pivot_offset = mana_label.size / 2
-		_mana_pop_tween = create_tween()
-		_mana_pop_tween.tween_property(mana_label, "scale", Vector2(1.06, 1.06), 0.09).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-		_mana_pop_tween.tween_property(mana_label, "scale", Vector2.ONE, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	if turn_label != null and turn_label.text != "" and turn_label.text != _turn_last_text:
+		_turn_last_text = turn_label.text
+		if _turn_pop_tween and _turn_pop_tween.is_valid():
+			_turn_pop_tween.kill()
+		turn_label.pivot_offset = turn_label.size / 2
+		_turn_pop_tween = create_tween()
+		_turn_pop_tween.tween_property(turn_label, "scale", Vector2(1.06, 1.06), 0.09).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		_turn_pop_tween.tween_property(turn_label, "scale", Vector2.ONE, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
 func _process(_delta):
+	_process_resume_sync()
 	if is_my_turn():
 		var source: int = -1
 		var from_hand: bool = false
@@ -2808,20 +3075,19 @@ func _process(_delta):
 	_update_slot_highlights()
 
 
-# Gold-highlights the hovered valid target slot while aiming (attack/skill/spell
-# targeting) or dragging a card onto an empty slot. Recomputed every frame, so
-# highlights never go stale.
+# Cyan marks every legal destination; the hovered legal target turns gold.
+# Recomputed every frame, so highlights never go stale after cancelling a drag.
 func _update_slot_highlights() -> void:
 	var my_ui: Array = _my_slots_ui()
 	var their_ui: Array = _their_slots_ui()
-	var targets: Array = []  # [slots_ui, index]
+	var targets: Array = []  # [slots_ui, index, hovered]
 	var mouse := get_global_mouse_position()
 	if get_viewport().gui_is_dragging():
-		for slots_ui in [my_ui, their_ui]:
-			for i in range(slots_ui.size()):
-				var s: Control = slots_ui[i]
-				if Rect2(s.global_position, s.size).has_point(mouse) and s.get("current_card_data") == null:
-					targets.append([slots_ui, i])
+		# Field moves and minion summons can only land on our empty slots.
+		for i in range(my_ui.size()):
+			var s: Control = my_ui[i]
+			if s.get("current_card_data") == null:
+				targets.append([my_ui, i, Rect2(s.global_position, s.size).has_point(mouse)])
 	elif current_attacker_idx != -1 or summon_targeting or activate_targeting or cast_targeting or parasite_targeting:
 		var sides: Array = []
 		if parasite_targeting:
@@ -2834,14 +3100,26 @@ func _update_slot_highlights() -> void:
 			var player: int = _view_player() if slots_ui == my_ui else _opponent_player()
 			for i in range(slots_ui.size()):
 				var s: Control = slots_ui[i]
-				if Rect2(s.global_position, s.size).has_point(mouse):
-					if _field_for_player(player).slots[i] != null:
-						targets.append([slots_ui, i])
+				var card: CardData = _field_for_player(player).slots[i]
+				if card == null:
+					continue
+				var legal := true
+				if slots_ui == their_ui and not parasite_targeting and _their_field().has_any_taunt():
+					legal = card.has_taunt()
+				if legal:
+					targets.append([slots_ui, i, Rect2(s.global_position, s.size).has_point(mouse)])
 	for slots_ui in [my_ui, their_ui]:
 		for s in slots_ui:
-			s.set_highlighted(false)
+			if s.has_method("set_target_hint"):
+				s.set_target_hint(false)
+			else:
+				s.set_highlighted(false)
 	for entry in targets:
-		entry[0][entry[1]].set_highlighted(true)
+		var slot = entry[0][entry[1]]
+		if slot.has_method("set_target_hint"):
+			slot.set_target_hint(true, bool(entry[2]))
+		else:
+			slot.set_highlighted(bool(entry[2]))
 
 
 # Pulsing gold border on friendly cards that can still act this turn.
@@ -2891,6 +3169,11 @@ var match_paused: bool = false
 var _resume_waiting_for_player: int = 0
 var _resume_expected_revision: int = -1
 var _local_slot_rejoined: bool = false
+var _resume_nonce: String = ""
+var _resume_waiting_nonce: String = ""
+var _resume_deadline: float = 0.0
+var _resume_next_request_at: float = 0.0
+var _resume_request_count: int = 0
 
 func is_my_turn() -> bool:
 	if match_paused:
@@ -2934,6 +3217,8 @@ func _init_network():
 	NetworkManager.reconnect_started.connect(_on_reconnect_started)
 	NetworkManager.reconnect_transport_ready.connect(_on_reconnect_transport_ready)
 	NetworkManager.reconnect_failed.connect(_on_reconnect_failed)
+	NetworkManager.reconnect_progress.connect(_on_reconnect_progress)
+	NetworkManager.server_match_snapshot_received.connect(_on_server_match_snapshot)
 
 
 func _pause_for_reconnect() -> void:
@@ -2963,70 +3248,141 @@ func _on_opponent_disconnected(_player: int) -> void:
 	if attack_arrow:
 		attack_arrow.visible = false
 	_show_combat_broadcast(Locale.t("battle.opponent_disconnected"))
-	if mana_label:
-		mana_label.text = "[ %s ]" % Locale.t("result.connection_lost_title")
+	if turn_label:
+		turn_label.text = "[ %s ]" % Locale.t("result.connection_lost_title")
 	if end_turn_button:
 		end_turn_button.disabled = true
 	_show_disconnect_result_page()
 
 
 func _on_reconnect_started() -> void:
+	_reset_resume_sync()
 	_pause_for_reconnect()
 
 
 func _on_reconnect_transport_ready() -> void:
 	my_player = NetworkManager.player_number
 	_local_slot_rejoined = true
+	_reset_resume_sync()
 	_pause_for_reconnect()
 	call_deferred("_request_resume_state")
 
 
+func _on_reconnect_progress(elapsed_seconds: int, attempt: int) -> void:
+	_reconnect_elapsed_seconds = elapsed_seconds
+	_reconnect_attempt = attempt
+	_toggle_turn_cover()
+
+
+func _on_server_match_snapshot(state: Dictionary) -> void:
+	if game == null or state.is_empty():
+		return
+	if int(state.get("state_revision", -1)) < game.state_revision:
+		return
+	_apply_authority_state(state, "room server recovery")
+
+
 func _on_reconnect_failed(_reason: String) -> void:
-	NetworkManager.clear_room_session()
 	UIMotion.change_scene.call_deferred("res://MainMenu.tscn")
+
+
+func _resume_now() -> float:
+	return Time.get_ticks_msec() / 1000.0
+
+
+func _new_resume_nonce() -> String:
+	return "%d-%d-%d" % [my_player, Time.get_ticks_usec(), randi()]
+
+
+func _reset_resume_sync() -> void:
+	_resume_nonce = ""
+	_resume_waiting_nonce = ""
+	_resume_waiting_for_player = 0
+	_resume_expected_revision = -1
+	_resume_deadline = 0.0
+	_resume_next_request_at = 0.0
+	_resume_request_count = 0
+
+
+func _ensure_resume_sync(nonce: String = "") -> void:
+	if _resume_nonce.is_empty():
+		_resume_nonce = nonce if not nonce.is_empty() else _new_resume_nonce()
+		_resume_deadline = _resume_now() + RESUME_SYNC_TIMEOUT
+		_resume_next_request_at = 0.0
+		_resume_request_count = 0
+
+
+func _process_resume_sync() -> void:
+	if not match_paused or _resume_nonce.is_empty():
+		return
+	var now := _resume_now()
+	if now >= _resume_deadline:
+		_on_resume_sync_timeout()
+		return
+	if _resume_request_count < RESUME_MAX_REQUESTS and now >= _resume_next_request_at:
+		_send_resume_request()
+
+
+func _send_resume_request() -> void:
+	if not NetworkManager.is_online or my_player not in [1, 2] or _resume_nonce.is_empty():
+		return
+	_resume_request_count += 1
+	_resume_next_request_at = _resume_now() + RESUME_REQUEST_INTERVAL
+	NetworkManager.rpc_request_resume_state.rpc(my_player, game.state_revision, _resume_nonce)
+
 
 func _request_resume_state() -> void:
 	if not NetworkManager.is_online or my_player not in [1, 2]:
 		return
 	match_paused = true
-	NetworkManager.rpc_request_resume_state.rpc(my_player, game.state_revision)
+	_ensure_resume_sync()
+	_send_resume_request()
 	update_entire_screen()
 
 
-func _on_rpc_resume_state_requested(requesting_player: int, known_revision: int) -> void:
+func _on_rpc_resume_state_requested(requesting_player: int, known_revision: int, nonce: String) -> void:
 	if not NetworkManager.is_online or requesting_player == my_player:
 		return
-	# Normally only one side rejoined, so the continuously-online side is always
-	# the recovery source. If both transports dropped together, both sides are
-	# marked as rejoined and the higher committed revision wins deterministically.
-	if _local_slot_rejoined and game.state_revision < known_revision:
+	_ensure_resume_sync(nonce)
+	# Higher revision always wins. If both applications restarted at the same
+	# revision, P1 is the deterministic source; otherwise the continuously-online
+	# side supplies its in-memory state.
+	if game.state_revision < known_revision or (
+		game.state_revision == known_revision and _local_slot_rejoined and my_player > requesting_player
+	):
+		NetworkManager.rpc_request_resume_state.rpc(my_player, game.state_revision, nonce)
 		return
 	_pause_for_reconnect()
 	_resume_waiting_for_player = requesting_player
 	_resume_expected_revision = game.state_revision
-	NetworkManager.rpc_resume_state.rpc(game.export_initial_state(), my_player, requesting_player)
+	_resume_waiting_nonce = nonce
+	NetworkManager.rpc_resume_state.rpc(game.export_initial_state(), my_player, requesting_player, nonce)
 
 
-func _on_rpc_resume_state_received(state: Dictionary, source_player: int, target_player: int) -> void:
-	if target_player != my_player or source_player == my_player:
+func _on_rpc_resume_state_received(state: Dictionary, source_player: int, target_player: int, nonce: String) -> void:
+	if target_player != my_player or source_player == my_player or nonce != _resume_nonce:
+		return
+	var incoming_revision := int(state.get("state_revision", -1))
+	if incoming_revision < game.state_revision:
 		return
 	match_paused = true
 	_apply_authority_state(state, "reconnect recovery")
 	_resume_expected_revision = game.state_revision
-	NetworkManager.rpc_resume_state_ack.rpc(my_player, game.state_revision)
+	NetworkManager.rpc_resume_state_ack.rpc(my_player, game.state_revision, nonce)
 
 
-func _on_rpc_resume_state_ack(player: int, revision: int) -> void:
-	if player != _resume_waiting_for_player or revision != _resume_expected_revision:
+func _on_rpc_resume_state_ack(player: int, revision: int, nonce: String) -> void:
+	if player != _resume_waiting_for_player or revision != _resume_expected_revision or nonce != _resume_waiting_nonce:
 		return
 	_resume_waiting_for_player = 0
 	_resume_expected_revision = -1
+	_resume_waiting_nonce = ""
 	_finish_resume()
-	NetworkManager.rpc_resume_complete.rpc(revision)
+	NetworkManager.rpc_resume_complete.rpc(revision, my_player, nonce)
 
 
-func _on_rpc_resume_complete(revision: int) -> void:
-	if revision != game.state_revision:
+func _on_rpc_resume_complete(revision: int, nonce: String) -> void:
+	if revision != game.state_revision or nonce != _resume_nonce:
 		return
 	_finish_resume()
 
@@ -3035,10 +3391,30 @@ func _finish_resume() -> void:
 	match_paused = false
 	_local_slot_rejoined = false
 	NetworkManager.just_reconnected = false
-	NetworkManager.opponent_peer_id = 1
+	_reset_resume_sync()
 	if end_turn_button:
 		end_turn_button.disabled = not game.is_player_turn or not is_my_turn()
 	update_entire_screen()
+
+
+func _on_resume_sync_timeout() -> void:
+	_reset_resume_sync()
+	match_paused = true
+	_show_disconnect_result_page(true)
+	update_entire_screen()
+
+
+func _on_resume_retry_pressed() -> void:
+	var old_layer := $CanvasLayer.get_node_or_null("BattleResultLayer")
+	if old_layer:
+		old_layer.queue_free()
+	_local_slot_rejoined = true
+	_reset_resume_sync()
+	_pause_for_reconnect()
+	if NetworkManager.is_online:
+		call_deferred("_request_resume_state")
+	else:
+		NetworkManager.begin_saved_match_reconnect()
 
 
 func _sync_targeting_state():
@@ -3451,6 +3827,17 @@ func _build_turn_cover():
 	lbl.add_theme_font_size_override("font_size", 16)
 	UITheme.apply_label(lbl, true)
 	turn_wait_hint.add_child(lbl)
+	reconnect_leave_button = Button.new()
+	reconnect_leave_button.name = "LeaveButton"
+	reconnect_leave_button.text = Locale.t("battle.abandon_match")
+	reconnect_leave_button.anchor_left = 1.0
+	reconnect_leave_button.anchor_right = 1.0
+	reconnect_leave_button.mouse_filter = Control.MOUSE_FILTER_STOP
+	UITheme.apply_button(reconnect_leave_button, "secondary")
+	reconnect_leave_button.pressed.connect(_on_abandon_reconnect_pressed)
+	reconnect_leave_button.visible = false
+	turn_wait_hint.add_child(reconnect_leave_button)
+	turn_wait_hint.mouse_filter = Control.MOUSE_FILTER_PASS
 	$CanvasLayer.add_child(turn_wait_hint)
 	_update_wait_hint_layout()
 
@@ -3459,7 +3846,7 @@ func _update_wait_hint_layout() -> void:
 	if turn_wait_hint == null:
 		return
 	var s := _ui_scale()
-	var hint_size := Vector2(260, 36) * s
+	var hint_size := Vector2(430 if match_paused else 260, 36) * s
 	turn_wait_hint.offset_left = -hint_size.x / 2.0
 	turn_wait_hint.offset_right = hint_size.x / 2.0
 	turn_wait_hint.offset_top = -hint_size.y - 10.0 * s
@@ -3467,6 +3854,14 @@ func _update_wait_hint_layout() -> void:
 	var lbl := turn_wait_hint.get_node_or_null("Label")
 	if lbl:
 		lbl.add_theme_font_size_override("font_size", max(10, int(15 * s)))
+		lbl.offset_right = -116.0 * s if match_paused else 0.0
+	if reconnect_leave_button:
+		reconnect_leave_button.visible = match_paused
+		reconnect_leave_button.offset_left = -112.0 * s
+		reconnect_leave_button.offset_right = -4.0 * s
+		reconnect_leave_button.offset_top = 4.0 * s
+		reconnect_leave_button.offset_bottom = -4.0 * s
+		reconnect_leave_button.add_theme_font_size_override("font_size", max(9, int(12 * s)))
 
 
 func _toggle_turn_cover():
@@ -3483,7 +3878,7 @@ func _toggle_turn_cover():
 		_update_wait_hint_layout()
 		var label := turn_wait_hint.get_node_or_null("Label")
 		if label:
-			label.text = Locale.t("battle.reconnecting") if match_paused else Locale.t("battle.waiting")
+			label.text = Locale.t("battle.reconnecting_progress", [_reconnect_attempt, _reconnect_elapsed_seconds]) if match_paused else Locale.t("battle.waiting")
 		turn_wait_hint.visible = show
 		$CanvasLayer.move_child(turn_wait_hint, $CanvasLayer.get_child_count() - 1)
 		if show:
@@ -3492,6 +3887,12 @@ func _toggle_turn_cover():
 			fade.tween_property(turn_wait_hint, "modulate:a", 1.0, 0.25).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	if overlay:
 		overlay.visible = show
+
+
+func _on_abandon_reconnect_pressed() -> void:
+	NetworkManager.close_connection()
+	NetworkManager.clear_room_session()
+	UIMotion.change_scene("res://MainMenu.tscn")
 
 
 # ============================================
@@ -3503,13 +3904,15 @@ func _build_pile_buttons():
 	draw_pile_btn.text = Locale.t("battle.draw_pile")
 	draw_pile_btn.pressed.connect(_on_draw_pile_clicked)
 	UITheme.apply_button(draw_pile_btn, "secondary")
-	$CanvasLayer.add_child(draw_pile_btn)
+	draw_pile_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pile_column.add_child(draw_pile_btn)
 
 	discard_pile_btn = Button.new()
 	discard_pile_btn.text = Locale.t("battle.discard_pile")
 	discard_pile_btn.pressed.connect(_on_discard_pile_clicked)
 	UITheme.apply_button(discard_pile_btn, "secondary")
-	$CanvasLayer.add_child(discard_pile_btn)
+	discard_pile_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	pile_column.add_child(discard_pile_btn)
 
 	help_btn = Button.new()
 	help_btn.text = Locale.t("help.button")
@@ -3560,7 +3963,6 @@ func _show_help_popup():
 	panel.anchor_bottom = 0.9
 	popup_layer.add_child(panel)
 	UITheme.animate_popup_enter(panel)
-
 	var margin := MarginContainer.new()
 	margin.anchor_right = 1.0
 	margin.anchor_bottom = 1.0
@@ -3601,6 +4003,36 @@ func _show_help_popup():
 	UITheme.apply_button(close_btn, "secondary")
 	close_btn.pressed.connect(popup_layer.queue_free)
 	vbox.add_child(close_btn)
+
+
+func _record_match_history(outcome: String, result: String) -> void:
+	if _history_recorded or game == null:
+		return
+	_history_recorded = true
+	var mode := "online" if NetworkManager.is_online else PlayerData.battle_mode
+	var deck_names: Array[String] = []
+	for card in PlayerData.battle_deck:
+		if card is CardData:
+			deck_names.append(card.card_name)
+	var opponent_names: Array[String] = []
+	for card in PlayerData.opponent_battle_deck:
+		if card is CardData:
+			opponent_names.append(card.card_name)
+	var current_deck := PlayerData.get_current_deck()
+	var local_is_p2 := NetworkManager.is_online and my_player == 2
+	PlayerData.add_match_history({
+		"mode": mode,
+		"outcome": outcome,
+		"result": result,
+		"turns": int(game.turn_number),
+		"player_hp": int(game.player2_field.player_hp if local_is_p2 else game.player_field.player_hp),
+		"opponent_hp": int(game.player_field.player_hp if local_is_p2 else game.player2_field.player_hp),
+		"local_player": my_player if NetworkManager.is_online else 1,
+		"deck_name": str(current_deck.get("name", "")),
+		"deck_cards": deck_names,
+		"opponent_cards": opponent_names,
+		"app_version": AppVersion.VERSION,
+	})
 
 
 func _update_pile_labels():

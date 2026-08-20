@@ -29,6 +29,7 @@ const _TextFormatter = preload("res://SkillTextFormatter.gd")
 @onready var save_button = $Panel/Margin/HBox/MainPanel/Margin/ButtonRow/SaveButton
 @onready var cancel_button = $Panel/Margin/HBox/MainPanel/Margin/ButtonRow/CancelButton
 @onready var palette_title = $Panel/Margin/HBox/PalettePanel/Margin/VBox/PaletteTitle
+@onready var palette_search = $Panel/Margin/HBox/PalettePanel/Margin/VBox/PaletteSearch
 @onready var palette_vbox = $Panel/Margin/HBox/PalettePanel/Margin/VBox/PaletteScroll/PaletteVBox
 
 var effect_data: Array = []        # [{target, effect, value, buff_id, duration, ...}, ...]
@@ -45,6 +46,7 @@ var _undo_mgr := SkillUndoManager.new()
 var _palette_builder := SkillPaletteBuilder.new()
 var _undo_btn: Button
 var _redo_btn: Button
+var _template_btn: Button
 
 
 # ============================================
@@ -140,6 +142,7 @@ func _apply_texts() -> void:
 	title_label.text = Locale.t("skill_editor.title_spell") if is_spell else Locale.t("skill_editor.title", [skill_index + 1])
 	help_label.text = Locale.t("skill_editor.help_spell" if is_spell else "skill_editor.help")
 	palette_title.text = Locale.t("skill_editor.palette_title")
+	palette_search.placeholder_text = Locale.t("skill_editor.palette_search")
 	effects_label.text = Locale.t("skill_editor.effects" if not is_spell else "skill_editor.spell_effects")
 	effects_hint_label.text = Locale.t("skill_editor.effects_hint" if not is_spell else "skill_editor.effects_hint_spell")
 	settings_label.text = Locale.t("skill_editor.settings")
@@ -206,6 +209,7 @@ func _apply_theme() -> void:
 	preview_panel.add_theme_stylebox_override("panel", pv_style)
 	UITheme.apply_title(title_label, max(14, int(18 * _ui_scale())))
 	UITheme.apply_title(palette_title, max(13, int(15 * _ui_scale())))
+	UITheme.apply_input(palette_search)
 	UITheme.apply_input(skill_name_input)
 	UITheme.apply_button(save_button, "primary")
 	UITheme.apply_button(cancel_button, "secondary")
@@ -228,6 +232,29 @@ func _on_viewport_size_changed() -> void:
 func _build_palette() -> void:
 	_palette_builder.editor = self
 	_palette_builder.build()
+	_filter_palette(palette_search.text if palette_search != null else "")
+
+
+func _filter_palette(query: String) -> void:
+	var needle := query.strip_edges().to_lower()
+	var children := palette_vbox.get_children()
+	var index := 0
+	while index + 1 < children.size():
+		var header := children[index] as Button
+		var box := children[index + 1] as VBoxContainer
+		index += 2
+		if header == null or box == null:
+			continue
+		var title_matches := needle != "" and str(header.get_meta("section_title", "")).to_lower().contains(needle)
+		var any_match := false
+		for item in box.get_children():
+			if not (item is Button):
+				continue
+			var matches := needle == "" or title_matches or (item as Button).text.to_lower().contains(needle)
+			item.visible = matches
+			any_match = any_match or matches
+		header.visible = needle == "" or any_match
+		box.visible = any_match if needle != "" else bool(header.get_meta("user_open", true))
 
 
 func _select_trigger(trigger_key: String) -> void:
@@ -289,6 +316,18 @@ func _refresh_error_banner() -> void:
 func _mark_invalid_conditions() -> void:
 	_error_checker.editor = self
 	_error_checker.mark_invalid_conditions()
+
+
+func _focus_issue_path(path: Array) -> void:
+	if path.is_empty():
+		return
+	for candidate in effects_list.find_children("*", "SkillBlock", true, false):
+		var block := candidate as SkillBlock
+		if block != null and block.effect_path == path:
+			var scroll := $Panel/Margin/HBox/MainPanel/Margin/Scroll as ScrollContainer
+			scroll.ensure_control_visible(block)
+			UITheme.reject_shake(block)
+			return
 
 
 # Recursively renders effect blocks; if/else blocks get their then/else
@@ -392,6 +431,7 @@ func _connect_block_signals(block: SkillBlock) -> void:
 # insertion line to the exact gap the drop would land in.
 func _on_block_insertion_requested(vbox: VBoxContainer, index: int) -> void:
 	if vbox != null:
+		_activate_slot_highlight(vbox)
 		_show_insertion_line(vbox, index)
 
 
@@ -428,35 +468,43 @@ func _get_drag_data_from_list(_pos: Vector2):
 var _insertion_line: Control
 var _highlighted_slot: VBoxContainer
 var _slot_orig_style: StyleBox
+var _palette_discard_highlight: bool = false
+var _palette_orig_style: StyleBox
 
 
 func _can_drop_on_slot(vbox: VBoxContainer, _pos: Vector2, data) -> bool:
 	var ok: bool = data is Dictionary and data.get("type", "") == "effect_block"
 	if ok:
-		if _highlighted_slot != null and _highlighted_slot != vbox:
-			_highlight_slot(_highlighted_slot, false)
-		_highlight_slot(vbox, true)
-		_highlighted_slot = vbox
+		_activate_slot_highlight(vbox)
 		_show_insertion_line(vbox, _insertion_index_at(vbox, _pos))
 	else:
 		_hide_insertion_line()
 	return ok
 
 
+func _activate_slot_highlight(vbox: VBoxContainer) -> void:
+	if _highlighted_slot == vbox:
+		return
+	if _highlighted_slot != null:
+		_highlight_slot(_highlighted_slot, false)
+	_highlight_slot(vbox, true)
+	_highlighted_slot = vbox
+
+
 func _show_insertion_line(vbox: VBoxContainer, index: int) -> void:
 	if _insertion_line == null:
 		_insertion_line = PanelContainer.new()
 		var st := StyleBoxFlat.new()
-		st.bg_color = Color(1.0, 0.93, 0.5)
-		st.border_color = Color(1, 1, 1, 0.65)
+		st.bg_color = Color(0.34, 0.92, 1.0)
+		st.border_color = Color(0.82, 0.98, 1.0, 0.95)
 		st.set_border_width_all(1)
 		st.set_corner_radius_all(2)
-		st.shadow_color = Color(1, 0.9, 0.4, 0.65)
-		st.shadow_size = 4
+		st.shadow_color = Color(0.15, 0.78, 1.0, 0.75)
+		st.shadow_size = 6
 		_insertion_line.add_theme_stylebox_override("panel", st)
 		_insertion_line.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_insertion_line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_insertion_line.custom_minimum_size = Vector2(40, 4)
+		_insertion_line.custom_minimum_size = Vector2(40, 5)
 	if _insertion_line.get_parent() != null:
 		_insertion_line.get_parent().remove_child(_insertion_line)
 	vbox.add_child(_insertion_line)
@@ -485,10 +533,11 @@ func _highlight_slot(vbox: VBoxContainer, on: bool) -> void:
 	if on:
 		_slot_orig_style = (panel as PanelContainer).get_theme_stylebox("panel")
 		var st := StyleBoxFlat.new()
-		st.bg_color = Color(0.25, 0.50, 0.70, 0.30)
-		st.border_color = Color(0.55, 0.85, 1.0, 0.95)
+		st.bg_color = Color(0.10, 0.48, 0.66, 0.38)
+		st.border_color = Color(0.42, 0.90, 1.0, 0.98)
 		st.set_border_width_all(2)
 		st.set_corner_radius_all(5)
+		st.shadow_size = 0
 		st.content_margin_left = 6
 		st.content_margin_right = 6
 		st.content_margin_top = 4
@@ -515,25 +564,58 @@ func _process(_delta: float) -> void:
 	if _insertion_line != null and _insertion_line.get_parent() != null \
 			and not get_viewport().gui_is_dragging():
 		_hide_insertion_line()
+	if _palette_discard_highlight and not get_viewport().gui_is_dragging():
+		_set_palette_discard_highlight(false)
+	elif _palette_discard_highlight:
+		var palette_panel: Panel = $Panel/Margin/HBox/PalettePanel
+		if not palette_panel.get_global_rect().has_point(get_global_mouse_position()):
+			_set_palette_discard_highlight(false)
 
 
 func _can_drop_on_palette(_pos: Vector2, data) -> bool:
 	if not (data is Dictionary):
+		_set_palette_discard_highlight(false)
 		return false
 	var t: String = str(data.get("type", ""))
+	var ok := false
 	match t:
 		"effect_block":
-			return (data.get("from_path", []) as Array).size() > 0
+			ok = (data.get("from_path", []) as Array).size() > 0
 		"var_block", "expr_block", "target_block", "side_block":
 			# Only a slot-borne chip (not a fresh palette button) can be
 			# discarded here.
-			return data.has("from_slot")
+			ok = data.has("from_slot")
 		"boolean_block", "logic_block", "condition_block":
-			return data.has("from_cond_slot")
-	return false
+			ok = data.has("from_cond_slot")
+	_set_palette_discard_highlight(ok)
+	return ok
+
+
+func _set_palette_discard_highlight(on: bool) -> void:
+	if _palette_discard_highlight == on:
+		return
+	_palette_discard_highlight = on
+	var panel: Panel = $Panel/Margin/HBox/PalettePanel
+	if on:
+		_palette_orig_style = panel.get_theme_stylebox("panel")
+		var st := StyleBoxFlat.new()
+		st.bg_color = Color(0.22, 0.055, 0.075, 0.97)
+		st.border_color = Color(0.96, 0.34, 0.40, 0.98)
+		st.set_border_width_all(2)
+		st.set_corner_radius_all(8)
+		st.shadow_color = Color(0.85, 0.12, 0.20, 0.40)
+		st.shadow_size = 8
+		st.content_margin_left = 10
+		st.content_margin_right = 10
+		st.content_margin_top = 10
+		st.content_margin_bottom = 10
+		panel.add_theme_stylebox_override("panel", st)
+	elif _palette_orig_style != null:
+		panel.add_theme_stylebox_override("panel", _palette_orig_style)
 
 
 func _drop_on_palette(_pos: Vector2, data) -> void:
+	_set_palette_discard_highlight(false)
 	var t: String = str(data.get("type", ""))
 	if t == "effect_block":
 		var from_path: Array = data.get("from_path", [])
@@ -1255,6 +1337,7 @@ func _ready():
 	_build_settings_row()
 	_build_palette()
 	_build_undo_buttons()
+	_build_skill_template_button()
 	_connect_signals()
 	_setup_drop_targets()
 
@@ -1274,8 +1357,133 @@ func _ready():
 
 func _connect_signals():
 	skill_name_input.text_changed.connect(func(_t: String): _update_summary())
+	palette_search.text_changed.connect(_filter_palette)
 	save_button.pressed.connect(_on_save_pressed)
 	cancel_button.pressed.connect(_on_cancel_pressed)
+
+
+func _build_skill_template_button() -> void:
+	var row := save_button.get_parent() as HBoxContainer
+	_template_btn = Button.new()
+	_template_btn.text = Locale.t("skill_editor.templates")
+	UITheme.apply_button(_template_btn, "secondary")
+	_template_btn.pressed.connect(_show_skill_templates_popup)
+	row.add_child(_template_btn)
+	row.move_child(_template_btn, mini(2, row.get_child_count() - 1))
+
+
+func _builtin_skill_templates() -> Array:
+	return [
+		{"name": Locale.t("skill_template.strike"), "skill": {
+			"skill_name": Locale.t("skill_template.strike"), "trigger": SkillEngine.TRIGGER_ON_ACTIVATE,
+			"probability": 100, "max_uses": 0, "skill_type": SkillEngine.SKILL_TYPE_NORMAL,
+			"effects": [_TargetResolver.normalize_effect_target({"target": SkillEngine.TARGET_SINGLE, "target_side": SkillEngine.TARGET_SIDE_ENEMY, "effect": SkillEngine.EFFECT_DAMAGE, "value": 3})],
+		}},
+		{"name": Locale.t("skill_template.heal"), "skill": {
+			"skill_name": Locale.t("skill_template.heal"), "trigger": SkillEngine.TRIGGER_ON_SUMMON,
+			"probability": 100, "max_uses": 0, "skill_type": SkillEngine.SKILL_TYPE_NORMAL,
+			"effects": [_TargetResolver.normalize_effect_target({"target": SkillEngine.TARGET_ALL, "target_side": SkillEngine.TARGET_SIDE_ALLY, "effect": SkillEngine.EFFECT_HEAL, "value": 2})],
+		}},
+		{"name": Locale.t("skill_template.guard"), "skill": {
+			"skill_name": Locale.t("skill_template.guard"), "trigger": SkillEngine.TRIGGER_ON_SUMMON,
+			"probability": 100, "max_uses": 0, "skill_type": SkillEngine.SKILL_TYPE_NORMAL,
+			"effects": [
+				_TargetResolver.normalize_effect_target({"target": SkillEngine.TARGET_SELF, "effect": SkillEngine.EFFECT_SHIELD, "value": 2}),
+				_TargetResolver.normalize_effect_target({"target": SkillEngine.TARGET_SELF, "effect": SkillEngine.EFFECT_ADD_BUFF, "buff_id": SkillEngine.BUFF_TAUNT, "value": 1, "duration": 2}),
+			],
+		}},
+		{"name": Locale.t("skill_template.draw"), "skill": {
+			"skill_name": Locale.t("skill_template.draw"), "trigger": SkillEngine.TRIGGER_ON_TURN_START,
+			"probability": 100, "max_uses": 0, "skill_type": SkillEngine.SKILL_TYPE_NORMAL,
+			"effects": [_TargetResolver.normalize_effect_target({"target": SkillEngine.TARGET_SELF, "effect": SkillEngine.EFFECT_DRAW_CARDS, "value": 1})],
+		}},
+	]
+
+
+func _show_skill_templates_popup() -> void:
+	var popup := UITheme.make_popup_layer(self, 105)
+	var layer: CanvasLayer = popup["layer"]
+	var panel := Panel.new()
+	panel.anchor_left = 0.5
+	panel.anchor_right = 0.5
+	panel.anchor_top = 0.5
+	panel.anchor_bottom = 0.5
+	panel.offset_left = -260
+	panel.offset_top = -260
+	panel.offset_right = 260
+	panel.offset_bottom = 260
+	UITheme.apply_popup_frame(panel, "gold")
+	layer.add_child(panel)
+	var margin := MarginContainer.new()
+	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
+	for side in ["margin_left", "margin_top", "margin_right", "margin_bottom"]:
+		margin.add_theme_constant_override(side, 16)
+	panel.add_child(margin)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	margin.add_child(box)
+	var title := Label.new()
+	title.text = Locale.t("skill_editor.templates")
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UITheme.apply_title(title, 20)
+	box.add_child(title)
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	box.add_child(scroll)
+	var list := VBoxContainer.new()
+	list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	list.add_theme_constant_override("separation", 6)
+	scroll.add_child(list)
+	var templates := _builtin_skill_templates()
+	for custom in PlayerData.custom_skill_templates:
+		templates.append(custom)
+	for entry in templates:
+		var btn := Button.new()
+		btn.text = str(entry.get("name", Locale.t("skill.no_name")))
+		btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
+		UITheme.apply_button(btn, "secondary")
+		var template_skill := (entry.get("skill", {}) as Dictionary).duplicate(true)
+		btn.pressed.connect(_on_skill_template_chosen.bind(template_skill, layer))
+		list.add_child(btn)
+	var name_input := LineEdit.new()
+	name_input.placeholder_text = Locale.t("skill_editor.template_name")
+	UITheme.apply_input(name_input)
+	box.add_child(name_input)
+	var save_current := Button.new()
+	save_current.text = Locale.t("skill_editor.favorite_current")
+	UITheme.apply_button(save_current, "primary")
+	save_current.pressed.connect(func():
+		var skill := _build_skill()
+		if PlayerData.save_custom_skill_template(name_input.text, skill):
+			layer.queue_free()
+	)
+	box.add_child(save_current)
+	var close := Button.new()
+	close.text = Locale.t("common.back")
+	UITheme.apply_button(close, "secondary")
+	close.pressed.connect(layer.queue_free)
+	box.add_child(close)
+
+
+func _on_skill_template_chosen(skill: Dictionary, layer: CanvasLayer) -> void:
+	_apply_skill_template(skill)
+	layer.queue_free()
+
+
+func _apply_skill_template(skill: Dictionary) -> void:
+	if skill.is_empty():
+		return
+	current_trigger_key = SkillEngine.TRIGGER_ON_CAST if _is_spell() else str(skill.get("trigger", SkillEngine.TRIGGER_ON_ACTIVATE))
+	skill_name_input.text = str(skill.get("skill_name", ""))
+	effect_data = (skill.get("effects", []) as Array).duplicate(true)
+	if skill_prob_spin:
+		skill_prob_spin.value = int(skill.get("probability", 100))
+	if max_uses_spin:
+		max_uses_spin.value = int(skill.get("max_uses", 0))
+	_update_trigger_preview()
+	_refresh_script()
+	_update_summary()
+	_maybe_snapshot()
 
 
 # Undo / redo buttons sit at the left of the save/cancel row (Ctrl+Z / Ctrl+Y
@@ -1320,6 +1528,7 @@ func _on_save_pressed():
 	var skill: Dictionary = _build_skill()
 	var skill_key: String = _skill_key_for_index(PlayerData.editing_skill_index)
 	PlayerData.card_draft[skill_key] = skill
+	PlayerData.save_card_draft_recovery()
 	print("Skill saved: %s" % skill.get("skill_name", ""))
 	UIMotion.change_scene("res://CardEditor.tscn")
 

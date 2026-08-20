@@ -5,6 +5,8 @@ extends Node
 # ============================================
 
 const SAVE_FILE_NAME := "card_library.json"
+const SAVE_TEMP_SUFFIX := ".tmp"
+const SAVE_BACKUP_SUFFIX := ".bak"
 const NET_ARTS_DIR := "user://net_arts"
 const IMPORTED_ARTS_DIR := "user://arts"
 const MAX_ART_BYTES := 2 * 1024 * 1024  # 2 MB cap per card art sent over the network
@@ -12,6 +14,11 @@ const SHARE_VERSION := 2
 const SpellRules = preload("res://SpellRules.gd")
 const ParasiteRules = preload("res://ParasiteRules.gd")
 const SAFE_ART_EXTENSIONS := ["png", "jpg", "jpeg", "webp"]
+const DRAFT_RECOVERY_PATH := "user://card_draft_recovery.json"
+const SKILL_TEMPLATES_PATH := "user://skill_templates.json"
+const MATCH_HISTORY_PATH := "user://match_history.json"
+const MAX_MATCH_HISTORY := 100
+const DRAFT_RECOVERY_VERSION := 1
 
 var card_library: Array = []
 var deck_library: Array = []
@@ -35,6 +42,12 @@ var battle_select_mode: String = "practice"
 var battle_select_next_scene: String = "res://Main.tscn"
 var battle_select_step: int = 1
 var pending_hotseat_p1_deck: Array = []
+var recovered_card_draft: Dictionary = {}
+var custom_skill_templates: Array = []
+var match_history: Array = []
+var card_playtest_context: Dictionary = {}
+var _draft_save_pending: bool = false
+var _draft_save_at: float = 0.0
 
 # ============================================
 # Battle configuration (战斗前自定义参数)
@@ -54,7 +67,16 @@ func _ready():
 	save_path = "user://" + SAVE_FILE_NAME
 	print("Save path: %s" % ProjectSettings.globalize_path(save_path))
 	load_library()
+	_load_card_draft_recovery()
+	_load_skill_templates()
+	_load_match_history()
 	clear_net_arts()
+
+
+func _process(_delta: float) -> void:
+	if _draft_save_pending and Time.get_ticks_msec() / 1000.0 >= _draft_save_at:
+		_draft_save_pending = false
+		save_card_draft_recovery()
 
 
 # ============================================
@@ -562,13 +584,13 @@ func _restore_shared_art(card: CardData, card_data: Dictionary) -> void:
 	if not SAFE_ART_EXTENSIONS.has(ext):
 		return
 	var bytes := Marshalls.base64_to_raw(encoded)
-	if bytes.is_empty():
+	if bytes.is_empty() or bytes.size() > MAX_ART_BYTES:
 		return
 	card.art_path = save_imported_art(bytes, ext)
 
 
 func save_imported_art(bytes: PackedByteArray, ext: String) -> String:
-	if bytes.is_empty():
+	if bytes.is_empty() or bytes.size() > MAX_ART_BYTES:
 		return ""
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(IMPORTED_ARTS_DIR))
 	var hash_ctx := HashingContext.new()
@@ -599,30 +621,164 @@ func _extension_from_path(path: String) -> String:
 # File I/O
 # ============================================
 
-func save_library():
-	DirAccess.make_dir_recursive_absolute("user://")
-	var file := FileAccess.open(save_path, FileAccess.WRITE)
+func _save_temp_path() -> String:
+	return save_path + SAVE_TEMP_SUFFIX
+
+
+func _save_backup_path() -> String:
+	return save_path + SAVE_BACKUP_SUFFIX
+
+
+func _is_valid_library_json(json_string: String) -> bool:
+	var json := JSON.new()
+	if json.parse(json_string) != OK:
+		return false
+	var root = json.get_data()
+	if not root is Dictionary:
+		return false
+	# Version 1/2 saves may only have a top-level cards list; version 3 stores
+	# complete deck entries. Accept both so recovery never breaks migrations.
+	return root.has("decks") or root.has("cards")
+
+
+func _read_library_file(path: String) -> String:
+	if not FileAccess.file_exists(path):
+		return ""
+	var file := FileAccess.open(path, FileAccess.READ)
 	if file == null:
-		print("Cannot write save: %s" % FileAccess.get_open_error())
-		return
+		return ""
+	var contents := file.get_as_text()
+	file.close()
+	return contents
+
+
+func _load_library_file(path: String) -> bool:
+	var json_string := _read_library_file(path)
+	if json_string == "" or not _is_valid_library_json(json_string):
+		return false
+	card_library = deserialize_library(json_string)
+	return true
+
+
+func _remove_file_if_present(path: String) -> void:
+	if FileAccess.file_exists(path):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+
+
+func _read_json_dictionary(path: String) -> Dictionary:
+	var text := _read_library_file(path)
+	if text.is_empty():
+		return {}
+	var parsed = JSON.parse_string(text)
+	return parsed if parsed is Dictionary else {}
+
+
+func _write_json_atomic(path: String, payload: Dictionary) -> bool:
+	var encoded := JSON.stringify(payload)
+	if encoded.is_empty() or not (JSON.parse_string(encoded) is Dictionary):
+		return false
+	var temp_path := path + ".tmp"
+	var backup_path := path + ".bak"
+	_remove_file_if_present(temp_path)
+	var file := FileAccess.open(temp_path, FileAccess.WRITE)
+	if file == null:
+		return false
+	file.store_string(encoded)
+	file.flush()
+	file.close()
+	if not (JSON.parse_string(_read_library_file(temp_path)) is Dictionary):
+		_remove_file_if_present(temp_path)
+		return false
+	_remove_file_if_present(backup_path)
+	if FileAccess.file_exists(path):
+		if DirAccess.copy_absolute(ProjectSettings.globalize_path(path), ProjectSettings.globalize_path(backup_path)) != OK:
+			_remove_file_if_present(temp_path)
+			return false
+		_remove_file_if_present(path)
+	var error := DirAccess.rename_absolute(ProjectSettings.globalize_path(temp_path), ProjectSettings.globalize_path(path))
+	if error != OK:
+		if FileAccess.file_exists(backup_path):
+			DirAccess.copy_absolute(ProjectSettings.globalize_path(backup_path), ProjectSettings.globalize_path(path))
+		_remove_file_if_present(temp_path)
+		return false
+	return true
+
+
+func save_library() -> bool:
+	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("user://"))
+	var temp_path := _save_temp_path()
+	var backup_path := _save_backup_path()
+	_remove_file_if_present(temp_path)
+
 	var json_string := serialize_library()
+	var file := FileAccess.open(temp_path, FileAccess.WRITE)
+	if file == null:
+		print("Cannot write temporary save: %s" % FileAccess.get_open_error())
+		return false
 	file.store_string(json_string)
 	file.close()
+
+	# Validate the bytes that actually reached disk before touching the current
+	# library. This also catches interrupted or partial writes.
+	var written := _read_library_file(temp_path)
+	if written == "" or not _is_valid_library_json(written):
+		print("Temporary library validation failed; current save kept intact")
+		_remove_file_if_present(temp_path)
+		return false
+
+	var save_abs := ProjectSettings.globalize_path(save_path)
+	var temp_abs := ProjectSettings.globalize_path(temp_path)
+	var backup_abs := ProjectSettings.globalize_path(backup_path)
+	if FileAccess.file_exists(save_path):
+		_remove_file_if_present(backup_path)
+		var backup_err := DirAccess.copy_absolute(save_abs, backup_abs)
+		if backup_err != OK:
+			print("Cannot create library backup: %s" % backup_err)
+			_remove_file_if_present(temp_path)
+			return false
+		_remove_file_if_present(save_path)
+
+	var replace_err := DirAccess.rename_absolute(temp_abs, save_abs)
+	if replace_err != OK:
+		print("Cannot replace library save: %s" % replace_err)
+		# Best-effort rollback. The backup remains available even if this copy
+		# fails, so no valid save is silently discarded.
+		if FileAccess.file_exists(backup_path):
+			DirAccess.copy_absolute(backup_abs, save_abs)
+		_remove_file_if_present(temp_path)
+		return false
+
 	print("Library saved (%d cards, %d decks)" % [card_library.size(), deck_library.size()])
+	return true
 
 
-func load_library():
-	if not FileAccess.file_exists(save_path):
+func load_library() -> void:
+	if _load_library_file(save_path):
+		print("Library loaded (%d cards, %d decks)" % [card_library.size(), deck_library.size()])
+		return
+
+	var backup_path := _save_backup_path()
+	if _load_library_file(backup_path):
+		print("Primary library invalid; recovered backup (%d cards, %d decks)" % [card_library.size(), deck_library.size()])
+		# Restore the known-good backup as the primary without routing it through
+		# save_library(), which would otherwise back up the corrupt primary.
+		_remove_file_if_present(save_path)
+		DirAccess.copy_absolute(
+			ProjectSettings.globalize_path(backup_path),
+			ProjectSettings.globalize_path(save_path)
+		)
+		return
+
+	if FileAccess.file_exists(save_path):
+		var corrupt_path := "%s.corrupt.%d" % [save_path, Time.get_unix_time_from_system()]
+		var quarantine_err := DirAccess.rename_absolute(
+			ProjectSettings.globalize_path(save_path),
+			ProjectSettings.globalize_path(corrupt_path)
+		)
+		print("Library was invalid; preserved as %s (result %s)" % [corrupt_path, quarantine_err])
+	else:
 		print("No save file found (first launch?)")
-		_seed_starter_library()
-		return
-	var file := FileAccess.open(save_path, FileAccess.READ)
-	if file == null:
-		return
-	var json_string := file.get_as_text()
-	file.close()
-	card_library = deserialize_library(json_string)
-	print("Library loaded (%d cards, %d decks)" % [card_library.size(), deck_library.size()])
+	_seed_starter_library()
 
 
 # Populate a fresh collection with the default starter cards, then persist it.
@@ -678,7 +834,7 @@ func read_art_bytes(art_path: String) -> PackedByteArray:
 # Save received opponent art bytes named by content hash. Returns the user:// path,
 # or "" on failure. Identical art (same bytes) maps to the same file — natural dedup.
 func save_net_art(bytes: PackedByteArray, ext: String) -> String:
-	if bytes.is_empty():
+	if bytes.is_empty() or bytes.size() > MAX_ART_BYTES:
 		return ""
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path(NET_ARTS_DIR))
 	var hash_ctx := HashingContext.new()
@@ -687,8 +843,8 @@ func save_net_art(bytes: PackedByteArray, ext: String) -> String:
 	var digest := hash_ctx.finish()
 	var hash_str := digest.hex_encode()
 	var safe_ext: String = ext.strip_edges().to_lower()
-	if safe_ext == "":
-		safe_ext = "png"
+	if not SAFE_ART_EXTENSIONS.has(safe_ext):
+		return ""
 	var rel_path: String = "%s/%s.%s" % [NET_ARTS_DIR, hash_str, safe_ext]
 	var abs_path: String = ProjectSettings.globalize_path(rel_path)
 	if FileAccess.file_exists(abs_path):
@@ -755,6 +911,153 @@ func clear_library():
 # Draft management (cross-scene)
 # ============================================
 
+func queue_card_draft_recovery() -> void:
+	if card_draft.is_empty():
+		return
+	_draft_save_pending = true
+	_draft_save_at = Time.get_ticks_msec() / 1000.0 + 0.45
+
+
+func save_card_draft_recovery() -> bool:
+	if card_draft.is_empty():
+		return false
+	var payload := {
+		"version": DRAFT_RECOVERY_VERSION,
+		"saved_at": Time.get_unix_time_from_system(),
+		"draft": card_draft.duplicate(true),
+		"editing_index": editing_index,
+		"editing_deck_id": editing_deck_id,
+		"editing_instance_id": editing_instance_id,
+		"return_scene": card_editor_return_scene,
+	}
+	var ok := _write_json_atomic(DRAFT_RECOVERY_PATH, payload)
+	if ok:
+		recovered_card_draft = payload.duplicate(true)
+	return ok
+
+
+func _load_card_draft_recovery() -> void:
+	var payload := _read_json_dictionary(DRAFT_RECOVERY_PATH)
+	if int(payload.get("version", 0)) != DRAFT_RECOVERY_VERSION or not (payload.get("draft", {}) is Dictionary):
+		recovered_card_draft = {}
+		return
+	recovered_card_draft = payload
+
+
+func restore_card_draft_recovery() -> bool:
+	if recovered_card_draft.is_empty():
+		return false
+	var draft = recovered_card_draft.get("draft", {})
+	if not (draft is Dictionary) or draft.is_empty():
+		return false
+	card_draft = (draft as Dictionary).duplicate(true)
+	editing_index = int(recovered_card_draft.get("editing_index", -1))
+	editing_deck_id = str(recovered_card_draft.get("editing_deck_id", ""))
+	editing_instance_id = str(recovered_card_draft.get("editing_instance_id", ""))
+	card_editor_return_scene = str(recovered_card_draft.get("return_scene", "res://MainMenu.tscn"))
+	return true
+
+
+func has_card_draft_recovery() -> bool:
+	var draft = recovered_card_draft.get("draft", {})
+	return draft is Dictionary and not (draft as Dictionary).is_empty()
+
+
+func clear_card_draft_recovery() -> void:
+	_draft_save_pending = false
+	recovered_card_draft = {}
+	_remove_file_if_present(DRAFT_RECOVERY_PATH)
+	_remove_file_if_present(DRAFT_RECOVERY_PATH + ".tmp")
+	_remove_file_if_present(DRAFT_RECOVERY_PATH + ".bak")
+
+
+func save_custom_skill_template(name: String, skill: Dictionary) -> bool:
+	var clean_name := name.strip_edges()
+	if clean_name.is_empty() or skill.is_empty():
+		return false
+	for entry in custom_skill_templates:
+		if str(entry.get("name", "")) == clean_name:
+			entry["skill"] = skill.duplicate(true)
+			return _save_skill_templates()
+	custom_skill_templates.append({"name": clean_name, "skill": skill.duplicate(true)})
+	return _save_skill_templates()
+
+
+func delete_custom_skill_template(index: int) -> bool:
+	if index < 0 or index >= custom_skill_templates.size():
+		return false
+	custom_skill_templates.remove_at(index)
+	return _save_skill_templates()
+
+
+func _load_skill_templates() -> void:
+	var payload := _read_json_dictionary(SKILL_TEMPLATES_PATH)
+	var entries = payload.get("templates", [])
+	custom_skill_templates = entries.duplicate(true) if entries is Array else []
+
+
+func _save_skill_templates() -> bool:
+	return _write_json_atomic(SKILL_TEMPLATES_PATH, {"version": 1, "templates": custom_skill_templates})
+
+
+func _load_match_history() -> void:
+	var payload := _read_json_dictionary(MATCH_HISTORY_PATH)
+	var entries = payload.get("matches", [])
+	match_history = entries.duplicate(true) if entries is Array else []
+
+
+func add_match_history(entry: Dictionary) -> bool:
+	if entry.is_empty():
+		return false
+	var stored := entry.duplicate(true)
+	stored["id"] = str(stored.get("id", make_id("match")))
+	stored["timestamp"] = int(stored.get("timestamp", Time.get_unix_time_from_system()))
+	match_history.push_front(stored)
+	if match_history.size() > MAX_MATCH_HISTORY:
+		match_history.resize(MAX_MATCH_HISTORY)
+	return _write_json_atomic(MATCH_HISTORY_PATH, {"version": 1, "matches": match_history})
+
+
+func clear_match_history() -> bool:
+	match_history.clear()
+	_remove_file_if_present(MATCH_HISTORY_PATH)
+	_remove_file_if_present(MATCH_HISTORY_PATH + ".tmp")
+	_remove_file_if_present(MATCH_HISTORY_PATH + ".bak")
+	return true
+
+
+func begin_card_playtest(saved_card: CardData) -> void:
+	card_playtest_context = {
+		"draft": card_draft.duplicate(true),
+		"editing_index": editing_index,
+		"editing_deck_id": editing_deck_id,
+		"editing_instance_id": editing_instance_id,
+		"return_scene": card_editor_return_scene,
+		"battle_deck": battle_deck.duplicate(true),
+		"opponent_deck": opponent_battle_deck.duplicate(true),
+	}
+	card_draft = card_to_draft(saved_card)
+	save_card_draft_recovery()
+
+
+func is_card_playtest_active() -> bool:
+	return not card_playtest_context.is_empty()
+
+
+func restore_after_card_playtest() -> bool:
+	if card_playtest_context.is_empty():
+		return false
+	card_draft = (card_playtest_context.get("draft", {}) as Dictionary).duplicate(true)
+	editing_index = int(card_playtest_context.get("editing_index", -1))
+	editing_deck_id = str(card_playtest_context.get("editing_deck_id", ""))
+	editing_instance_id = str(card_playtest_context.get("editing_instance_id", ""))
+	card_editor_return_scene = str(card_playtest_context.get("return_scene", "res://MainMenu.tscn"))
+	battle_deck = (card_playtest_context.get("battle_deck", []) as Array).duplicate()
+	opponent_battle_deck = (card_playtest_context.get("opponent_deck", []) as Array).duplicate()
+	card_playtest_context = {}
+	queue_card_draft_recovery()
+	return true
+
 func init_card_draft():
 	card_draft = {
 		"name": "",
@@ -767,6 +1070,7 @@ func init_card_draft():
 		"skill1": {},
 		"skill2": {}
 	}
+	queue_card_draft_recovery()
 
 
 # Initialise the card draft for a spell card: no body stats, and a pre-filled
@@ -793,6 +1097,7 @@ func init_spell_draft():
 		},
 		"skill2": {},
 	}
+	queue_card_draft_recovery()
 
 
 func init_parasite_draft():
@@ -817,6 +1122,7 @@ func init_parasite_draft():
 		},
 		"skill2": {},
 	}
+	queue_card_draft_recovery()
 
 
 func load_card_to_draft(card: CardData):
@@ -827,6 +1133,7 @@ func load_card_to_draft(card: CardData):
 		card_draft["skill2"] = card.skills[1].duplicate(true)
 	if card.skills.size() >= 3:
 		card_draft["skill3"] = card.skills[2].duplicate(true)
+	queue_card_draft_recovery()
 
 
 func card_to_draft(card: CardData) -> Dictionary:

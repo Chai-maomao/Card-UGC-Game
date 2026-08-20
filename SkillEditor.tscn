@@ -68,6 +68,11 @@ layout_mode = 2
 text = "Blocks"
 horizontal_alignment = 1
 
+[node name="PaletteSearch" type="LineEdit" parent="Panel/Margin/HBox/PalettePanel/Margin/VBox"]
+layout_mode = 2
+placeholder_text = "Search blocks..."
+clear_button_enabled = true
+
 [node name="PaletteScroll" type="ScrollContainer" parent="Panel/Margin/HBox/PalettePanel/Margin/VBox"]
 layout_mode = 2
 size_flags_vertical = 3

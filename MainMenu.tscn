@@ -44,6 +44,10 @@ text = "My Cards"
 layout_mode = 2
 text = "Online Battle"
 
+[node name="MatchHistoryButton" type="Button" parent="CenterContainer/VBoxContainer"]
+layout_mode = 2
+text = "Match History"
+
 [node name="SettingsButton" type="Button" parent="CenterContainer/VBoxContainer"]
 layout_mode = 2
 text = "Settings"

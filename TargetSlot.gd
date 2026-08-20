@@ -21,6 +21,9 @@ signal changed
 
 var data: Dictionary
 var kind: String = "target"   # "target" | "side"
+var _drop_highlight: bool = false
+var _dragging: bool = false
+var _motion_tween: Tween
 
 
 func setup(p_data: Dictionary, p_kind: String) -> void:
@@ -33,10 +36,11 @@ func setup(p_data: Dictionary, p_kind: String) -> void:
 func _apply_slot_style() -> void:
 	var st := StyleBoxFlat.new()
 	var tint := _tint_color()
-	st.bg_color = Color(tint.r, tint.g, tint.b, 0.30)
-	st.border_color = Color(tint.r, tint.g, tint.b, 0.85)
-	st.set_border_width_all(1)
+	st.bg_color = Color(tint.r, tint.g, tint.b, 0.52 if _drop_highlight else 0.30)
+	st.border_color = Color(0.50, 0.92, 1.0, 1.0) if _drop_highlight else Color(tint.r, tint.g, tint.b, 0.92)
+	st.set_border_width_all(2 if _drop_highlight else 1)
 	st.set_corner_radius_all(10)
+	st.shadow_size = 0
 	st.content_margin_left = 4
 	st.content_margin_right = 4
 	st.content_margin_top = 2
@@ -52,7 +56,7 @@ func _apply_slot_style() -> void:
 
 
 func _tint_color() -> Color:
-	return Color(0.30, 0.50, 0.80) if kind == "target" else Color(0.62, 0.52, 0.30)
+	return Color(0.12, 0.48, 0.72) if kind == "target" else Color(0.62, 0.40, 0.12)
 
 
 func _field() -> String:
@@ -161,8 +165,11 @@ func _slot_get_drag_data(_pos: Vector2):
 	st.content_margin_bottom = 3
 	lbl.add_theme_stylebox_override("normal", st)
 	var wrap := Control.new()
+	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	wrap.add_child(lbl)
 	set_drag_preview(wrap)
+	_dragging = true
+	_animate_slot(Vector2(0.94, 0.94), Color(0.72, 0.76, 0.84, 0.48), 0.07)
 	return {
 		"type": "target_block" if kind == "target" else "side_block",
 		"value": value,
@@ -172,12 +179,16 @@ func _slot_get_drag_data(_pos: Vector2):
 
 func _can_drop_var(_pos: Vector2, payload) -> bool:
 	if not (payload is Dictionary):
+		_set_drop_highlight(false)
 		return false
 	var t: String = str(payload.get("type", ""))
-	return t == ("target_block" if kind == "target" else "side_block")
+	var ok := t == ("target_block" if kind == "target" else "side_block")
+	_set_drop_highlight(ok)
+	return ok
 
 
 func _drop_var(_pos: Vector2, payload) -> void:
+	_set_drop_highlight(false)
 	# Move semantics: if the reporter came from another slot, reset that slot.
 	var src: Object = payload.get("from_slot", null)
 	if src != null and src != self and is_instance_valid(src) and src.has_method("clear_to_number"):
@@ -188,6 +199,7 @@ func _drop_var(_pos: Vector2, payload) -> void:
 	data[_field()] = value
 	_rebuild()
 	changed.emit()
+	_play_drop_pulse()
 
 
 # Restore the slot to its default value. Also used when the chip is dragged
@@ -196,6 +208,38 @@ func clear_to_number() -> void:
 	data[_field()] = _default_value()
 	_rebuild()
 	changed.emit()
+
+
+func _set_drop_highlight(on: bool) -> void:
+	if _drop_highlight == on:
+		return
+	_drop_highlight = on
+	_apply_slot_style()
+
+
+func _animate_slot(target_scale: Vector2, target_modulate: Color, duration: float) -> void:
+	pivot_offset = size * 0.5
+	if _motion_tween != null and _motion_tween.is_valid():
+		_motion_tween.kill()
+	_motion_tween = create_tween().set_parallel(true)
+	_motion_tween.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_motion_tween.tween_property(self, "scale", target_scale, duration)
+	_motion_tween.tween_property(self, "modulate", target_modulate, duration)
+
+
+func _play_drop_pulse() -> void:
+	scale = Vector2(1.10, 1.10)
+	_animate_slot(Vector2.ONE, Color.WHITE, 0.16)
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_DRAG_END:
+		_dragging = false
+		_set_drop_highlight(false)
+		_animate_slot(Vector2.ONE, Color.WHITE, 0.10)
+	elif what == NOTIFICATION_MOUSE_EXIT and _drop_highlight:
+		if not get_global_rect().has_point(get_global_mouse_position()):
+			_set_drop_highlight(false)
 
 
 # Inline parameter controls keep mouse_filter PASS so drag-drop resolution can

@@ -13,6 +13,7 @@ const UITheme = preload("res://UITheme.gd")
 @onready var card_editor_btn = $CenterContainer/VBoxContainer/CardEditorButton
 @onready var my_cards_btn = $CenterContainer/VBoxContainer/MyCardsButton
 @onready var online_btn = $CenterContainer/VBoxContainer/OnlineButton
+@onready var match_history_btn = $CenterContainer/VBoxContainer/MatchHistoryButton
 @onready var settings_btn = $CenterContainer/VBoxContainer/SettingsButton
 @onready var version_label = $VersionLabel
 
@@ -26,6 +27,7 @@ func _apply_texts() -> void:
 	card_editor_btn.text = Locale.t("menu.card_editor")
 	my_cards_btn.text = Locale.t("menu.my_cards")
 	online_btn.text = Locale.t("menu.online")
+	match_history_btn.text = Locale.t("menu.match_history")
 	settings_btn.text = Locale.t("menu.settings")
 	version_label.text = Locale.t("settings.version", [AppVersion.VERSION])
 
@@ -40,7 +42,7 @@ func _ui_scale() -> float:
 func _apply_responsive_layout() -> void:
 	var s := _ui_scale()
 	var btn_size := Vector2(220, 52) * s
-	for btn in [resume_battle_btn, start_battle_btn, card_editor_btn, my_cards_btn, online_btn]:
+	for btn in [resume_battle_btn, start_battle_btn, card_editor_btn, my_cards_btn, online_btn, match_history_btn]:
 		if btn:
 			btn.custom_minimum_size = btn_size
 			btn.add_theme_font_size_override("font_size", max(12, int(18 * s)))
@@ -96,7 +98,7 @@ func _apply_theme() -> void:
 	UITheme.apply_label(subtitle_label, true)
 	box.add_child(subtitle_label)
 	box.add_child(buttons_box)
-	for btn in [start_battle_btn, card_editor_btn, my_cards_btn, online_btn, settings_btn]:
+	for btn in [start_battle_btn, card_editor_btn, my_cards_btn, online_btn, match_history_btn, settings_btn]:
 		UITheme.apply_button(btn, "primary" if btn == start_battle_btn else "secondary")
 	UITheme.apply_label(version_label, true)
 	# Entrance motion: panel spring-in, breathing title, staggered buttons.
@@ -117,10 +119,12 @@ func _ready():
 	card_editor_btn.pressed.connect(_on_card_editor_pressed)
 	my_cards_btn.pressed.connect(_on_my_cards_pressed)
 	online_btn.pressed.connect(_on_online_pressed)
+	match_history_btn.pressed.connect(func(): UIMotion.change_scene("res://MatchHistory.tscn"))
 	settings_btn.pressed.connect(_on_settings_pressed)
 	Locale.language_changed.connect(_apply_texts)
 	NetworkManager.reconnect_transport_ready.connect(_on_reconnect_transport_ready)
 	NetworkManager.reconnect_failed.connect(_on_reconnect_failed)
+	NetworkManager.reconnect_progress.connect(_on_reconnect_progress)
 	_apply_texts()
 	_apply_responsive_layout()
 	get_viewport().size_changed.connect(_on_viewport_size_changed)
@@ -418,6 +422,10 @@ func _on_resume_battle_pressed() -> void:
 
 func _on_reconnect_transport_ready() -> void:
 	UIMotion.change_scene("res://Main.tscn")
+
+
+func _on_reconnect_progress(elapsed_seconds: int, attempt: int) -> void:
+	resume_battle_btn.text = Locale.t("menu.reconnecting_progress", [attempt, elapsed_seconds])
 
 
 func _on_reconnect_failed(_reason: String) -> void:

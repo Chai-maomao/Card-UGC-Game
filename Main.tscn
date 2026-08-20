@@ -1,9 +1,31 @@
-[gd_scene format=3 uid="uid://c5vcnqomic4ja"]
+[gd_scene load_steps=9 format=3 uid="uid://c5vcnqomic4ja"]
 
 [ext_resource type="Script" uid="uid://ccd1flnpmy3lm" path="res://Main.gd" id="1_ig7tw"]
 [ext_resource type="PackedScene" uid="uid://cehdtymn5plrv" path="res://SlotUI.tscn" id="2_0xm2m"]
 [ext_resource type="Script" uid="uid://ja8vgee7rvlk" path="res://DiscardZone.gd" id="3_discard"]
 [ext_resource type="Script" path="res://ArrowLine.gd" id="4_arrow"]
+
+[sub_resource type="Gradient" id="Gradient_enemy_aura"]
+offsets = PackedFloat32Array(0, 0.18, 0.5, 0.82, 1)
+colors = PackedColorArray(0.52, 0.08, 0.3, 0, 0.52, 0.08, 0.3, 0.08, 0.52, 0.08, 0.3, 0.16, 0.52, 0.08, 0.3, 0.08, 0.52, 0.08, 0.3, 0)
+
+[sub_resource type="GradientTexture2D" id="GradientTexture2D_enemy_aura"]
+gradient = SubResource("Gradient_enemy_aura")
+width = 8
+height = 256
+fill_from = Vector2(0.5, 0)
+fill_to = Vector2(0.5, 1)
+
+[sub_resource type="Gradient" id="Gradient_player_aura"]
+offsets = PackedFloat32Array(0, 0.18, 0.5, 0.82, 1)
+colors = PackedColorArray(0.02, 0.48, 0.68, 0, 0.02, 0.48, 0.68, 0.08, 0.02, 0.48, 0.68, 0.16, 0.02, 0.48, 0.68, 0.08, 0.02, 0.48, 0.68, 0)
+
+[sub_resource type="GradientTexture2D" id="GradientTexture2D_player_aura"]
+gradient = SubResource("Gradient_player_aura")
+width = 8
+height = 256
+fill_from = Vector2(0.5, 0)
+fill_to = Vector2(0.5, 1)
 
 [node name="Main" type="Node2D" unique_id=1271513720]
 script = ExtResource("1_ig7tw")
@@ -17,26 +39,25 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 
-[node name="EnemyAura" type="ColorRect" parent="CanvasLayer/MainBackground"]
+[node name="EnemyAura" type="TextureRect" parent="CanvasLayer/MainBackground"]
 layout_mode = 1
 anchors_preset = 10
 anchor_right = 1.0
 offset_bottom = 240.0
 grow_horizontal = 2
 mouse_filter = 2
-color = Color(0.22, 0.035, 0.12, 0.28)
+texture = SubResource("GradientTexture2D_enemy_aura")
+expand_mode = 1
 
-[node name="PlayerAura" type="ColorRect" parent="CanvasLayer/MainBackground"]
+[node name="PlayerAura" type="TextureRect" parent="CanvasLayer/MainBackground"]
 layout_mode = 1
-anchors_preset = 12
-anchor_top = 1.0
+anchors_preset = 10
 anchor_right = 1.0
-anchor_bottom = 1.0
-offset_top = -270.0
+offset_bottom = 240.0
 grow_horizontal = 2
-grow_vertical = 0
 mouse_filter = 2
-color = Color(0.02, 0.22, 0.32, 0.30)
+texture = SubResource("GradientTexture2D_player_aura")
+expand_mode = 1
 
 [node name="MainLayout" type="VBoxContainer" parent="CanvasLayer/MainBackground" unique_id=1645648937]
 layout_mode = 1
@@ -49,8 +70,74 @@ theme_override_constants/separation = 0
 alignment = 1
 
 [node name="TopSpacer" type="Control" parent="CanvasLayer/MainBackground/MainLayout" unique_id=2001000]
-custom_minimum_size = Vector2(0, 12)
+custom_minimum_size = Vector2(0, 4)
 layout_mode = 2
+
+[node name="EnemyStatusRow" type="HBoxContainer" parent="CanvasLayer/MainBackground/MainLayout"]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+alignment = 1
+
+[node name="EnemyStatusHUD" type="Panel" parent="CanvasLayer/MainBackground/MainLayout/EnemyStatusRow"]
+custom_minimum_size = Vector2(720, 38)
+layout_mode = 2
+
+[node name="Margin" type="MarginContainer" parent="CanvasLayer/MainBackground/MainLayout/EnemyStatusRow/EnemyStatusHUD"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 14
+theme_override_constants/margin_right = 14
+
+[node name="Content" type="HBoxContainer" parent="CanvasLayer/MainBackground/MainLayout/EnemyStatusRow/EnemyStatusHUD/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 10
+alignment = 1
+
+[node name="SideLabel" type="Label" parent="CanvasLayer/MainBackground/MainLayout/EnemyStatusRow/EnemyStatusHUD/Margin/Content"]
+custom_minimum_size = Vector2(72, 0)
+layout_mode = 2
+text = "Opponent"
+vertical_alignment = 1
+
+[node name="HpLabel" type="Label" parent="CanvasLayer/MainBackground/MainLayout/EnemyStatusRow/EnemyStatusHUD/Margin/Content"]
+custom_minimum_size = Vector2(108, 0)
+layout_mode = 2
+text = "HP 30/30"
+horizontal_alignment = 2
+vertical_alignment = 1
+
+[node name="HpBar" type="ProgressBar" parent="CanvasLayer/MainBackground/MainLayout/EnemyStatusRow/EnemyStatusHUD/Margin/Content"]
+custom_minimum_size = Vector2(128, 14)
+layout_mode = 2
+size_flags_vertical = 4
+value = 30.0
+show_percentage = false
+
+[node name="ManaLabel" type="Label" parent="CanvasLayer/MainBackground/MainLayout/EnemyStatusRow/EnemyStatusHUD/Margin/Content"]
+custom_minimum_size = Vector2(108, 0)
+layout_mode = 2
+text = "Elixir 4/10"
+horizontal_alignment = 2
+vertical_alignment = 1
+
+[node name="ManaBar" type="ProgressBar" parent="CanvasLayer/MainBackground/MainLayout/EnemyStatusRow/EnemyStatusHUD/Margin/Content"]
+custom_minimum_size = Vector2(104, 14)
+layout_mode = 2
+size_flags_vertical = 4
+max_value = 10.0
+value = 4.0
+show_percentage = false
+
+[node name="HandLabel" type="Label" parent="CanvasLayer/MainBackground/MainLayout/EnemyStatusRow/EnemyStatusHUD/Margin/Content"]
+custom_minimum_size = Vector2(104, 0)
+layout_mode = 2
+text = "Hand 0/6"
+horizontal_alignment = 2
+vertical_alignment = 1
 
 [node name="EnemySide" type="HBoxContainer" parent="CanvasLayer/MainBackground/MainLayout" unique_id=1339047512]
 layout_mode = 2
@@ -73,12 +160,13 @@ layout_mode = 2
 layout_mode = 2
 
 [node name="MidSpacer" type="Control" parent="CanvasLayer/MainBackground/MainLayout" unique_id=2001001]
-custom_minimum_size = Vector2(0, 8)
+custom_minimum_size = Vector2(0, 6)
 layout_mode = 2
 
 [node name="MiddleInfoBar" type="Panel" parent="CanvasLayer/MainBackground/MainLayout" unique_id=1947893471]
-custom_minimum_size = Vector2(0, 56)
+custom_minimum_size = Vector2(720, 48)
 layout_mode = 2
+size_flags_horizontal = 4
 
 [node name="InfoHBox" type="HBoxContainer" parent="CanvasLayer/MainBackground/MainLayout/MiddleInfoBar" unique_id=2001002]
 layout_mode = 1
@@ -94,14 +182,10 @@ alignment = 1
 layout_mode = 2
 size_flags_horizontal = 3
 
-[node name="ManaLabel" type="Label" parent="CanvasLayer/MainBackground/MainLayout/MiddleInfoBar/InfoHBox" unique_id=1827879917]
+[node name="TurnLabel" type="Label" parent="CanvasLayer/MainBackground/MainLayout/MiddleInfoBar/InfoHBox" unique_id=1827879917]
 layout_mode = 2
 horizontal_alignment = 1
-
-[node name="StatusToggleButton" type="Button" parent="CanvasLayer/MainBackground/MainLayout/MiddleInfoBar/InfoHBox" unique_id=2001008]
-custom_minimum_size = Vector2(120, 0)
-layout_mode = 2
-text = "My Info"
+vertical_alignment = 1
 
 [node name="EndTurnButton" type="Button" parent="CanvasLayer/MainBackground/MainLayout/MiddleInfoBar/InfoHBox" unique_id=2004276860]
 layout_mode = 2
@@ -112,7 +196,7 @@ layout_mode = 2
 size_flags_horizontal = 3
 
 [node name="BottomSpacer" type="Control" parent="CanvasLayer/MainBackground/MainLayout" unique_id=2001005]
-custom_minimum_size = Vector2(0, 6)
+custom_minimum_size = Vector2(0, 4)
 layout_mode = 2
 
 [node name="PlayerSide" type="HBoxContainer" parent="CanvasLayer/MainBackground/MainLayout" unique_id=1525764737]
@@ -135,19 +219,104 @@ layout_mode = 2
 [node name="SlotUI5" parent="CanvasLayer/MainBackground/MainLayout/PlayerSide" unique_id=9990004 instance=ExtResource("2_0xm2m")]
 layout_mode = 2
 
+[node name="PlayerStatusRow" type="HBoxContainer" parent="CanvasLayer/MainBackground/MainLayout"]
+custom_minimum_size = Vector2(0, 40)
+layout_mode = 2
+alignment = 1
+
+[node name="PlayerStatusHUD" type="Panel" parent="CanvasLayer/MainBackground/MainLayout/PlayerStatusRow"]
+custom_minimum_size = Vector2(720, 38)
+layout_mode = 2
+
+[node name="Margin" type="MarginContainer" parent="CanvasLayer/MainBackground/MainLayout/PlayerStatusRow/PlayerStatusHUD"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 14
+theme_override_constants/margin_right = 14
+
+[node name="Content" type="HBoxContainer" parent="CanvasLayer/MainBackground/MainLayout/PlayerStatusRow/PlayerStatusHUD/Margin"]
+layout_mode = 2
+theme_override_constants/separation = 10
+alignment = 1
+
+[node name="SideLabel" type="Label" parent="CanvasLayer/MainBackground/MainLayout/PlayerStatusRow/PlayerStatusHUD/Margin/Content"]
+custom_minimum_size = Vector2(72, 0)
+layout_mode = 2
+text = "You"
+vertical_alignment = 1
+
+[node name="HpLabel" type="Label" parent="CanvasLayer/MainBackground/MainLayout/PlayerStatusRow/PlayerStatusHUD/Margin/Content"]
+custom_minimum_size = Vector2(108, 0)
+layout_mode = 2
+text = "HP 30/30"
+horizontal_alignment = 2
+vertical_alignment = 1
+
+[node name="HpBar" type="ProgressBar" parent="CanvasLayer/MainBackground/MainLayout/PlayerStatusRow/PlayerStatusHUD/Margin/Content"]
+custom_minimum_size = Vector2(128, 14)
+layout_mode = 2
+size_flags_vertical = 4
+value = 30.0
+show_percentage = false
+
+[node name="ManaLabel" type="Label" parent="CanvasLayer/MainBackground/MainLayout/PlayerStatusRow/PlayerStatusHUD/Margin/Content"]
+custom_minimum_size = Vector2(108, 0)
+layout_mode = 2
+text = "Elixir 4/10"
+horizontal_alignment = 2
+vertical_alignment = 1
+
+[node name="ManaBar" type="ProgressBar" parent="CanvasLayer/MainBackground/MainLayout/PlayerStatusRow/PlayerStatusHUD/Margin/Content"]
+custom_minimum_size = Vector2(104, 14)
+layout_mode = 2
+size_flags_vertical = 4
+max_value = 10.0
+value = 4.0
+show_percentage = false
+
+[node name="HandLabel" type="Label" parent="CanvasLayer/MainBackground/MainLayout/PlayerStatusRow/PlayerStatusHUD/Margin/Content"]
+custom_minimum_size = Vector2(104, 0)
+layout_mode = 2
+text = "Hand 0/6"
+horizontal_alignment = 2
+vertical_alignment = 1
+
 [node name="HandSpacer" type="Control" parent="CanvasLayer/MainBackground/MainLayout" unique_id=2001006]
 custom_minimum_size = Vector2(0, 4)
 layout_mode = 2
 
-[node name="HandArea" type="MarginContainer" parent="CanvasLayer/MainBackground/MainLayout" unique_id=2001007]
-custom_minimum_size = Vector2(0, 170)
+[node name="BottomDockMargin" type="MarginContainer" parent="CanvasLayer/MainBackground/MainLayout"]
+custom_minimum_size = Vector2(0, 154)
 layout_mode = 2
 size_flags_vertical = 3
-theme_override_constants/margin_left = 24
-theme_override_constants/margin_right = 24
-theme_override_constants/margin_bottom = 12
+theme_override_constants/margin_left = 18
+theme_override_constants/margin_right = 18
+theme_override_constants/margin_bottom = 8
 
-[node name="HandBackdrop" type="Panel" parent="CanvasLayer/MainBackground/MainLayout/HandArea"]
+[node name="BottomDock" type="HBoxContainer" parent="CanvasLayer/MainBackground/MainLayout/BottomDockMargin"]
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+theme_override_constants/separation = 12
+alignment = 1
+
+[node name="PileColumn" type="VBoxContainer" parent="CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock"]
+custom_minimum_size = Vector2(112, 0)
+layout_mode = 2
+theme_override_constants/separation = 8
+alignment = 1
+
+[node name="HandArea" type="Control" parent="CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock" unique_id=2001007]
+custom_minimum_size = Vector2(0, 154)
+layout_mode = 2
+size_flags_horizontal = 3
+size_flags_vertical = 3
+
+[node name="HandBackdrop" type="Panel" parent="CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock/HandArea"]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0
@@ -156,31 +325,41 @@ grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
 
-[node name="HandScroll" type="ScrollContainer" parent="CanvasLayer/MainBackground/MainLayout/HandArea" unique_id=4550001]
+[node name="HandContent" type="MarginContainer" parent="CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock/HandArea"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/margin_left = 8
+theme_override_constants/margin_top = 8
+theme_override_constants/margin_right = 8
+theme_override_constants/margin_bottom = 8
+
+[node name="HandScroll" type="ScrollContainer" parent="CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock/HandArea/HandContent" unique_id=4550001]
 layout_mode = 2
 size_flags_horizontal = 3
 size_flags_vertical = 3
 clip_contents = false
 vertical_scroll_mode = 0
 
-[node name="HandContainer" type="HBoxContainer" parent="CanvasLayer/MainBackground/MainLayout/HandArea/HandScroll" unique_id=454726733]
+[node name="HandContainer" type="HBoxContainer" parent="CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock/HandArea/HandContent/HandScroll" unique_id=454726733]
 layout_mode = 2
 theme_override_constants/separation = 8
 alignment = 1
 
-[node name="DiscardZone" type="Panel" parent="CanvasLayer" unique_id=4560001]
-anchors_preset = 3
-anchor_left = 1.0
-anchor_top = 1.0
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_left = -170.0
-offset_top = -80.0
-grow_horizontal = 0
-grow_vertical = 0
+[node name="DiscardColumn" type="VBoxContainer" parent="CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock"]
+custom_minimum_size = Vector2(150, 0)
+layout_mode = 2
+alignment = 1
+
+[node name="DiscardZone" type="Panel" parent="CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock/DiscardColumn" unique_id=4560001]
+custom_minimum_size = Vector2(150, 72)
+layout_mode = 2
 script = ExtResource("3_discard")
 
-[node name="DiscardLabel" type="Label" parent="CanvasLayer/DiscardZone" unique_id=4560002]
+[node name="DiscardLabel" type="Label" parent="CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock/DiscardColumn/DiscardZone" unique_id=4560002]
 layout_mode = 1
 anchors_preset = 15
 anchor_right = 1.0

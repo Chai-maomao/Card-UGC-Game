@@ -9,21 +9,38 @@ extends RefCounted
 # ============================================
 
 var editor: Control
-var _error_banner: Label
+var _error_banner: Button
 
 
 func collect_errors() -> Array:
 	var errors: Array = []
-	var effect_data: Array = editor.get("effect_data")
-	if effect_data.is_empty():
-		errors.append(Locale.t("skill_editor.error_empty_skill"))
-	walk_errors(effect_data, errors)
+	for issue in collect_issues():
+		errors.append(issue.get("message", ""))
 	return errors
 
 
+func collect_issues() -> Array:
+	var issues: Array = []
+	var effect_data: Array = editor.get("effect_data")
+	if effect_data.is_empty():
+		issues.append({"message": Locale.t("skill_editor.error_empty_skill"), "path": [], "kind": "empty"})
+	walk_issues(effect_data, issues, [])
+	return issues
+
+
 func walk_errors(list: Array, errors: Array) -> void:
-	for eff in list:
+	var issues: Array = []
+	walk_issues(list, issues, [])
+	for issue in issues:
+		errors.append(issue.get("message", ""))
+
+
+func walk_issues(list: Array, issues: Array, base_path: Array) -> void:
+	for index in range(list.size()):
+		var eff = list[index]
 		var eff_dict: Dictionary = eff
+		var path := base_path.duplicate()
+		path.append(index)
 		var effect_id: String = str(eff_dict.get("effect", ""))
 		if effect_id == SkillEngine.EFFECT_IF_ELSE or effect_id == SkillEngine.EFFECT_IF:
 			var cond := SkillEngine._condition_dict(eff_dict)
@@ -32,16 +49,22 @@ func walk_errors(list: Array, errors: Array) -> void:
 			var has_cond: bool = cond.has("lhs") or cond.has("logic") \
 					or str(cond.get("condition_type", "")) not in ["", SkillEngine.CONDITION_NONE]
 			if not has_cond:
-				errors.append(Locale.t("skill_editor.error_missing_condition"))
-			walk_errors(eff_dict.get("then_effects", []), errors)
-			walk_errors(eff_dict.get("else_effects", []), errors)
+				issues.append({"message": Locale.t("skill_editor.error_missing_condition"), "path": path, "kind": "condition"})
+			var then_path := path.duplicate()
+			then_path.append("then")
+			walk_issues(eff_dict.get("then_effects", []), issues, then_path)
+			var else_path := path.duplicate()
+			else_path.append("else")
+			walk_issues(eff_dict.get("else_effects", []), issues, else_path)
 		elif effect_id == SkillEngine.EFFECT_REPEAT:
 			# A variable reporter oval supplies the count — only a missing
 			# fixed number (no variable) below 1 is a syntax error.
 			var rep_var: String = str(eff_dict.get("repeat_var", ""))
 			if rep_var == "" and int(eff_dict.get("repeat_count", 0)) <= 0:
-				errors.append(Locale.t("skill_editor.error_repeat_count"))
-			walk_errors(eff_dict.get("then_effects", []), errors)
+				issues.append({"message": Locale.t("skill_editor.error_repeat_count"), "path": path, "kind": "repeat"})
+			var repeat_path := path.duplicate()
+			repeat_path.append("then")
+			walk_issues(eff_dict.get("then_effects", []), issues, repeat_path)
 		elif effect_id == SkillEngine.EFFECT_STOP:
 			# Control block: halts the branch — no target/value to check.
 			pass
@@ -51,13 +74,13 @@ func walk_errors(list: Array, errors: Array) -> void:
 			if not SkillRegistry.force_self(effect_id):
 				var tgt: String = str(eff_dict.get("target", ""))
 				if tgt == "":
-					errors.append(Locale.t("skill_editor.error_missing_target"))
+					issues.append({"message": Locale.t("skill_editor.error_missing_target"), "path": path, "kind": "target"})
 				elif _target_needs_side(tgt):
 					var side: String = str(eff_dict.get("target_side", ""))
 					if side == "":
-						errors.append(Locale.t("skill_editor.error_missing_target_side"))
+						issues.append({"message": Locale.t("skill_editor.error_missing_target_side"), "path": path, "kind": "target_side"})
 					elif _target_side_ineffective(tgt, side):
-						errors.append(Locale.t("skill_editor.error_target_ineffective"))
+						issues.append({"message": Locale.t("skill_editor.error_target_ineffective"), "path": path, "kind": "target_side"})
 
 
 static func _target_needs_side(target: String) -> bool:
@@ -83,11 +106,16 @@ func refresh_banner() -> void:
 	if _error_banner != null and is_instance_valid(_error_banner):
 		_error_banner.queue_free()
 		_error_banner = null
-	var errors := collect_errors()
-	if errors.is_empty():
+	var issues := collect_issues()
+	if issues.is_empty():
 		return
-	var empty_only: bool = errors.size() == 1 and str(errors[0]) == Locale.t("skill_editor.error_empty_skill")
-	_error_banner = Label.new()
+	var errors: Array = []
+	for issue in issues:
+		errors.append(issue.get("message", ""))
+	var empty_only: bool = issues.size() == 1 and str(issues[0].get("kind", "")) == "empty"
+	_error_banner = Button.new()
+	_error_banner.alignment = HORIZONTAL_ALIGNMENT_LEFT
+	_error_banner.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	if empty_only:
 		_error_banner.text = Locale.t("skill_editor.error_empty_skill")
 		_error_banner.add_theme_font_size_override("font_size", 12)
@@ -102,9 +130,10 @@ func refresh_banner() -> void:
 		hint_st.content_margin_top = 4
 		hint_st.content_margin_bottom = 4
 		_error_banner.add_theme_stylebox_override("normal", hint_st)
+		_error_banner.add_theme_stylebox_override("hover", hint_st)
 		_error_banner.add_theme_color_override("font_color", Color(0.8, 0.85, 0.95))
 	else:
-		_error_banner.text = "%s\n%s" % [Locale.t("skill_editor.error_title"), "\n".join(errors)]
+		_error_banner.text = "%s\n%s\n%s" % [Locale.t("skill_editor.error_title"), "\n".join(errors), Locale.t("skill_editor.error_click_hint")]
 		_error_banner.add_theme_font_size_override("font_size", 12)
 		_error_banner.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		var st := StyleBoxFlat.new()
@@ -117,7 +146,11 @@ func refresh_banner() -> void:
 		st.content_margin_top = 4
 		st.content_margin_bottom = 4
 		_error_banner.add_theme_stylebox_override("normal", st)
+		var hover_st: StyleBoxFlat = st.duplicate()
+		hover_st.border_color = Color(1.0, 0.72, 0.42)
+		_error_banner.add_theme_stylebox_override("hover", hover_st)
 		_error_banner.add_theme_color_override("font_color", Color(1, 0.92, 0.92))
+		_error_banner.pressed.connect(func(): editor.call("_focus_issue_path", issues[0].get("path", [])))
 	parent.add_child(_error_banner)
 	parent.move_child(_error_banner, effects_list.get_index())
 
