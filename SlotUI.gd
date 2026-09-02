@@ -29,6 +29,7 @@ func apply_ui_scale(scale_value: float) -> void:
 		if current_card_ui.has_method("apply_ui_scale"):
 			current_card_ui.call("apply_ui_scale", ui_scale)
 		current_card_ui.position = Vector2.ZERO
+	queue_redraw()
 
 
 func _ready():
@@ -71,6 +72,41 @@ func _refresh_visual() -> void:
 		add_theme_stylebox_override("normal", style)
 		add_theme_stylebox_override("hover", style)
 		add_theme_stylebox_override("pressed", style)
+	queue_redraw()
+
+
+func _draw() -> void:
+	# Empty slots read as intentional placement sockets rather than blank cards.
+	# Occupied slots stay clean so these marks never compete with card text.
+	if current_card_data != null:
+		return
+	var accent := UITheme.COLOR_ENEMY if visual_variant == "enemy" else UITheme.COLOR_PLAYER
+	var alpha := 0.50 if _target_hint == "hover" or _highlighted else (0.34 if _target_hint == "valid" else 0.18)
+	var color := Color(accent.r, accent.g, accent.b, alpha)
+	var pad := 13.0 * ui_scale
+	var tick := 11.0 * ui_scale
+	var thickness: float = maxf(1.0, 1.5 * ui_scale)
+	var left := pad
+	var top := pad
+	var right := size.x - pad
+	var bottom := size.y - pad
+	# Four corner registration marks keep the middle visually quiet.
+	draw_line(Vector2(left, top), Vector2(left + tick, top), color, thickness)
+	draw_line(Vector2(left, top), Vector2(left, top + tick), color, thickness)
+	draw_line(Vector2(right, top), Vector2(right - tick, top), color, thickness)
+	draw_line(Vector2(right, top), Vector2(right, top + tick), color, thickness)
+	draw_line(Vector2(left, bottom), Vector2(left + tick, bottom), color, thickness)
+	draw_line(Vector2(left, bottom), Vector2(left, bottom - tick), color, thickness)
+	draw_line(Vector2(right, bottom), Vector2(right - tick, bottom), color, thickness)
+	draw_line(Vector2(right, bottom), Vector2(right, bottom - tick), color, thickness)
+	var centre := size * 0.5
+	var diamond := PackedVector2Array([
+		centre + Vector2(0, -4) * ui_scale,
+		centre + Vector2(4, 0) * ui_scale,
+		centre + Vector2(0, 4) * ui_scale,
+		centre + Vector2(-4, 0) * ui_scale,
+	])
+	draw_colored_polygon(diamond, Color(accent.r, accent.g, accent.b, alpha * 0.8))
 
 
 # Gold frame highlight for valid drop/target slots while aiming or dragging.
@@ -165,4 +201,5 @@ func _drop_data(_position: Vector2, data):
 	var card_data: CardData = data["card_data"] as CardData
 
 	print("Card dropped into slot: %s" % card_data.card_name)
+	set_target_hint(false)
 	emit_signal("card_dropped_here", card_data, dragging_card_ui)

@@ -37,7 +37,7 @@ theme_override_constants/separation = 12
 [node name="TitleLabel" type="Label" parent="Panel/VBoxContainer" unique_id=1000004]
 layout_mode = 2
 theme_override_font_sizes/font_size = 24
-text = "Direct Connect"
+text = "LAN Multiplayer"
 horizontal_alignment = 1
 
 [node name="Separator" type="HSeparator" parent="Panel/VBoxContainer" unique_id=1000005]
@@ -50,6 +50,18 @@ horizontal_alignment = 1
 [node name="HostButton" type="Button" parent="Panel/VBoxContainer" unique_id=1000007]
 layout_mode = 2
 text = "Host Game"
+
+[node name="DiscoveryLabel" type="Label" parent="Panel/VBoxContainer"]
+layout_mode = 2
+text = "LAN rooms:"
+
+[node name="RoomList" type="OptionButton" parent="Panel/VBoxContainer"]
+layout_mode = 2
+disabled = true
+
+[node name="RefreshButton" type="Button" parent="Panel/VBoxContainer"]
+layout_mode = 2
+text = "Refresh"
 
 [node name="IPLabel" type="Label" parent="Panel/VBoxContainer" unique_id=1000008]
 layout_mode = 2

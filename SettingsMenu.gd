@@ -22,7 +22,7 @@ func _ready() -> void:
 	_apply_responsive_layout()
 	language_option.item_selected.connect(_on_language_selected)
 	resolution_option.item_selected.connect(_on_resolution_selected)
-	back_button.pressed.connect(func(): UIMotion.change_scene("res://MainMenu.tscn"))
+	back_button.pressed.connect(func(): UIMotion.go_back("res://MainMenu.tscn"))
 	Locale.language_changed.connect(_apply_texts)
 	get_viewport().size_changed.connect(_apply_responsive_layout)
 

@@ -115,7 +115,7 @@ func _parse_args() -> void:
 
 func _start() -> bool:
 	peer = ENetMultiplayerPeer.new()
-	var err := peer.create_server(room_port, 2)
+	var err := peer.create_server(room_port, 2, NetworkManager.GAME_CHANNEL_COUNT)
 	if err != OK:
 		peer = null
 		return false
@@ -245,9 +245,9 @@ func _guard_room_message(sender_id: int, kind: String) -> bool:
 	if not _peer_to_player.has(sender_id):
 		return false
 	var now := _now()
-	var entry: Dictionary = _rate_windows.get(sender_id, {"started": now, "intent": 0, "resume": 0, "authority_state": 0})
+	var entry: Dictionary = _rate_windows.get(sender_id, {"started": now, "intent": 0, "resume": 0, "authority_state": 0, "art": 0})
 	if now - float(entry.get("started", now)) >= 1.0:
-		entry = {"started": now, "intent": 0, "resume": 0, "authority_state": 0}
+		entry = {"started": now, "intent": 0, "resume": 0, "authority_state": 0, "art": 0}
 	entry[kind] = int(entry.get(kind, 0)) + 1
 	_rate_windows[sender_id] = entry
 	var limit := 60
@@ -255,6 +255,8 @@ func _guard_room_message(sender_id: int, kind: String) -> bool:
 		limit = 20
 	elif kind == "authority_state":
 		limit = 12
+	elif kind == "art":
+		limit = 180
 	if int(entry[kind]) <= limit:
 		return true
 	print("[SECURITY room=%s peer=%d player=%d kind=%s rate=%d limit=%d action=disconnect]" % [room_code, sender_id, int(_peer_to_player.get(sender_id, 0)), kind, int(entry[kind]), limit])

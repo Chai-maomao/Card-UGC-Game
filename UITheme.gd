@@ -71,11 +71,11 @@ static func apply_panel(panel: Control, variant: String = "normal") -> void:
 			shadow = Color(0.0, 0.0, 0.0, 0.0)
 			shadow_size = 0
 		"hand":
-			fill = Color(0.035, 0.07, 0.10, 0.94)
-			border = Color(0.24, 0.50, 0.62, 0.66)
+			fill = Color(0.025, 0.052, 0.076, 0.96)
+			border = Color(0.20, 0.58, 0.70, 0.72)
 			radius = 14
-			shadow = Color(0.0, 0.0, 0.0, 0.48)
-			shadow_size = 8
+			shadow = Color(0.0, 0.0, 0.0, 0.55)
+			shadow_size = 7
 		"enemy_slot":
 			fill = Color(0.13, 0.055, 0.10, 0.92)
 			border = COLOR_ENEMY
@@ -138,7 +138,9 @@ static func apply_card_surface(panel: Panel, card_type: String, scale: float = 1
 	elif card_type == "parasite":
 		border = Color(0.56, 0.30, 0.66)
 		fill = Color(0.11, 0.055, 0.14, 0.98)
-	var style := panel_style(fill, border, max(1, int(scale)), max(3, int(6 * scale)), Color(border.r, border.g, border.b, 0.16), max(1, int(3 * scale)))
+	# CardUI owns a dedicated shadow node below this surface. Keeping the frame
+	# shadow-free guarantees that no dark pixels can be painted over its border.
+	var style := panel_style(fill, border, max(1, int(scale)), max(3, int(6 * scale)))
 	panel.add_theme_stylebox_override("panel", style)
 
 

@@ -16,6 +16,7 @@ const DEFAULT_GAME_PORT_END := 5020
 const MAX_ROOM_CODE_LEN := 16
 const ROOM_REAP_INTERVAL := 2.0  # seconds between checks for exited room subprocesses
 const ROOM_SPAWN_GRACE := 8.0    # seconds a new room is protected from reaping while it binds its port
+const JOIN_RESERVATION_TTL := 15.0
 
 var lobby_port: int = DEFAULT_LOBBY_PORT
 var game_port_start: int = DEFAULT_GAME_PORT_START
@@ -216,6 +217,7 @@ func _handle_lobby_request(sender_id: int, json_str: String) -> void:
 						"pid": pid,
 						"created_at": Time.get_ticks_msec() / 1000.0,
 						"players": 1,
+						"p2_reserved_until": 0.0,
 						"tokens": {1: p1_token, 2: p2_token},
 					}
 					NetworkManager.send_lobby_response(sender_id, JSON.stringify({
@@ -234,18 +236,19 @@ func _handle_lobby_request(sender_id: int, json_str: String) -> void:
 		if room == null:
 			NetworkManager.send_lobby_response(sender_id, JSON.stringify({"status": "not_found"}))
 			print("[SERVER] Room '%s' not found" % code)
-		elif int(room.get("players", 0)) >= 2:
+		elif has_active_join_reservation(room, Time.get_ticks_msec() / 1000.0):
 			NetworkManager.send_lobby_response(sender_id, JSON.stringify({"status": "full"}))
-			print("[SERVER] Room '%s' is full (join rejected)" % code)
+			print("[SERVER] Room '%s' has an active P2 reservation (join rejected)" % code)
 		else:
-			room["players"] = int(room.get("players", 0)) + 1
+			var now := Time.get_ticks_msec() / 1000.0
+			room["p2_reserved_until"] = now + JOIN_RESERVATION_TTL
 			var tokens: Dictionary = room.get("tokens", {})
 			NetworkManager.send_lobby_response(sender_id, JSON.stringify({
 				"status": "ok", "port": room["port"], "player": 2,
 				"reconnect_token": str(tokens.get(2, "")), "card_art": allow_card_art,
 				"protocol": AppVersion.PROTOCOL_VERSION,
 			}))
-			print("[SERVER] Peer %d joining room '%s' on port %d (%d/2)" % [sender_id, code, room["port"], room["players"]])
+			print("[SERVER] Peer %d reserved P2 in room '%s' on port %d for %.0fs" % [sender_id, code, room["port"], JOIN_RESERVATION_TTL])
 
 	elif action == "reconnect":
 		var requested_player := int(data.get("player", 0))
@@ -284,7 +287,7 @@ func _spawn_room(code: String, port: int, p1_token: String, p2_token: String) ->
 		"--headless",
 	])
 	if OS.has_feature("editor"):
-		args.append("res://server.tscn")
+		args.append_array(PackedStringArray(["--path", ProjectSettings.globalize_path("res://")]))
 	args.append_array(PackedStringArray([
 		"--",
 		"--room-server", "--room-port=%d" % port, "--room-code=%s" % code,
@@ -297,6 +300,10 @@ func _spawn_room(code: String, port: int, p1_token: String, p2_token: String) ->
 func _new_reconnect_token() -> String:
 	var crypto := Crypto.new()
 	return crypto.generate_random_bytes(24).hex_encode()
+
+
+static func has_active_join_reservation(room: Dictionary, now: float) -> bool:
+	return float(room.get("p2_reserved_until", 0.0)) > now
 
 
 func _is_valid_code(code: String) -> bool:

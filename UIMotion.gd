@@ -14,6 +14,8 @@ var _layer: CanvasLayer
 var _overlay: ColorRect
 var _busy: bool = false
 var _startup := true
+var _scene_history: Array[Dictionary] = []
+var _pending_restore_state := ""
 
 
 func _ready() -> void:
@@ -36,10 +38,72 @@ func _ready() -> void:
 	fade_in()
 
 
-# Fade out -> change scene. The scene_changed hook fades the new scene back in.
-func change_scene(path: String) -> void:
+# Fade out -> change scene. Ordinary forward navigation records the current
+# menu so a Back button can always return to the actual previous level.
+func change_scene(path: String, return_state: String = "") -> void:
 	if _busy:
 		return
+	var current_path := _current_scene_path()
+	if not current_path.is_empty() and current_path != path:
+		_scene_history.append({"path": current_path, "state": return_state})
+	_pending_restore_state = ""
+	_transition_to(path)
+
+
+# Return to the most recently recorded scene without recording the scene that
+# is being left. `fallback` keeps directly-launched/test scenes deterministic.
+func go_back(fallback: String = "res://MainMenu.tscn") -> void:
+	go_back_levels(1, fallback)
+
+
+func go_back_levels(levels: int, fallback: String = "res://MainMenu.tscn") -> void:
+	if _busy:
+		return
+	var destination := fallback
+	_pending_restore_state = ""
+	for _index in range(maxi(1, levels)):
+		if _scene_history.is_empty():
+			break
+		var entry: Dictionary = _scene_history.pop_back()
+		destination = str(entry.get("path", fallback))
+		_pending_restore_state = str(entry.get("state", ""))
+	_transition_to(destination)
+
+
+# Use for terminal routes such as returning to the title after a finished
+# battle. They must not create a fake "previous menu" entry.
+func replace_scene(path: String, clear_history_first: bool = false, restore_state: String = "") -> void:
+	if _busy:
+		return
+	if clear_history_first:
+		_scene_history.clear()
+	_pending_restore_state = restore_state
+	_transition_to(path)
+
+
+func clear_history() -> void:
+	_scene_history.clear()
+	_pending_restore_state = ""
+
+
+func history_depth() -> int:
+	return _scene_history.size()
+
+
+func consume_restore_state() -> String:
+	var value := _pending_restore_state
+	_pending_restore_state = ""
+	return value
+
+
+func _current_scene_path() -> String:
+	var current := get_tree().current_scene
+	if current == null:
+		return ""
+	return current.scene_file_path
+
+
+func _transition_to(path: String) -> void:
 	_busy = true
 	_startup = false
 	if _overlay == null:

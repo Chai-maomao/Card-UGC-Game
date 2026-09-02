@@ -12,6 +12,7 @@ glm-vision-mcp/
 # Stray test/log artifacts
 godot_test.log
 *.log
+/artifacts/
 
 # Server build output
 server-build/

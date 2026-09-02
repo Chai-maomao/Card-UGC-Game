@@ -670,10 +670,13 @@ func card_data_list_indices() -> Array:
 
 
 func _on_rpc_ready(card_data_list: Array):
+	var decoded := PlayerData.deserialize_battle_deck_payload(card_data_list)
+	if not bool(decoded.get("ok", false)):
+		opponent_ready = false
+		push_warning("Rejected unsafe opponent deck: %s" % [decoded.get("errors", [])])
+		return
 	opponent_ready = true
-	PlayerData.opponent_battle_deck.clear()
-	for data in card_data_list:
-		PlayerData.opponent_battle_deck.append(PlayerData.deserialize_card(data))
+	PlayerData.set_online_opponent_deck(decoded.get("cards", []))
 	_apply_pending_opponent_arts()
 	_check_both_ready()
 
@@ -810,4 +813,4 @@ func _on_battle_start():
 func _on_back_pressed():
 	NetworkManager.close_connection()
 	NetworkManager.clear_room_session()
-	UIMotion.change_scene("res://MultiplayerMenu.tscn")
+	UIMotion.go_back("res://MultiplayerMenu.tscn")

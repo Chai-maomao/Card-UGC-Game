@@ -1,6 +1,8 @@
 class_name SkillErrorChecker
 extends RefCounted
 
+const _UgcSafety = preload("res://UgcSafety.gd")
+
 # ============================================
 # Compile-error hints for the skill editor (Scratch-style "your script can't
 # run" feedback). Walks the effect tree for syntax errors, shows a red banner
@@ -25,7 +27,27 @@ func collect_issues() -> Array:
 	if effect_data.is_empty():
 		issues.append({"message": Locale.t("skill_editor.error_empty_skill"), "path": [], "kind": "empty"})
 	walk_issues(effect_data, issues, [])
+	for safety_issue in _UgcSafety.validate_skill({"effects": effect_data}):
+		var path: Array = safety_issue.get("path", []).duplicate()
+		if not path.is_empty() and path[0] == "effects":
+			path.pop_front()
+		issues.append({"message": _safety_issue_message(safety_issue), "path": path, "kind": "ugc_safety"})
 	return issues
+
+
+func _safety_issue_message(issue: Dictionary) -> String:
+	var code := str(issue.get("code", ""))
+	var details: Dictionary = issue.get("details", {})
+	match code:
+		"repeat_limit":
+			return Locale.t("skill_editor.error_repeat_limit", [int(details.get("limit", _UgcSafety.MAX_REPEAT_COUNT))])
+		"effect_depth":
+			return Locale.t("skill_editor.error_effect_depth", [int(details.get("limit", _UgcSafety.MAX_EFFECT_NESTING_DEPTH))])
+		"expression_depth":
+			return Locale.t("skill_editor.error_expression_depth", [int(details.get("limit", _UgcSafety.MAX_EXPRESSION_NESTING_DEPTH))])
+		"skill_node_limit":
+			return Locale.t("skill_editor.error_skill_node_limit", [int(details.get("limit", _UgcSafety.MAX_EFFECT_NODES_PER_SKILL))])
+	return Locale.t("skill_editor.error_invalid_structure")
 
 
 func walk_errors(list: Array, errors: Array) -> void:

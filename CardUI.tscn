@@ -4,13 +4,21 @@
 
 [node name="CardUI" type="Control" unique_id=1743504199]
 custom_minimum_size = Vector2(120, 160)
-clip_contents = true
+clip_contents = false
 layout_mode = 3
 anchors_preset = 0
 offset_right = 120.0
 offset_bottom = 160.0
 mouse_filter = 1
 script = ExtResource("1_gf2xd")
+
+[node name="CardShadow" type="Panel" parent="."]
+layout_mode = 0
+offset_left = 6.0
+offset_top = 8.0
+offset_right = 114.0
+offset_bottom = 164.0
+mouse_filter = 2
 
 [node name="Background" type="Panel" parent="." unique_id=1299029643]
 layout_mode = 0

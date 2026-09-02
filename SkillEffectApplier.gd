@@ -1,6 +1,8 @@
 class_name SkillEffectApplier
 extends RefCounted
 
+const _GameplayRng = preload("res://GameplayRng.gd")
+
 const ParasiteRules = preload("res://ParasiteRules.gd")
 
 # ============================================
@@ -264,7 +266,7 @@ static func _apply_make_zero_cost(_target: CardData, value: int, skill: Dictiona
 
 	# TARGET_SINGLE with random_count > 0: randomly select
 	if target_str == SkillEngine.TARGET_SINGLE and random_count > 0:
-		candidates.shuffle()
+		_GameplayRng.shuffle(candidates, _GameplayRng.from_context(context))
 		var pick_count : int = min(random_count, candidates.size())
 		for i in range(pick_count):
 			candidates[i].cost = 0
@@ -316,11 +318,11 @@ static func _apply_discard_hand(_target: CardData, value: int, _skill: Dictionar
 	if enemy_hand == null or enemy_hand.is_empty():
 		print("[SkillEffect] Discard hand: enemy hand is empty")
 		return
-	var rng = context.get("rng", null)
+	var rng := _GameplayRng.from_context(context)
 	var discard_pile: Array = context.get("discard_pile", [])
 	var count: int = min(value, enemy_hand.size())
 	for _i in range(count):
-		var idx: int = rng.randi_range(0, enemy_hand.size() - 1) if rng is RandomNumberGenerator else randi_range(0, enemy_hand.size() - 1)
+		var idx: int = rng.randi_range(0, enemy_hand.size() - 1)
 		var card: CardData = enemy_hand[idx]
 		enemy_hand.remove_at(idx)
 		if card != null:
@@ -334,12 +336,14 @@ static func _apply_copy_hand(_target: CardData, value: int, _skill: Dictionary, 
 	if hand == null or hand.is_empty():
 		print("[SkillEffect] Copy hand: hand is empty")
 		return
-	var rng = context.get("rng", null)
+	var rng := _GameplayRng.from_context(context)
 	var space: int = max(0, SkillEngine.MAX_HAND_SIZE - hand.size())
 	var count: int = min(value, space)
 	for _i in range(count):
-		var idx: int = rng.randi_range(0, hand.size() - 1) if rng is RandomNumberGenerator else randi_range(0, hand.size() - 1)
+		var idx: int = rng.randi_range(0, hand.size() - 1)
 		var copy: CardData = hand[idx].duplicate_card()
-		copy.instance_id = "copy_%d" % Time.get_ticks_usec()
+		# Runtime identity is part of synchronized/replay state, so derive it
+		# from the battle RNG instead of wall-clock time.
+		copy.instance_id = "copy_%08x%08x" % [rng.randi(), rng.randi()]
 		hand.append(copy)
 	print("  -> Copy %d hand card(s)" % count)

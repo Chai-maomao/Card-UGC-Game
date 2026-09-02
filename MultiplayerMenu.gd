@@ -90,16 +90,14 @@ func _on_viewport_size_changed() -> void:
 func _ready():
 	_apply_theme()
 	server_btn.pressed.connect(func():
-		PlayerData.battle_select_mode = "online"
-		PlayerData.battle_select_next_scene = "res://Lobby.tscn"
+		PlayerData.prepare_online_selection("res://Lobby.tscn")
 		UIMotion.change_scene("res://BattleDeckSelect.tscn")
 	)
 	direct_btn.pressed.connect(func():
-		PlayerData.battle_select_mode = "online"
-		PlayerData.battle_select_next_scene = "res://DirectLobby.tscn"
+		PlayerData.prepare_online_selection("res://DirectLobby.tscn")
 		UIMotion.change_scene("res://BattleDeckSelect.tscn")
 	)
-	back_btn.pressed.connect(func(): UIMotion.change_scene("res://MainMenu.tscn"))
+	back_btn.pressed.connect(func(): UIMotion.go_back("res://MainMenu.tscn"))
 	_apply_texts()
 	_apply_responsive_layout()
 	get_viewport().size_changed.connect(_on_viewport_size_changed)

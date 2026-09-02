@@ -384,7 +384,7 @@ func _on_delete_card(instance_id: String):
 
 
 func _on_back_to_menu_pressed():
-	UIMotion.change_scene("res://MainMenu.tscn")
+	UIMotion.go_back("res://MainMenu.tscn")
 
 
 func _on_export_selected_pressed() -> void:

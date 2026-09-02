@@ -20,6 +20,10 @@ func _ready() -> void:
 	_test_spell_gain_mana_effect_resolves_without_target()
 	_test_spell_rules_normalize_trigger_and_name()
 	_test_spell_rejects_second_skill_index()
+	_test_enemy_spell_is_blocked_on_turn_one()
+	_test_second_player_enemy_spell_is_blocked_on_turn_one()
+	_test_ally_spell_is_allowed_on_turn_one()
+	_test_nested_enemy_spell_is_blocked_on_turn_one()
 	if failures.is_empty():
 		print("TEST_SPELL_CAST_OK")
 		get_tree().quit(0)
@@ -230,3 +234,78 @@ func _test_spell_rejects_second_skill_index() -> void:
 	var ok := game.cast_spell(0, 1, -1)
 	if ok:
 		_fail("spell cast should reject second skill index after normalization")
+
+
+func _test_enemy_spell_is_blocked_on_turn_one() -> void:
+	var game = _new_game()
+	game.turn_number = 1
+	var spell := _spell("Opening Fireball", 2, [{
+		"target": SkillEngine.TARGET_SINGLE,
+		"target_side": SkillEngine.TARGET_SIDE_ENEMY,
+		"effect": SkillEngine.EFFECT_DAMAGE,
+		"value": 3,
+	}])
+	var enemy := _card("Enemy")
+	game.player2_field.slots[0] = enemy
+	game.player_hand.append(spell)
+	game.player_field.current_mana = 5
+	if game.cast_spell(0, SpellRules.CAST_SKILL_INDEX, 0):
+		_fail("enemy-targeting spell was cast on turn one")
+	if not game.player_hand.has(spell) or game.player_field.current_mana != 5 or enemy.hp != 5:
+		_fail("blocked turn-one spell mutated hand, mana, or target")
+
+
+func _test_second_player_enemy_spell_is_blocked_on_turn_one() -> void:
+	var game = _new_game()
+	game.current_player = 2
+	game.turn_number = 1
+	var spell := _spell("Opening Counterblast", 2, [{
+		"target": SkillEngine.TARGET_SINGLE,
+		"target_side": SkillEngine.TARGET_SIDE_ENEMY,
+		"effect": SkillEngine.EFFECT_DAMAGE,
+		"value": 3,
+	}])
+	var enemy := _card("First Player Target")
+	game.player_field.slots[0] = enemy
+	game.player2_hand.append(spell)
+	game.player2_field.current_mana = 5
+	if game.cast_spell(0, SpellRules.CAST_SKILL_INDEX, 0):
+		_fail("second player cast an enemy-targeting spell during round one")
+	if not game.player2_hand.has(spell) or game.player2_field.current_mana != 5 or enemy.hp != 5:
+		_fail("blocked second-player opening spell mutated hand, mana, or target")
+
+
+func _test_ally_spell_is_allowed_on_turn_one() -> void:
+	var game = _new_game()
+	game.turn_number = 1
+	var spell := _spell("Opening Heal", 2, [{
+		"target": SkillEngine.TARGET_SINGLE,
+		"target_side": SkillEngine.TARGET_SIDE_ALLY,
+		"effect": SkillEngine.EFFECT_HEAL,
+		"value": 2,
+	}])
+	var ally := _card("Ally")
+	ally.hp = 2
+	game.player_field.slots[0] = ally
+	game.player_hand.append(spell)
+	game.player_field.current_mana = 5
+	if not game.cast_spell(0, SpellRules.CAST_SKILL_INDEX, 0):
+		_fail("ally-only spell should be allowed on turn one")
+
+
+func _test_nested_enemy_spell_is_blocked_on_turn_one() -> void:
+	var game = _new_game()
+	game.turn_number = 1
+	var spell := _spell("Conditional Blast", 1, [{
+		"effect": "if",
+		"then_effects": [{
+			"target": SkillEngine.TARGET_ALL,
+			"target_side": SkillEngine.TARGET_SIDE_ENEMY,
+			"effect": SkillEngine.EFFECT_DAMAGE,
+			"value": 1,
+		}],
+	}])
+	game.player_hand.append(spell)
+	game.player_field.current_mana = 5
+	if game.cast_spell(0):
+		_fail("nested enemy-targeting spell was cast on turn one")

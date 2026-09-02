@@ -41,6 +41,11 @@ func _fail(message: String) -> void:
 func _new_game():
 	var game = GameStateScript.new()
 	game.init_game(Callable())
+	# Parasite lifecycle assertions inspect the discard pile directly. Keep
+	# unrelated catch-up rules off so a death-compensation draw cannot remove
+	# the just-discarded host before the assertion runs.
+	game.battle_config["death_compensation"] = false
+	game.battle_config["face_damage_compensation"] = false
 	game.shared_deck.clear()
 	game.shared_discard.clear()
 	game.player_hand.clear()

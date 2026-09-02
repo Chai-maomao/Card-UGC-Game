@@ -143,32 +143,27 @@ func _on_confirm_pressed() -> void:
 func _start_battle_with_cards(cards: Array) -> void:
 	match PlayerData.battle_select_mode:
 		"practice":
-			PlayerData.battle_mode = "practice"
-			PlayerData.battle_deck = cards
-			PlayerData.opponent_battle_deck.clear()
+			var opponent_cards: Array = []
 			for card in CardDatabase.starter_library():
-				PlayerData.opponent_battle_deck.append(card.duplicate_card())
+				opponent_cards.append(card.duplicate_card())
+			PlayerData.configure_practice_battle(cards, opponent_cards, PlayerData.practice_ai_difficulty)
 			UIMotion.change_scene("res://Main.tscn")
 		"hotseat_p1":
-			PlayerData.pending_hotseat_p1_deck = cards
-			PlayerData.battle_select_mode = "hotseat_p2"
+			PlayerData.begin_hotseat_battle_selection(cards)
 			get_tree().reload_current_scene()
 		"hotseat_p2":
-			PlayerData.battle_mode = "hotseat"
-			PlayerData.battle_deck = PlayerData.pending_hotseat_p1_deck.duplicate(true)
-			PlayerData.opponent_battle_deck = cards
-			PlayerData.pending_hotseat_p1_deck.clear()
+			PlayerData.configure_hotseat_battle(PlayerData.pending_hotseat_p1_deck, cards)
 			UIMotion.change_scene("res://Main.tscn")
 		"online":
-			PlayerData.battle_deck = cards
+			PlayerData.configure_online_battle(cards, PlayerData.battle_select_next_scene)
 			UIMotion.change_scene(PlayerData.battle_select_next_scene)
 
 
 func _on_back_pressed() -> void:
 	if PlayerData.battle_select_mode == "online":
-		UIMotion.change_scene("res://MultiplayerMenu.tscn")
+		UIMotion.go_back("res://MultiplayerMenu.tscn")
 	else:
-		UIMotion.change_scene("res://MainMenu.tscn")
+		UIMotion.go_back("res://MainMenu.tscn")
 
 
 func _show_battle_config_popup(cards: Array) -> void:

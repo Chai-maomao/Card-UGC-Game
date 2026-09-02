@@ -10,31 +10,51 @@ func _ready() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 
-	var root: Control = battle.get_node("CanvasLayer/MainBackground")
-	var enemy_row: Control = battle.get_node("CanvasLayer/MainBackground/MainLayout/EnemySide")
-	var player_row: Control = battle.get_node("CanvasLayer/MainBackground/MainLayout/PlayerSide")
-	var enemy_aura: Control = battle.get_node("CanvasLayer/MainBackground/EnemyAura")
-	var player_aura: Control = battle.get_node("CanvasLayer/MainBackground/PlayerAura")
-	_assert_local_aura(root, enemy_row, enemy_aura, "enemy")
-	_assert_local_aura(root, player_row, player_aura, "player")
+	var layout := battle.get_node("CanvasLayer/MainBackground/MainLayout") as Control
+	_assert(layout.visible, "2D battle layout must be the active composition")
+	_assert(battle.get_node_or_null("BattleStage3D") == null, "retired 3D stage must not remain in the battle scene")
 
-	var middle: Control = battle.get_node("CanvasLayer/MainBackground/MainLayout/MiddleInfoBar")
-	var enemy_hud: Control = battle.get_node("CanvasLayer/MainBackground/MainLayout/EnemyStatusRow/EnemyStatusHUD")
-	_assert(absf(middle.size.x - enemy_hud.size.x) <= 1.0, "command strip must align with status HUD width")
+	var game = battle.get("game")
+	game.player_hand.clear()
+	for index in range(SkillEngine.MAX_HAND_SIZE):
+		game.player_hand.append(CardData.new("Layout Hand %d" % index, 1, 2, 1, []))
+	battle.call("_refresh_hand_ui")
+	battle.call("_apply_responsive_layout")
+	await get_tree().process_frame
+	await get_tree().process_frame
 
-	var hand_scroll: Control = battle.get_node("CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock/HandArea/HandContent/HandScroll")
-	var six_card_width: float = 6.0 * 120.0 + 5.0 * 8.0
-	_assert(hand_scroll.size.x + 1.0 >= six_card_width, "six-card hand must fit without covering pile controls")
+	var enemy_hud := battle.get("enemy_status_hud") as Control
+	var player_hud := battle.get("player_status_hud") as Control
+	var enemy_row := battle.get("enemy_side_ui") as Control
+	var player_row := battle.get("player_side_ui") as Control
+	var hand_area := battle.get("hand_area") as Control
+	var hand_container := battle.get("hand_container") as Control
+	var discard_zone := battle.get("discard_zone") as Control
+	var draw_button := battle.get("draw_pile_btn") as Control
+
+	for toolbar_name in ["abandon_battle_button", "action_log_button", "help_btn"]:
+		var toolbar := battle.get(toolbar_name) as Control
+		_assert(not _overlap(enemy_hud, toolbar), "enemy HUD overlaps %s" % toolbar_name)
+	_assert(not _overlap(enemy_hud, enemy_row), "enemy HUD overlaps the enemy field")
+	_assert(not _overlap(player_hud, player_row), "player HUD overlaps the player field")
+	_assert(not _overlap(player_hud, hand_area), "player HUD overlaps the hand dock")
+	_assert(not _overlap(hand_area, discard_zone), "discard zone overlaps the hand dock")
+	_assert(not _overlap(hand_area, draw_button), "draw pile overlaps the hand dock")
+	_assert(hand_container.get_child_count() == SkillEngine.MAX_HAND_SIZE, "the legal six-card hand must remain fully represented")
+	for card in hand_container.get_children():
+		_assert(_inside((card as Control).get_global_rect(), hand_area.get_global_rect(), 2.0), "a legal hand card exceeds the hand dock")
 
 	print("TEST_BATTLE_LAYOUT_OK")
 	get_tree().quit(0)
 
 
-func _assert_local_aura(root: Control, row: Control, aura: Control, label: String) -> void:
-	var local_row_top := row.global_position.y - root.global_position.y
-	_assert(aura.position.y < local_row_top, "%s aura must fade in before its card row" % label)
-	_assert(aura.position.y + aura.size.y > local_row_top + row.size.y, "%s aura must fade out after its card row" % label)
-	_assert(aura.size.y < root.size.y * 0.5, "%s aura must remain local instead of splitting the battlefield" % label)
+func _overlap(first: Control, second: Control) -> bool:
+	return first != null and second != null and first.visible and second.visible \
+		and first.get_global_rect().grow(-1.0).intersects(second.get_global_rect().grow(-1.0))
+
+
+func _inside(inner: Rect2, outer: Rect2, tolerance: float) -> bool:
+	return outer.grow(tolerance).encloses(inner)
 
 
 func _assert(condition: bool, message: String) -> void:

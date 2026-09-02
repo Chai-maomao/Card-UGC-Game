@@ -11,6 +11,9 @@ const UITheme = preload("res://UITheme.gd")
 @onready var lobby_panel = $Panel
 @onready var title_label = $Panel/VBoxContainer/TitleLabel
 @onready var ip_label = $Panel/VBoxContainer/IPLabel
+@onready var discovery_label: Label = $Panel/VBoxContainer/DiscoveryLabel
+@onready var room_list: OptionButton = $Panel/VBoxContainer/RoomList
+@onready var refresh_btn: Button = $Panel/VBoxContainer/RefreshButton
 
 
 func _apply_texts() -> void:
@@ -18,6 +21,8 @@ func _apply_texts() -> void:
 	host_btn.text = Locale.t("lobby.host")
 	ip_label.text = Locale.t("direct.join_by_ip")
 	join_btn.text = Locale.t("direct.join_game")
+	discovery_label.text = Locale.t("direct.rooms")
+	refresh_btn.text = Locale.t("direct.refresh")
 	back_btn.text = Locale.t("common.back")
 
 var card_ui_scene = preload("res://CardUI.tscn")
@@ -36,6 +41,8 @@ var waiting_ui: Control
 var start_btn: Button
 var create_card_btn: Button
 var start_now_btn: Button
+var _discovered_rooms: Array = []
+var _selected_port: int = NetworkManager.LAN_GAME_PORT
 
 
 func _apply_theme() -> void:
@@ -56,6 +63,7 @@ func _apply_theme() -> void:
 	UITheme.apply_input(ip_input)
 	UITheme.apply_button(host_btn, "primary")
 	UITheme.apply_button(join_btn, "primary")
+	UITheme.apply_button(refresh_btn, "secondary")
 	UITheme.apply_button(back_btn, "secondary")
 	# Entrance motion: breathing title + staggered form controls.
 	UITheme.title_breathe(title_label)
@@ -96,6 +104,9 @@ func _apply_responsive_layout() -> void:
 				child.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 				child.custom_minimum_size = Vector2(360 * s, 0)
 				child.size_flags_horizontal = Control.SIZE_FILL
+		elif child is OptionButton:
+			child.custom_minimum_size = Vector2(260 * s, 0)
+			UITheme.apply_button(child, "secondary")
 		elif child is Button:
 			child.add_theme_font_size_override("font_size", max(10, int(14 * s)))
 			UITheme.apply_button(child, "primary" if child == host_btn or child == join_btn else "secondary")
@@ -178,6 +189,8 @@ func _ready():
 	host_btn.pressed.connect(_on_host_pressed)
 	join_btn.pressed.connect(_on_join_pressed)
 	back_btn.pressed.connect(_on_back_pressed)
+	refresh_btn.pressed.connect(NetworkManager.refresh_lan_room_discovery)
+	room_list.item_selected.connect(_on_room_selected)
 	NetworkManager.connected.connect(_on_opponent_joined)
 	NetworkManager.game_connection_failed.connect(_on_game_connection_failed)
 	NetworkManager.opponent_disconnected.connect(_on_opponent_disconnected)
@@ -186,11 +199,15 @@ func _ready():
 	EventBus.rpc_card_art_manifest_received.connect(_on_card_art_manifest)
 	EventBus.rpc_card_art_ack_received.connect(_on_card_art_ack)
 	NetworkManager.game_started.connect(_on_battle_start)
+	NetworkManager.lan_rooms_updated.connect(_on_lan_rooms_updated)
 	_apply_texts()
 	_apply_theme()
 	_apply_responsive_layout()
 	get_viewport().size_changed.connect(_on_viewport_size_changed)
 	set_process(false)  # only enabled while waiting out the art-transfer timeout
+	var discovery_err := NetworkManager.start_lan_room_discovery()
+	if discovery_err != OK:
+		status_label.text = Locale.t("direct.discovery_unavailable")
 	if PlayerData.return_to_waiting_room:
 		PlayerData.return_to_waiting_room = false
 		_show_waiting_room()
@@ -214,17 +231,59 @@ func _on_join_pressed():
 	NetworkManager.clear_room_session()
 	var ip: String = ip_input.text.strip_edges()
 	if ip == "":
-		ip = "127.0.0.1"
+		if not _discovered_rooms.is_empty() and room_list.selected >= 0:
+			var room: Dictionary = _discovered_rooms[room_list.selected]
+			ip = str(room.get("address", ""))
+			_selected_port = int(room.get("port", NetworkManager.LAN_GAME_PORT))
+		else:
+			ip = "127.0.0.1"
+	var parsed := _parse_host_address(ip)
+	ip = str(parsed.get("address", ip))
+	var port := int(parsed.get("port", _selected_port))
 	status_label.text = Locale.t("lobby.joining", [ip])
 	host_btn.disabled = true
 	join_btn.disabled = true
-	var err = NetworkManager.join_game(ip)
+	var err = NetworkManager.join_game(ip, port)
 	if err != OK:
 		status_label.text = Locale.t("lobby.failed_join", [err])
 		host_btn.disabled = false
 		join_btn.disabled = false
 	else:
 		_show_waiting_room(Locale.t("lobby.waiting_room_connecting"))
+
+
+func _on_lan_rooms_updated(rooms: Array) -> void:
+	_discovered_rooms = rooms.duplicate(true)
+	room_list.clear()
+	for room in _discovered_rooms:
+		var label := "%s  ·  %s:%d" % [str(room.get("name", Locale.t("direct.unnamed_host"))), str(room.get("address", "")), int(room.get("port", NetworkManager.LAN_GAME_PORT))]
+		room_list.add_item(label)
+	room_list.disabled = _discovered_rooms.is_empty()
+	if _discovered_rooms.is_empty():
+		room_list.add_item(Locale.t("direct.no_rooms"))
+		room_list.disabled = true
+	else:
+		room_list.select(0)
+		_on_room_selected(0)
+
+
+func _on_room_selected(index: int) -> void:
+	if index < 0 or index >= _discovered_rooms.size():
+		return
+	var room: Dictionary = _discovered_rooms[index]
+	ip_input.text = str(room.get("address", ""))
+	_selected_port = int(room.get("port", NetworkManager.LAN_GAME_PORT))
+
+
+func _parse_host_address(value: String) -> Dictionary:
+	var address := value.strip_edges()
+	var port := _selected_port
+	if address.count(":") == 1:
+		var parts := address.split(":", false, 1)
+		if parts.size() == 2 and str(parts[1]).is_valid_int():
+			address = str(parts[0])
+			port = clampi(int(parts[1]), 1, 65535)
+	return {"address": address, "port": port}
 
 
 func _on_opponent_joined():
@@ -299,6 +358,7 @@ func _show_waiting_room(initial_message: String = ""):
 	_theme_waiting_button(exit_btn, "secondary")
 	exit_btn.pressed.connect(func():
 		NetworkManager.close_connection()
+		NetworkManager.clear_room_session()
 		UIMotion.change_scene("res://MultiplayerMenu.tscn")
 	)
 	waiting_ui.add_child(exit_btn)
@@ -439,10 +499,13 @@ func card_data_list_indices() -> Array:
 
 
 func _on_rpc_ready(card_data_list: Array):
+	var decoded := PlayerData.deserialize_battle_deck_payload(card_data_list)
+	if not bool(decoded.get("ok", false)):
+		opponent_ready = false
+		push_warning("Rejected unsafe opponent deck: %s" % [decoded.get("errors", [])])
+		return
 	opponent_ready = true
-	PlayerData.opponent_battle_deck.clear()
-	for data in card_data_list:
-		PlayerData.opponent_battle_deck.append(PlayerData.deserialize_card(data))
+	PlayerData.set_online_opponent_deck(decoded.get("cards", []))
 	_apply_pending_opponent_arts()
 	_check_both_ready()
 
@@ -581,9 +644,11 @@ func _start_battle():
 
 
 func _on_battle_start():
+	NetworkManager.mark_match_started()
 	UIMotion.change_scene("res://Main.tscn")
 
 
 func _on_back_pressed():
 	NetworkManager.close_connection()
-	UIMotion.change_scene("res://MultiplayerMenu.tscn")
+	NetworkManager.clear_room_session()
+	UIMotion.go_back("res://MultiplayerMenu.tscn")

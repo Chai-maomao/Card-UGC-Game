@@ -52,6 +52,8 @@ set -e
 
 if [ "$p1_status" -ne 0 ] || [ "$p2_status" -ne 0 ] \
   || ! grep -q 'TEST_RECONNECT_SURVIVOR_OK' "$work_dir/p1.log" \
+  || ! grep -q 'TEST_COMMAND_RECEIPT_OK' "$work_dir/p2.log" \
+  || ! grep -q 'TEST_COMMAND_ACK_OK' "$work_dir/p2.log" \
   || ! grep -q 'TEST_RECONNECT_TRANSPORT_OK' "$work_dir/p2.log"; then
   sed -n '1,220p' "$work_dir/p1.log"
   sed -n '1,260p' "$work_dir/p2.log"
@@ -59,4 +61,4 @@ if [ "$p1_status" -ne 0 ] || [ "$p2_status" -ne 0 ] \
   exit 1
 fi
 
-printf 'PASS  reconnect transport and survivor notification\n'
+printf 'PASS  fast command receipt, command ack, reconnect transport, snapshot recovery, and survivor notification\n'

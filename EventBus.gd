@@ -25,6 +25,8 @@ signal parasite_damage_resolved(host: CardData, parasite: CardData, declared: in
 signal skill_roll_failed(source: CardData, skill_name: String, misfortune: int, final_probability: int)
 @warning_ignore("unused_signal")
 signal skill_triggered(skill_name: String, source: CardData)
+@warning_ignore("unused_signal")
+signal skill_safety_limit_hit(source_name: String, reason: String)
 
 # Turn events
 @warning_ignore("unused_signal")
@@ -107,6 +109,8 @@ signal rpc_intent_end_turn_received(player: int)
 signal rpc_intent_discard_received(location: String, index: int, player: int)
 @warning_ignore("unused_signal")
 signal rpc_intent_move_received(source_slot: int, target_slot: int, player: int)
+@warning_ignore("unused_signal")
+signal rpc_game_intent_received(kind: String, payload: Dictionary, player: int, command_id: String, expected_revision: int)
 
 # Room-code lobby
 @warning_ignore("unused_signal")

@@ -19,6 +19,7 @@ var temp_mana: int = 0  # 临时圣水（回合结束消失，消耗时优先扣
 
 # 5个前台格子 [0..4]，存储 CardData 或 null
 var slots: Array = [null, null, null, null, null]
+var quiet: bool = false
 
 
 
@@ -28,6 +29,11 @@ func _init(_owner_name: String = "", _player_hp: int = 30, _max_mana: int = 10):
 	max_player_hp = _player_hp
 	max_mana = _max_mana
 	current_mana = 4
+
+
+func _log(message: Variant) -> void:
+	if not quiet:
+		print(message)
 
 
 # ========== 圣水系统 ==========
@@ -73,21 +79,21 @@ func spend_mana(amount: int) -> bool:
 # 尝试在指定格子召唤卡牌
 func summon_card(card: CardData, slot_idx: int) -> bool:
 	if slot_idx < 0 or slot_idx > 4:
-		print("[%s] 错误：无效格子 %d" % [owner_name, slot_idx])
+		_log("[%s] 错误：无效格子 %d" % [owner_name, slot_idx])
 		return false
 
 	if slots[slot_idx] != null:
-		print("[%s] 错误：格子 %d 已有卡牌" % [owner_name, slot_idx])
+		_log("[%s] 错误：格子 %d 已有卡牌" % [owner_name, slot_idx])
 		return false
 
 	if get_total_mana() < card.cost:
-		print("[%s] 错误：圣水不足（需 %d，当前 %d）" % [owner_name, card.cost, get_total_mana()])
+		_log("[%s] 错误：圣水不足（需 %d，当前 %d）" % [owner_name, card.cost, get_total_mana()])
 		return false
 
 	spend_mana(card.cost)
 	slots[slot_idx] = card
 	card.summoned_this_turn = true
-	print("[%s] 召唤 %s → 格子 %d | 剩余圣水: %d" % [owner_name, card.card_name, slot_idx, current_mana])
+	_log("[%s] 召唤 %s → 格子 %d | 剩余圣水: %d" % [owner_name, card.card_name, slot_idx, current_mana])
 	return true
 
 
@@ -136,7 +142,7 @@ func has_any_taunt() -> bool:
 func damage_player(amount: int):
 	player_hp = max(0, player_hp - amount)
 	if player_hp <= 0:
-		print("[%s] 💀 英雄被击败！" % owner_name)
+		_log("[%s] 💀 英雄被击败！" % owner_name)
 
 
 # 治疗英雄
@@ -151,9 +157,9 @@ func heal_player(amount: int):
 # ========== 调试 ==========
 
 func print_status():
-	print("=== [%s] HP:%d/%d Mana:%d/%d ===" % [owner_name, player_hp, max_player_hp, current_mana, max_mana])
+	_log("=== [%s] HP:%d/%d Mana:%d/%d ===" % [owner_name, player_hp, max_player_hp, current_mana, max_mana])
 	for i in range(5):
 		if slots[i] == null:
-			print("  格子%d: [空]" % i)
+			_log("  格子%d: [空]" % i)
 		else:
-			print("  格子%d: %s" % [i, slots[i].get_status()])
+			_log("  格子%d: %s" % [i, slots[i].get_status()])

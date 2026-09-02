@@ -11,6 +11,7 @@ const BASE_VIEWPORT_SIZE := Vector2(1152, 648)
 const UITheme = preload("res://UITheme.gd")
 const _TargetResolver = preload("res://SkillTargetResolver.gd")
 const _TextFormatter = preload("res://SkillTextFormatter.gd")
+const _TutorialController = preload("res://SkillEditorTutorialController.gd")
 
 @onready var title_label = $Panel/Margin/HBox/MainPanel/Margin/TitleLabel
 @onready var help_label = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/HelpLabel
@@ -47,6 +48,7 @@ var _palette_builder := SkillPaletteBuilder.new()
 var _undo_btn: Button
 var _redo_btn: Button
 var _template_btn: Button
+var skill_tutorial_controller: SkillEditorTutorialController
 
 
 # ============================================
@@ -258,19 +260,27 @@ func _filter_palette(query: String) -> void:
 
 
 func _select_trigger(trigger_key: String) -> void:
+	if skill_tutorial_controller and not skill_tutorial_controller.allows("trigger", {"id": trigger_key}):
+		return
 	current_trigger_key = trigger_key
 	_update_trigger_preview()
 	_update_skill_type_visibility()
 	_refresh_script()
 	_update_summary()
 	_maybe_snapshot()
+	if skill_tutorial_controller:
+		skill_tutorial_controller.notify_action("trigger", {"id": trigger_key})
 
 
 func _add_effect_block(effect_id: String) -> void:
+	if skill_tutorial_controller and not skill_tutorial_controller.allows("effect", {"id": effect_id}):
+		return
 	effect_data.append(_default_effect(effect_id))
 	_refresh_script()
 	_update_summary()
 	_maybe_snapshot()
+	if skill_tutorial_controller:
+		skill_tutorial_controller.notify_action("effect", {"id": effect_id})
 
 
 # ============================================
@@ -905,6 +915,8 @@ func _default_if() -> Dictionary:
 
 
 func _add_if_else_block() -> void:
+	if skill_tutorial_controller and not skill_tutorial_controller.allows("control"):
+		return
 	effect_data.append(_default_if_else())
 	_refresh_script()
 	_update_summary()
@@ -912,6 +924,8 @@ func _add_if_else_block() -> void:
 
 
 func _add_if_block() -> void:
+	if skill_tutorial_controller and not skill_tutorial_controller.allows("control"):
+		return
 	effect_data.append(_default_if())
 	_refresh_script()
 	_update_summary()
@@ -919,6 +933,8 @@ func _add_if_block() -> void:
 
 
 func _add_stop_block() -> void:
+	if skill_tutorial_controller and not skill_tutorial_controller.allows("control"):
+		return
 	effect_data.append({"effect": SkillEngine.EFFECT_STOP})
 	_refresh_script()
 	_update_summary()
@@ -934,6 +950,8 @@ func _default_repeat() -> Dictionary:
 
 
 func _add_repeat_block() -> void:
+	if skill_tutorial_controller and not skill_tutorial_controller.allows("control"):
+		return
 	effect_data.append(_default_repeat())
 	_refresh_script()
 	_update_summary()
@@ -1352,14 +1370,24 @@ func _ready():
 	_refresh_script()
 	_update_summary()
 	_apply_responsive_layout()
+	if PlayerData.skill_tutorial_active:
+		skill_tutorial_controller = _TutorialController.new()
+		add_child(skill_tutorial_controller)
+		skill_tutorial_controller.start(self)
 	get_viewport().size_changed.connect(_on_viewport_size_changed)
 
 
 func _connect_signals():
-	skill_name_input.text_changed.connect(func(_t: String): _update_summary())
+	skill_name_input.text_changed.connect(_on_skill_name_changed)
 	palette_search.text_changed.connect(_filter_palette)
 	save_button.pressed.connect(_on_save_pressed)
 	cancel_button.pressed.connect(_on_cancel_pressed)
+
+
+func _on_skill_name_changed(value: String) -> void:
+	_update_summary()
+	if skill_tutorial_controller:
+		skill_tutorial_controller.on_name_changed(value)
 
 
 func _build_skill_template_button() -> void:
@@ -1526,11 +1554,14 @@ func _on_save_pressed():
 		_show_save_blocked_popup(errors)
 		return
 	var skill: Dictionary = _build_skill()
+	if skill_tutorial_controller:
+		skill_tutorial_controller.handle_save(skill)
+		return
 	var skill_key: String = _skill_key_for_index(PlayerData.editing_skill_index)
 	PlayerData.card_draft[skill_key] = skill
 	PlayerData.save_card_draft_recovery()
 	print("Skill saved: %s" % skill.get("skill_name", ""))
-	UIMotion.change_scene("res://CardEditor.tscn")
+	UIMotion.go_back("res://CardEditor.tscn")
 
 
 # A compile-error skill must not reach the card draft (which is later written
@@ -1605,4 +1636,7 @@ func _show_save_blocked_popup(errors: Array) -> void:
 
 
 func _on_cancel_pressed():
-	UIMotion.change_scene("res://CardEditor.tscn")
+	if skill_tutorial_controller:
+		skill_tutorial_controller._on_exit()
+		return
+	UIMotion.go_back("res://CardEditor.tscn")

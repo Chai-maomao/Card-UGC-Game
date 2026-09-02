@@ -10,6 +10,8 @@ const _TargetResolver = preload("res://SkillTargetResolver.gd")
 const _TextFormatter = preload("res://SkillTextFormatter.gd")
 const _BalanceEvaluator = preload("res://BalanceEvaluator.gd")
 const _UsabilityAnalyzer = preload("res://CardUsabilityAnalyzer.gd")
+const _UgcSafety = preload("res://UgcSafety.gd")
+const _CardTutorialController = preload("res://CardEditorTutorialController.gd")
 
 var card_ui_scene = preload("res://CardUI.tscn")
 var pending_save_card: CardData = null
@@ -17,6 +19,7 @@ var pending_save_target_ids: Array = []
 var pending_save_index: int = 0
 var pending_saved_card: CardData = null
 var pending_save_popup_layer: CanvasLayer = null
+var card_tutorial_controller
 
 @onready var title_label = $Panel/MarginContainer/ScrollContainer/VBoxContainer/TitleLabel
 @onready var template_button = $Panel/MarginContainer/ScrollContainer/VBoxContainer/TemplateButton
@@ -125,8 +128,13 @@ func _apply_responsive_layout() -> void:
 	back_btn.position = Vector2(8, 8) * s
 	back_btn.add_theme_font_size_override("font_size", max(10, int(14 * s)))
 	if card_preview_panel:
-		card_preview_panel.position = Vector2(-294 * s, 72 * s)
-		card_preview_panel.size = Vector2(266 * s, 270 * s)
+		# This panel is right-anchored. Assigning `position` moved it relative to
+		# the wrong origin on resized windows and could place the entire preview
+		# off-screen; offsets preserve the right anchor at every scale.
+		card_preview_panel.offset_left = -294 * s
+		card_preview_panel.offset_top = 72 * s
+		card_preview_panel.offset_right = -28 * s
+		card_preview_panel.offset_bottom = 342 * s
 		preview_title.add_theme_font_size_override("font_size", max(10, int(14 * s)))
 		if preview_card:
 			preview_card.apply_ui_scale(max(0.9, 1.35 * s))
@@ -204,6 +212,10 @@ func _ready():
 	get_viewport().size_changed.connect(_on_viewport_size_changed)
 	# Re-apply card-type restrictions AFTER form is restored so locked fields reflect the final values.
 	_apply_card_type_restrictions()
+	if PlayerData.skill_tutorial_active:
+		card_tutorial_controller = _CardTutorialController.new()
+		add_child(card_tutorial_controller)
+		card_tutorial_controller.start(self)
 
 
 func _setup_gender_dropdown():
@@ -271,6 +283,8 @@ func _update_balance_from_form() -> void:
 	_update_balance_summary()
 	_update_usability_summary()
 	_refresh_card_preview()
+	if card_tutorial_controller:
+		card_tutorial_controller._on_form_changed()
 
 
 func _update_usability_summary() -> void:
@@ -347,6 +361,8 @@ func _balance_color(level: String) -> Color:
 # ============================================
 
 func _on_browse_art_pressed():
+	if card_tutorial_controller and not card_tutorial_controller.allows("browse_art"):
+		return
 	art_dialog.popup_centered()
 
 
@@ -369,6 +385,8 @@ func _on_art_file_selected(path: String):
 
 
 func _on_clear_art_pressed():
+	if card_tutorial_controller and not card_tutorial_controller.allows("clear_art"):
+		return
 	PlayerData.card_draft["art_path"] = ""
 	PlayerData.queue_card_draft_recovery()
 	art_path_label.text = Locale.t("editor.none")
@@ -565,18 +583,28 @@ func _template_draft(template_id: String) -> Dictionary:
 # ============================================
 
 func _on_edit_skill1_pressed():
+	if card_tutorial_controller and not card_tutorial_controller.allows("edit_skill", {"index": 0}):
+		return
 	_save_form_to_draft()
 	PlayerData.editing_skill_index = 0
+	if card_tutorial_controller:
+		card_tutorial_controller.notify_edit_skill(0)
 	UIMotion.change_scene("res://SkillEditor.tscn")
 
 
 func _on_edit_skill2_pressed():
+	if card_tutorial_controller:
+		card_tutorial_controller.allows("edit_skill", {"index": 1})
+		return
 	_save_form_to_draft()
 	PlayerData.editing_skill_index = 1
 	UIMotion.change_scene("res://SkillEditor.tscn")
 
 
 func _on_edit_skill3_pressed():
+	if card_tutorial_controller:
+		card_tutorial_controller.allows("edit_skill", {"index": 2})
+		return
 	_save_form_to_draft()
 	PlayerData.editing_skill_index = 2
 	UIMotion.change_scene("res://SkillEditor.tscn")
@@ -588,7 +616,14 @@ func _on_edit_skill3_pressed():
 
 func _on_save_button_pressed():
 	_save_form_to_draft()
+	var safety_issues := _UgcSafety.validate_draft_card(PlayerData.card_draft)
+	if not safety_issues.is_empty():
+		_show_message(Locale.t("editor.ugc_safety_blocked", [_UgcSafety.first_error_text(safety_issues)]))
+		return
 	var new_card: CardData = PlayerData.build_card_from_draft()
+	if card_tutorial_controller:
+		card_tutorial_controller.handle_confirm(new_card)
+		return
 	if PlayerData.editing_deck_id != "" and PlayerData.editing_instance_id != "":
 		_show_sync_edit_popup(new_card)
 	else:
@@ -1052,7 +1087,7 @@ func _show_after_save_popup(saved_card: CardData) -> void:
 		PlayerData.continue_editing_flag = true
 		PlayerData.card_editor_return_scene = "res://MainMenu.tscn"
 		PlayerData.return_to_deck_id = ""
-		UIMotion.change_scene("res://MainMenu.tscn")
+		UIMotion.go_back("res://MainMenu.tscn")
 	)
 	vbox.add_child(continue_btn)
 	var test_btn := Button.new()
@@ -1073,18 +1108,15 @@ func _return_after_save() -> void:
 	PlayerData.clear_card_draft_recovery()
 	var return_scene := PlayerData.card_editor_return_scene
 	PlayerData.card_editor_return_scene = "res://MainMenu.tscn"
-	PlayerData.scene_history.clear()  # Reset navigation history when returning from editor
-	UIMotion.change_scene(return_scene)
+	UIMotion.go_back(return_scene)
 
 
 func _start_solo_test(saved_card: CardData) -> void:
 	PlayerData.begin_card_playtest(saved_card)
-	PlayerData.battle_mode = "practice"
-	PlayerData.battle_deck.clear()
-	PlayerData.battle_deck.append(saved_card.duplicate_card())
-	PlayerData.opponent_battle_deck.clear()
+	var opponent_cards: Array = []
 	for card in CardDatabase.starter_library():
-		PlayerData.opponent_battle_deck.append(card.duplicate_card())
+		opponent_cards.append(card.duplicate_card())
+	PlayerData.configure_practice_battle([saved_card.duplicate_card()], opponent_cards, "normal", true)
 	UIMotion.change_scene("res://Main.tscn")
 
 
@@ -1093,6 +1125,9 @@ func _start_solo_test(saved_card: CardData) -> void:
 # ============================================
 
 func _on_back_button_pressed():
+	if card_tutorial_controller:
+		card_tutorial_controller._on_exit()
+		return
 	PlayerData.editing_index = -1
 	PlayerData.editing_deck_id = ""
 	PlayerData.editing_instance_id = ""
@@ -1100,4 +1135,4 @@ func _on_back_button_pressed():
 	PlayerData.clear_card_draft_recovery()
 	var return_scene := PlayerData.card_editor_return_scene
 	PlayerData.card_editor_return_scene = "res://MainMenu.tscn"
-	UIMotion.change_scene(return_scene)
+	UIMotion.go_back(return_scene)

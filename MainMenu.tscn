@@ -32,6 +32,11 @@ text = "Resume Battle"
 layout_mode = 2
 text = "Start"
 
+[node name="TutorialButton" type="Button" parent="CenterContainer/VBoxContainer"]
+visible = false
+layout_mode = 2
+text = "Tutorial"
+
 [node name="CardEditorButton" type="Button" parent="CenterContainer/VBoxContainer" unique_id=740797059]
 layout_mode = 2
 text = "Card Editor"
@@ -41,6 +46,7 @@ layout_mode = 2
 text = "My Cards"
 
 [node name="OnlineButton" type="Button" parent="CenterContainer/VBoxContainer" unique_id=9991000]
+visible = false
 layout_mode = 2
 text = "Online Battle"
 

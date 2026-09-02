@@ -9,6 +9,7 @@ signal skill2_requested
 signal skill3_requested
 
 @onready var background_panel = $Background
+@onready var card_shadow = $CardShadow
 @onready var card_surface = $CardSurface
 @onready var type_accent = $TypeAccent
 @onready var type_label = $TypeLabel
@@ -33,6 +34,24 @@ var _actions_visible: bool = true
 # Hand cards (children of the hand container) grow on hover; field cards don't.
 var is_hand_card: bool = false
 var _hover_tween: Tween = null
+var _pointer_inside := false
+var _pointer_pressed := false
+var _drag_source := false
+var _surface_sheen: GradientTexture2D = null
+# Layout caching: apply_ui_scale runs on every full-screen refresh for every
+# card on screen (10 slots + hand). With unchanged scale AND card type the
+# result is identical, so the 40+ rect overrides and 15+ theme overrides are
+# skipped — a major chunk of the per-action frame cost.
+var _last_layout_scale: float = -1.0
+var _last_layout_type: String = ""
+# Status badges: rebuilt from scratch on every set_card. The badge strip only
+# changes when the (symbol, color, tooltip) content changes, so cache its
+# signature and keep the existing nodes when it matches.
+var _last_status_signature: String = ""
+# Cost tint cache: _apply_hand_castability re-applies the same theme override
+# on every refresh; skip it when the color is unchanged (invalid marker forces
+# a re-apply after set_card resets the label color).
+var _last_cost_color: Color = Color(-1.0, -1.0, -1.0, -1.0)
 
 
 func _scaled_rect(left: float, top: float, right: float, bottom: float) -> void:
@@ -52,6 +71,13 @@ func _scale_child_rect(control: Control, left: float, top: float, right: float, 
 
 
 func apply_ui_scale(scale_value: float) -> void:
+	var card_type := current_card_data.card_type if current_card_data != null else ""
+	if is_equal_approx(_last_layout_scale, scale_value) and _last_layout_type == card_type and _last_layout_scale >= 0.0:
+		# Same scale + same card type: the layout is already applied.
+		ui_scale = scale_value
+		return
+	_last_layout_scale = scale_value
+	_last_layout_type = card_type
 	ui_scale = scale_value
 	_is_layout_applying = true
 	custom_minimum_size = Vector2(120, 160) * ui_scale
@@ -60,8 +86,13 @@ func apply_ui_scale(scale_value: float) -> void:
 	if background_panel:
 		background_panel.custom_minimum_size = custom_minimum_size
 		background_panel.size = custom_minimum_size
-	_scale_child_rect($Background, 0, 0, 120, 160)
-	_scale_child_rect(card_surface, 0, 0, 120, 160)
+	# Leave a narrow physical rim around the card. This gives the surface shadow
+	# a clean silhouette while its dedicated layer sits behind and below it.
+	_scale_child_rect(card_shadow, 6, 8, 114, 164)
+	_scale_child_rect($Background, 2, 1, 118, 157)
+	# The sheen is inset past the border so its dark tail can never tint the
+	# golden stroke drawn by Background.
+	_scale_child_rect(card_surface, 4, 3, 116, 155)
 	_scale_child_rect(type_accent, 6, 23, 114, 25)
 	_scale_child_rect(type_label, 62, 26, 114, 40)
 	var is_special_card := current_card_data != null and (current_card_data.is_spell() or current_card_data.is_parasite())
@@ -104,6 +135,11 @@ func apply_ui_scale(scale_value: float) -> void:
 
 
 func _apply_card_visual_style() -> void:
+	if card_shadow:
+		var shadow_style := StyleBoxFlat.new()
+		shadow_style.bg_color = Color(0.0, 0.0, 0.0, 0.42)
+		shadow_style.set_corner_radius_all(max(3, int(7 * ui_scale)))
+		card_shadow.add_theme_stylebox_override("panel", shadow_style)
 	if background_panel:
 		var card_type := current_card_data.card_type if current_card_data != null else "minion"
 		UITheme.apply_card_surface(background_panel, card_type, ui_scale)
@@ -131,6 +167,7 @@ func _apply_card_visual_style() -> void:
 		type_accent.color = accent
 	if type_label:
 		UITheme.apply_label(type_label, true)
+	_apply_surface_sheen()
 	if normal_atk_btn:
 		UITheme.apply_button(normal_atk_btn, "primary")
 	for button in [skill1_btn, skill2_btn, skill3_btn]:
@@ -171,6 +208,7 @@ func _ready():
 
 	mouse_entered.connect(_on_hover_enter)
 	mouse_exited.connect(_on_hover_exit)
+	gui_input.connect(_on_card_gui_input)
 
 	_auto_hide_if_enemy()
 	if current_card_data != null:
@@ -182,6 +220,7 @@ func _ready():
 # Hand cards pop up (scale from bottom-center + raise) while hovered so the
 # player can see the card clearly before dragging it onto the battlefield.
 func _on_hover_enter() -> void:
+	_pointer_inside = true
 	if not is_hand_card or not is_inside_tree():
 		return
 	if _hover_tween and _hover_tween.is_valid():
@@ -189,17 +228,66 @@ func _on_hover_enter() -> void:
 	z_index = 20
 	pivot_offset = Vector2(size.x * 0.5, size.y)
 	_hover_tween = create_tween()
-	_hover_tween.tween_property(self, "scale", Vector2(1.06, 1.06), 0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_hover_tween.tween_property(self, "scale", Vector2(1.035, 1.035), 0.11).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 
 
 func _on_hover_exit() -> void:
+	_pointer_inside = false
 	if not is_hand_card or not is_inside_tree():
+		return
+	if _drag_source:
 		return
 	if _hover_tween and _hover_tween.is_valid():
 		_hover_tween.kill()
 	_hover_tween = create_tween()
 	_hover_tween.tween_property(self, "scale", Vector2.ONE, 0.10).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	z_index = 0
+
+
+func _on_card_gui_input(event: InputEvent) -> void:
+	if not is_hand_card or not event is InputEventMouseButton:
+		return
+	var mouse_event := event as InputEventMouseButton
+	if mouse_event.button_index != MOUSE_BUTTON_LEFT:
+		return
+	_pointer_pressed = mouse_event.pressed
+	if _drag_source:
+		return
+	_animate_pointer_state()
+
+
+func _animate_pointer_state() -> void:
+	if not is_inside_tree():
+		return
+	if _hover_tween and _hover_tween.is_valid():
+		_hover_tween.kill()
+	pivot_offset = Vector2(size.x * 0.5, size.y)
+	var target_scale := Vector2(0.985, 0.985) if _pointer_pressed else (Vector2(1.035, 1.035) if _pointer_inside else Vector2.ONE)
+	var target_modulate := Color(0.90, 0.92, 0.96, 1.0) if _pointer_pressed else Color.WHITE
+	_hover_tween = create_tween().set_parallel(true)
+	_hover_tween.tween_property(self, "scale", target_scale, 0.055 if _pointer_pressed else 0.11).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_hover_tween.tween_property(self, "modulate", target_modulate, 0.055 if _pointer_pressed else 0.11)
+
+
+func _apply_surface_sheen() -> void:
+	if card_surface == null:
+		return
+	if _surface_sheen == null:
+		var gradient := Gradient.new()
+		gradient.offsets = PackedFloat32Array([0.0, 0.28, 0.68, 1.0])
+		gradient.colors = PackedColorArray([
+			Color(1.0, 1.0, 1.0, 0.075),
+			Color(1.0, 1.0, 1.0, 0.012),
+			Color(0.0, 0.0, 0.0, 0.015),
+			Color(0.0, 0.0, 0.0, 0.14),
+		])
+		_surface_sheen = GradientTexture2D.new()
+		_surface_sheen.gradient = gradient
+		_surface_sheen.width = 32
+		_surface_sheen.height = 128
+		_surface_sheen.fill_from = Vector2(0.5, 0.0)
+		_surface_sheen.fill_to = Vector2(0.5, 1.0)
+	card_surface.texture = _surface_sheen
 
 
 func set_card(card_data: CardData):
@@ -214,6 +302,7 @@ func set_card(card_data: CardData):
 		if action_buttons: action_buttons.visible = false
 		self.modulate = Color.WHITE
 		_clear_status_icons()
+		_last_status_signature = ""
 		return
 
 	_update_card_layout_for_type()
@@ -231,6 +320,8 @@ func set_card(card_data: CardData):
 		if cost_label:
 			cost_label.text = Locale.t("card.cost", [card_data.cost])
 			cost_label.add_theme_color_override("font_color", Color.WHITE)
+	# set_card resets the label color, so the castability tint cache is stale.
+	_last_cost_color = Color(-1.0, -1.0, -1.0, -1.0)
 
 	# HP: show current/max, plus temp HP if any
 	if card_data.temp_hp > 0:
@@ -314,7 +405,6 @@ func _clear_status_icons() -> void:
 func _update_status_icons() -> void:
 	if status_icons == null or current_card_data == null:
 		return
-	_clear_status_icons()
 	var entries: Array[Dictionary] = []
 	var grouped: Dictionary = {
 		"positive": [],
@@ -370,21 +460,32 @@ func _update_status_icons() -> void:
 	var visible_count: int = min(entries.size(), MAX_VISIBLE_STATUS_BADGES)
 	if entries.size() > MAX_VISIBLE_STATUS_BADGES:
 		visible_count = MAX_VISIBLE_STATUS_BADGES - 1
+	var badges: Array[Dictionary] = []
 	for i in range(visible_count):
-		var entry: Dictionary = entries[i]
-		status_icons.add_child(_make_status_badge(
-			entry.get("symbol", "•"),
-			entry.get("color", Color.WHITE),
-			entry.get("tooltip", "")
-		))
+		badges.append(entries[i])
 	if entries.size() > MAX_VISIBLE_STATUS_BADGES:
 		var hidden_tooltips: Array[String] = []
 		for i in range(visible_count, entries.size()):
 			hidden_tooltips.append(entries[i].get("tooltip", ""))
+		badges.append({
+			"symbol": "+%d" % (entries.size() - visible_count),
+			"color": Color(0.72, 0.78, 0.88),
+			"tooltip": "\n\n".join(hidden_tooltips),
+		})
+	# Signature check: identical visible content means the existing badge nodes
+	# are already correct — skip the teardown/rebuild entirely.
+	var signature := ""
+	for badge in badges:
+		signature += "%s|%s|%s;" % [badge.get("symbol", ""), str(badge.get("color", "")), badge.get("tooltip", "")]
+	if signature == _last_status_signature:
+		return
+	_last_status_signature = signature
+	_clear_status_icons()
+	for badge in badges:
 		status_icons.add_child(_make_status_badge(
-			"+%d" % (entries.size() - visible_count),
-			Color(0.72, 0.78, 0.88),
-			"\n\n".join(hidden_tooltips)
+			badge.get("symbol", "•"),
+			badge.get("color", Color.WHITE),
+			badge.get("tooltip", "")
 		))
 
 
@@ -611,19 +712,52 @@ func _get_drag_data(_position: Vector2):
 	if current_card_data == null:
 		return null
 
+	_drag_source = true
+	_pointer_pressed = false
+	z_index = 30
+	pivot_offset = Vector2(size.x * 0.5, size.y)
+	scale = Vector2(0.97, 0.97)
+	modulate = Color(1.0, 1.0, 1.0, 0.38)
+
+	var preview_holder := Control.new()
+	preview_holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	preview_holder.custom_minimum_size = Vector2.ONE
+	var preview_shadow := Panel.new()
+	preview_shadow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	preview_shadow.position = -size * 0.5 + Vector2(7, 10) * ui_scale
+	preview_shadow.size = size
+	preview_shadow.add_theme_stylebox_override("panel", UITheme.panel_style(
+		Color(0.0, 0.0, 0.0, 0.34), Color(0, 0, 0, 0), 0,
+		max(4, int(8 * ui_scale)), Color(0, 0, 0, 0.34), max(4, int(8 * ui_scale))
+	))
+	preview_holder.add_child(preview_shadow)
 	var preview_card = duplicate()
-	preview_card.modulate.a = 0.72
+	preview_card.modulate = Color(1.03, 1.03, 1.03, 0.94)
 	preview_card.anchor_right = 0.0
 	preview_card.anchor_bottom = 0.0
-	preview_card.scale = Vector2(1.04, 1.04)
+	preview_card.scale = Vector2(1.055, 1.055)
 	if preview_card.has_method("apply_ui_scale"):
 		preview_card.call("apply_ui_scale", ui_scale)
 	else:
 		preview_card.offset_right = 120.0 * ui_scale
 		preview_card.offset_bottom = 160.0 * ui_scale
-	set_drag_preview(preview_card)
+	preview_card.position = -preview_card.size * 0.5
+	preview_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	preview_holder.add_child(preview_card)
+	set_drag_preview(preview_holder)
 
 	return {
 		"card_ui": self,
 		"card_data": current_card_data
 	}
+
+
+func _notification(what: int) -> void:
+	if what != NOTIFICATION_DRAG_END or not _drag_source:
+		return
+	_drag_source = false
+	_pointer_pressed = false
+	modulate = Color.WHITE
+	z_index = 20 if _pointer_inside and is_hand_card else 0
+	if is_inside_tree():
+		_animate_pointer_state()

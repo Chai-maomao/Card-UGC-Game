@@ -4,6 +4,8 @@ extends SkillRegistry
 const _TargetResolver = preload("res://SkillTargetResolver.gd")
 const _EffectApplier = preload("res://SkillEffectApplier.gd")
 const _TextFormatter = preload("res://SkillTextFormatter.gd")
+const _UgcSafety = preload("res://UgcSafety.gd")
+const _GameplayRng = preload("res://GameplayRng.gd")
 
 const MAX_HAND_SIZE = 6
 
@@ -43,6 +45,9 @@ static func _mark_skill_used(card: CardData, skill_index: int) -> void:
 static func trigger_skills(trigger: String, source_card: CardData, context: Dictionary) -> void:
 	if source_card == null or source_card.skills.is_empty():
 		return
+	var budget := _ensure_budget(context)
+	if not _enter_trigger_budget(budget, source_card):
+		return
 	var silenced := source_card.is_silenced()
 	var trigger_context := context.duplicate()
 	trigger_context["trigger"] = trigger
@@ -59,47 +64,64 @@ static func trigger_skills(trigger: String, source_card: CardData, context: Dict
 		if _passes_skill_roll(skill_dict, source_card, trigger_context):
 			_execute_skill(skill_dict, source_card, trigger_context)
 			_mark_skill_used(source_card, skill_index)
+	_leave_trigger_budget(budget)
 
 
 static func trigger_single_skill(card: CardData, skill_index: int, context: Dictionary) -> void:
 	if card == null or skill_index < 0 or skill_index >= card.skills.size():
 		return
+	var budget := _ensure_budget(context)
+	if not _enter_trigger_budget(budget, card):
+		return
 	var skill_dict: Dictionary = card.skills[skill_index]
 	if card.is_silenced() and not _is_talent_skill(skill_dict):
+		_leave_trigger_budget(budget)
 		return
 	if not _check_max_uses(card, skill_dict, skill_index):
+		_leave_trigger_budget(budget)
 		return
 	var single_context := context.duplicate()
 	single_context["trigger"] = skill_dict.get("trigger", "")
 	if _passes_skill_roll(skill_dict, card, single_context):
 		_execute_skill(skill_dict, card, single_context)
 		_mark_skill_used(card, skill_index)
+	_leave_trigger_budget(budget)
 
 
 static func trigger_external_skill(skill: Dictionary, source_card: CardData, context: Dictionary) -> void:
 	if source_card == null or skill.is_empty():
 		return
+	var budget := _ensure_budget(context)
+	if not _enter_trigger_budget(budget, source_card):
+		return
 	if source_card.is_silenced() and not _is_talent_skill(skill):
+		_leave_trigger_budget(budget)
 		return
 	var external_context := context.duplicate()
 	external_context["trigger"] = skill.get("trigger", "")
 	if _passes_skill_roll(skill, source_card, external_context):
 		_execute_skill(skill, source_card, external_context)
+	_leave_trigger_budget(budget)
 
 
 static func _execute_skill(skill: Dictionary, source_card: CardData, context: Dictionary) -> void:
 	var skill_name: String = skill.get("skill_name", "???")
-	_execute_effects(legacy_skill_effects(skill), source_card, context, skill_name)
+	_execute_effects(legacy_skill_effects(skill), source_card, context, skill_name, 1)
 
 
-static func _execute_effects(effects: Array, source_card: CardData, context: Dictionary, skill_name: String) -> void:
+static func _execute_effects(effects: Array, source_card: CardData, context: Dictionary, skill_name: String, depth: int = 1) -> void:
+	if depth > _UgcSafety.MAX_EFFECT_NESTING_DEPTH:
+		_abort_budget(_ensure_budget(context), source_card, "effect_depth")
+		return
 	for eff in effects:
+		if not _consume_effect_budget(_ensure_budget(context), source_card):
+			return
 		var eff_dict: Dictionary = eff
 		if str(eff_dict.get("effect", "")) in [EFFECT_IF_ELSE, EFFECT_IF]:
-			_execute_if_else(eff_dict, source_card, context, skill_name)
+			_execute_if_else(eff_dict, source_card, context, skill_name, depth)
 			continue
 		if str(eff_dict.get("effect", "")) == EFFECT_REPEAT:
-			_execute_repeat(eff_dict, source_card, context, skill_name)
+			_execute_repeat(eff_dict, source_card, context, skill_name, depth)
 			continue
 		if str(eff_dict.get("effect", "")) == EFFECT_STOP:
 			# Stop block: halts the remaining effects of the current block
@@ -113,6 +135,8 @@ static func _execute_effects(effects: Array, source_card: CardData, context: Dic
 		var target_side: String = eff_dict.get("target_side", _TargetResolver.default_target_side(target_str))
 		var effect_str: String = eff_dict.get("effect", EFFECT_DAMAGE)
 		var value: int = _resolve_value(eff_dict, source_card, context)
+		if bool(_ensure_budget(context).get("aborted", false)):
+			return
 		var targets: Array = _TargetResolver.resolve_targets(target_str, source_card, context, target_side)
 		targets = _limit_random_targets(targets, int(eff_dict.get("random_count", 0)), context)
 
@@ -147,25 +171,71 @@ static func _execute_effects(effects: Array, source_card: CardData, context: Dic
 # Control block: evaluates its condition against the source card and runs the
 # matching then/else sub-effects recursively. Supports both "if () then" and
 # "if () then else" control blocks (else_effects stays empty for the former).
-static func _execute_if_else(eff: Dictionary, source_card: CardData, context: Dictionary, skill_name: String) -> void:
+static func _execute_if_else(eff: Dictionary, source_card: CardData, context: Dictionary, skill_name: String, depth: int) -> void:
 	var cond := _condition_dict(eff)
 	var take_then: bool = _passes_effect_condition(cond, source_card, source_card, context)
 	print("[SkillEngine] %s: if -> %s" % [skill_name, "then" if take_then else "else"])
 	if take_then:
-		_execute_effects(eff.get("then_effects", []), source_card, context, skill_name)
+		_execute_effects(eff.get("then_effects", []), source_card, context, skill_name, depth + 1)
 	else:
-		_execute_effects(eff.get("else_effects", []), source_card, context, skill_name)
+		_execute_effects(eff.get("else_effects", []), source_card, context, skill_name, depth + 1)
 
 
 # Control block: repeats its then-effects N times (Scratch-style "repeat N"
 # C-shaped block). N may be a plain number or a variable reporter oval.
 # A stop block inside the body halts the current iteration only; subsequent
 # iterations still run.
-static func _execute_repeat(eff: Dictionary, source_card: CardData, context: Dictionary, skill_name: String) -> void:
-	var times: int = _repeat_count(eff, source_card, context)
+static func _execute_repeat(eff: Dictionary, source_card: CardData, context: Dictionary, skill_name: String, depth: int) -> void:
+	var times: int = mini(_repeat_count(eff, source_card, context), _UgcSafety.MAX_REPEAT_COUNT)
 	print("[SkillEngine] %s: repeat x%d" % [skill_name, times])
 	for _i in range(times):
-		_execute_effects(eff.get("then_effects", []), source_card, context, skill_name)
+		_execute_effects(eff.get("then_effects", []), source_card, context, skill_name, depth + 1)
+		if bool(_ensure_budget(context).get("aborted", false)):
+			return
+
+
+static func _ensure_budget(context: Dictionary) -> Dictionary:
+	var budget = context.get("_ugc_budget", null)
+	if budget is Dictionary:
+		return budget
+	budget = {"effect_nodes": 0, "trigger_depth": 0, "aborted": false, "notified": false}
+	context["_ugc_budget"] = budget
+	return budget
+
+
+static func _enter_trigger_budget(budget: Dictionary, source_card: CardData) -> bool:
+	if bool(budget.get("aborted", false)):
+		return false
+	budget["trigger_depth"] = int(budget.get("trigger_depth", 0)) + 1
+	if int(budget["trigger_depth"]) > _UgcSafety.MAX_TRIGGER_CHAIN_DEPTH:
+		_abort_budget(budget, source_card, "trigger_depth")
+		budget["trigger_depth"] = int(budget["trigger_depth"]) - 1
+		return false
+	return true
+
+
+static func _leave_trigger_budget(budget: Dictionary) -> void:
+	budget["trigger_depth"] = maxi(0, int(budget.get("trigger_depth", 0)) - 1)
+
+
+static func _consume_effect_budget(budget: Dictionary, source_card: CardData) -> bool:
+	if bool(budget.get("aborted", false)):
+		return false
+	budget["effect_nodes"] = int(budget.get("effect_nodes", 0)) + 1
+	if int(budget["effect_nodes"]) > _UgcSafety.MAX_EXECUTED_EFFECT_NODES:
+		_abort_budget(budget, source_card, "effect_nodes")
+		return false
+	return true
+
+
+static func _abort_budget(budget: Dictionary, source_card: CardData, reason: String) -> void:
+	budget["aborted"] = true
+	if bool(budget.get("notified", false)):
+		return
+	budget["notified"] = true
+	var source_name := source_card.card_name if source_card != null else "?"
+	push_warning("[SkillEngine] UGC safety limit hit: %s (%s)" % [source_name, reason])
+	EventBus.skill_safety_limit_hit.emit(source_name, reason)
 
 
 static func _repeat_count(eff: Dictionary, source_card: CardData, context: Dictionary) -> int:
@@ -261,13 +331,16 @@ static func _passes_effect_condition(eff: Dictionary, source_card: CardData, tar
 # "[operand] [op] [operand]" where each operand is a number, a variable oval
 # or a math expression; the special "has" form is "[target] has [buff]";
 # and "and"/"or"/"not" combine sub-reports (each a full boolean block).
-static func _eval_boolean(cond: Dictionary, source_card: CardData, target_card: CardData, context: Dictionary) -> bool:
+static func _eval_boolean(cond: Dictionary, source_card: CardData, target_card: CardData, context: Dictionary, depth: int = 1) -> bool:
+	if depth > _UgcSafety.MAX_EXPRESSION_NESTING_DEPTH:
+		_abort_budget(_ensure_budget(context), source_card, "expression_depth")
+		return false
 	if cond.has("logic"):
 		var logic: String = str(cond.get("logic", "and"))
 		if logic == "not":
-			return not _eval_boolean(cond.get("child", {}), source_card, target_card, context)
-		var a := _eval_boolean(cond.get("lhs", {}), source_card, target_card, context)
-		var b := _eval_boolean(cond.get("rhs", {}), source_card, target_card, context)
+			return not _eval_boolean(cond.get("child", {}), source_card, target_card, context, depth + 1)
+		var a := _eval_boolean(cond.get("lhs", {}), source_card, target_card, context, depth + 1)
+		var b := _eval_boolean(cond.get("rhs", {}), source_card, target_card, context, depth + 1)
 		if logic == "or":
 			return a or b
 		return a and b
@@ -276,22 +349,25 @@ static func _eval_boolean(cond: Dictionary, source_card: CardData, target_card: 
 		var rhs: Dictionary = cond.get("rhs", {})
 		var buff_id: String = str(rhs.get("buff_id", ""))
 		return buff_id != "" and _card_has_buff(target_card, buff_id)
-	var actual: int = _eval_operand(cond.get("lhs", {}), source_card, target_card, context)
-	var expected: int = _eval_operand(cond.get("rhs", {}), source_card, target_card, context)
+	var actual: int = _eval_operand(cond.get("lhs", {}), source_card, target_card, context, depth + 1)
+	var expected: int = _eval_operand(cond.get("rhs", {}), source_card, target_card, context, depth + 1)
 	return _compare_condition(actual, expected, op)
 
 
 # Resolves one side of a comparison (or a value expression): a fixed number,
 # a variable reporter, or a nested math expression like "(hand+2)*3".
-static func _eval_operand(opd: Dictionary, source_card: CardData, target_card: CardData, context: Dictionary) -> int:
+static func _eval_operand(opd: Dictionary, source_card: CardData, target_card: CardData, context: Dictionary, depth: int = 1) -> int:
+	if depth > _UgcSafety.MAX_EXPRESSION_NESTING_DEPTH:
+		_abort_budget(_ensure_budget(context), source_card, "expression_depth")
+		return 0
 	var kind: String = str(opd.get("kind", "num"))
 	match kind:
 		"var":
 			return _var_value(str(opd.get("var_id", "")), source_card, target_card, context)
 		"expr":
 			var op: String = str(opd.get("op", "+"))
-			var a := _eval_operand(opd.get("a", {}), source_card, target_card, context)
-			var b := _eval_operand(opd.get("b", {}), source_card, target_card, context)
+			var a := _eval_operand(opd.get("a", {}), source_card, target_card, context, depth + 1)
+			var b := _eval_operand(opd.get("b", {}), source_card, target_card, context, depth + 1)
 			match op:
 				"-":
 					return a - b
@@ -304,10 +380,7 @@ static func _eval_operand(opd: Dictionary, source_card: CardData, target_card: C
 						var t: int = a
 						a = b
 						b = t
-					var rng = context.get("rng", null)
-					if rng is RandomNumberGenerator:
-						return rng.randi_range(a, b)
-					return randi_range(a, b)
+					return _GameplayRng.from_context(context).randi_range(a, b)
 				_:
 					return a + b
 	return int(opd.get("value", 0))
@@ -381,22 +454,11 @@ static func _is_enemy_effect_blocked_on_turn_one(targets: Array, source_card: Ca
 
 
 static func _roll_percent(context: Dictionary) -> float:
-	var rng = context.get("rng", null)
-	if rng is RandomNumberGenerator:
-		return rng.randf() * 100.0
-	return randf() * 100.0
+	return _GameplayRng.from_context(context).randf() * 100.0
 
 
 static func _shuffle_targets(targets: Array, context: Dictionary) -> void:
-	var rng = context.get("rng", null)
-	if not (rng is RandomNumberGenerator):
-		targets.shuffle()
-		return
-	for i in range(targets.size() - 1, 0, -1):
-		var j: int = rng.randi_range(0, i)
-		var temp = targets[i]
-		targets[i] = targets[j]
-		targets[j] = temp
+	_GameplayRng.shuffle(targets, _GameplayRng.from_context(context))
 
 
 # ============================================
@@ -420,10 +482,7 @@ static func _resolve_value(eff: Dictionary, source_card: CardData, context: Dict
 			var t: int = vmin
 			vmin = vmax
 			vmax = t
-		var rng = context.get("rng", null)
-		if rng is RandomNumberGenerator:
-			return rng.randi_range(vmin, vmax)
-		return randi_range(vmin, vmax)
+		return _GameplayRng.from_context(context).randi_range(vmin, vmax)
 	return int(eff.get("value", 1))
 
 

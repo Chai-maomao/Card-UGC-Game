@@ -13,6 +13,12 @@ const MAX_ART_BYTES := 2 * 1024 * 1024  # 2 MB cap per card art sent over the ne
 const SHARE_VERSION := 2
 const SpellRules = preload("res://SpellRules.gd")
 const ParasiteRules = preload("res://ParasiteRules.gd")
+const UgcSafetyPolicy = preload("res://UgcSafety.gd")
+const Schema = preload("res://DataSchema.gd")
+const LibraryRepo = preload("res://CardLibraryRepository.gd")
+const EditorRepo = preload("res://EditorDataRepository.gd")
+const HistoryRepo = preload("res://MatchHistoryRepository.gd")
+const BattlePrep = preload("res://BattlePreparationState.gd")
 const SAFE_ART_EXTENSIONS := ["png", "jpg", "jpeg", "webp"]
 const DRAFT_RECOVERY_PATH := "user://card_draft_recovery.json"
 const SKILL_TEMPLATES_PATH := "user://skill_templates.json"
@@ -31,7 +37,6 @@ var card_draft: Dictionary = {}
 var editing_skill_index: int = 0
 var card_editor_return_scene: String = "res://MainMenu.tscn"
 var return_to_waiting_room: bool = false
-var scene_history: Array = []  # 导航历史栈，记录场景路径
 var continue_editing_flag: bool = false  # "继续编辑"跳转标记
 var return_to_deck_id: String = ""
 var battle_deck: Array = []
@@ -46,21 +51,188 @@ var recovered_card_draft: Dictionary = {}
 var custom_skill_templates: Array = []
 var match_history: Array = []
 var card_playtest_context: Dictionary = {}
+var skill_tutorial_active: bool = false
+var tutorial_editor_stage: String = ""
+var tutorial_created_card: CardData = null
+var _skill_tutorial_editor_backup: Dictionary = {}
 var _draft_save_pending: bool = false
 var _draft_save_at: float = 0.0
 
 # ============================================
 # Battle configuration (战斗前自定义参数)
 # ============================================
-var battle_config: Dictionary = {
+const DEFAULT_BATTLE_CONFIG := {
 	"mana_per_turn": 2,       # 每回合回费数量
 	"draw_per_turn": 2,        # 每回合抽牌数量
 	"starting_hp": 30,         # 玩家初始血量
 	"second_extra_cards": 0,   # 后手第一回合补偿卡牌数
-	"second_extra_mana": 0,    # 后手第一回合补偿圣水
-	"death_compensation": false,       # 战败补偿：卡牌被击杀时抽1张牌
+	"second_extra_mana": 2,    # 后手第一回合补偿圣水（2000局校准：先手胜率49.95%）
+	"death_compensation": true,        # 战败补偿：卡牌被击杀时抽1张牌
 	"face_damage_compensation": false,  # 本体伤害补偿：每张攻击牌给1点临时圣水
 }
+var battle_config: Dictionary = DEFAULT_BATTLE_CONFIG.duplicate(true)
+
+
+func _apply_battle_preparation(state: Dictionary) -> void:
+	battle_mode = str(state.get("mode", "hotseat"))
+	practice_ai_difficulty = str(state.get("difficulty", "normal"))
+	battle_deck = (state.get("player_deck", []) as Array).duplicate()
+	opponent_battle_deck = (state.get("opponent_deck", []) as Array).duplicate()
+	pending_hotseat_p1_deck = (state.get("pending_p1", []) as Array).duplicate()
+	battle_select_mode = str(state.get("select_mode", "practice"))
+	battle_select_next_scene = str(state.get("next_scene", "res://Main.tscn"))
+	battle_select_step = int(state.get("select_step", 1))
+	return_to_waiting_room = bool(state.get("return_to_waiting_room", false))
+
+
+func configure_practice_battle(player_cards: Array, opponent_cards: Array, difficulty: String = "normal", preserve_playtest: bool = false) -> void:
+	_apply_battle_preparation(BattlePrep.practice(player_cards, opponent_cards, difficulty))
+	if not preserve_playtest:
+		card_playtest_context = {}
+
+
+func begin_hotseat_battle_selection(player_one_cards: Array = []) -> void:
+	_apply_battle_preparation(BattlePrep.hotseat_pending(player_one_cards))
+	card_playtest_context = {}
+
+
+func prepare_hotseat_selection() -> void:
+	begin_hotseat_battle_selection()
+	battle_select_mode = "hotseat_p1"
+	battle_select_step = 1
+
+
+func configure_hotseat_battle(player_one_cards: Array, player_two_cards: Array) -> void:
+	_apply_battle_preparation(BattlePrep.hotseat(player_one_cards, player_two_cards))
+	card_playtest_context = {}
+
+
+func configure_online_battle(player_cards: Array, next_scene: String = "res://Lobby.tscn") -> void:
+	_apply_battle_preparation(BattlePrep.online(player_cards, next_scene))
+	card_playtest_context = {}
+
+
+func prepare_practice_selection(difficulty: String) -> void:
+	_apply_battle_preparation(BattlePrep.practice([], [], difficulty))
+
+
+func prepare_tutorial_battle(card: CardData = null) -> void:
+	if card != null:
+		tutorial_created_card = card.duplicate_card()
+	var player_cards: Array = []
+	for starter in CardDatabase.player_starters():
+		player_cards.append(starter.duplicate_card())
+	if tutorial_created_card != null:
+		player_cards.append(tutorial_created_card.duplicate_card())
+	var opponent_cards: Array = []
+	for starter in CardDatabase.player_starters():
+		opponent_cards.append(starter.duplicate_card())
+	_apply_battle_preparation(BattlePrep.tutorial(player_cards, opponent_cards))
+	card_playtest_context = {}
+
+
+func begin_card_tutorial() -> void:
+	# The full tutorial edits an in-memory card only. The player's current draft,
+	# recovery debounce and return context are restored before battle begins.
+	if skill_tutorial_active:
+		cancel_skill_tutorial()
+	_skill_tutorial_editor_backup = {
+		"card_draft": card_draft.duplicate(true),
+		"editing_index": editing_index,
+		"editing_deck_id": editing_deck_id,
+		"editing_instance_id": editing_instance_id,
+		"editing_skill_index": editing_skill_index,
+		"card_editor_return_scene": card_editor_return_scene,
+		"return_to_deck_id": return_to_deck_id,
+		"draft_save_pending": _draft_save_pending,
+		"draft_save_at": _draft_save_at,
+	}
+	_draft_save_pending = false
+	card_draft = {
+		"card_type": "minion",
+		"name": "",
+		"cost": 1,
+		"hp": 5,
+		"atk": 2,
+		"gender": "nonhuman",
+		"art_path": "",
+		"skill1": {},
+		"skill2": {},
+		"skill3": {},
+	}
+	editing_index = -1
+	editing_deck_id = ""
+	editing_instance_id = ""
+	editing_skill_index = 0
+	card_editor_return_scene = "res://MainMenu.tscn"
+	return_to_deck_id = ""
+	skill_tutorial_active = true
+	tutorial_editor_stage = "card_basics"
+	tutorial_created_card = null
+
+
+func begin_skill_tutorial() -> void:
+	# Compatibility entry used by focused editor tests and older callers.
+	begin_card_tutorial()
+	tutorial_editor_stage = "skill"
+
+
+func finish_skill_tutorial_editor(skill: Dictionary = {}) -> void:
+	if not skill.is_empty():
+		card_draft["skill1"] = skill.duplicate(true)
+	tutorial_editor_stage = "card_review"
+
+
+func finish_card_tutorial(card: CardData) -> void:
+	tutorial_created_card = card.duplicate_card()
+	_restore_skill_tutorial_editor_state()
+	prepare_tutorial_battle(tutorial_created_card)
+
+
+func cancel_skill_tutorial() -> void:
+	tutorial_created_card = null
+	_restore_skill_tutorial_editor_state()
+
+
+func _restore_skill_tutorial_editor_state() -> void:
+	if not skill_tutorial_active:
+		return
+	card_draft = (_skill_tutorial_editor_backup.get("card_draft", {}) as Dictionary).duplicate(true)
+	editing_index = int(_skill_tutorial_editor_backup.get("editing_index", -1))
+	editing_deck_id = str(_skill_tutorial_editor_backup.get("editing_deck_id", ""))
+	editing_instance_id = str(_skill_tutorial_editor_backup.get("editing_instance_id", ""))
+	editing_skill_index = int(_skill_tutorial_editor_backup.get("editing_skill_index", 0))
+	card_editor_return_scene = str(_skill_tutorial_editor_backup.get("card_editor_return_scene", "res://MainMenu.tscn"))
+	return_to_deck_id = str(_skill_tutorial_editor_backup.get("return_to_deck_id", ""))
+	_draft_save_pending = bool(_skill_tutorial_editor_backup.get("draft_save_pending", false))
+	_draft_save_at = float(_skill_tutorial_editor_backup.get("draft_save_at", 0.0))
+	_skill_tutorial_editor_backup = {}
+	skill_tutorial_active = false
+	tutorial_editor_stage = ""
+
+
+func prepare_online_selection(next_scene: String) -> void:
+	_apply_battle_preparation(BattlePrep.online([], next_scene))
+
+
+func set_online_opponent_deck(cards: Array) -> void:
+	opponent_battle_deck = cards.duplicate()
+
+
+func clear_battle_preparation() -> void:
+	_apply_battle_preparation(BattlePrep.empty())
+	card_playtest_context = {}
+	tutorial_created_card = null
+
+
+func battle_preparation_snapshot() -> Dictionary:
+	return {
+		"mode": battle_mode, "difficulty": practice_ai_difficulty,
+		"player_deck": battle_deck.duplicate(), "opponent_deck": opponent_battle_deck.duplicate(),
+		"pending_p1": pending_hotseat_p1_deck.duplicate(), "select_mode": battle_select_mode,
+		"next_scene": battle_select_next_scene, "select_step": battle_select_step,
+		"return_to_waiting_room": return_to_waiting_room,
+	}
 
 
 func _ready():
@@ -190,6 +362,19 @@ static func deserialize_card(data: Dictionary) -> CardData:
 	return card
 
 
+static func deserialize_battle_deck_payload(value: Variant) -> Dictionary:
+	if not (value is Array):
+		return {"ok": false, "cards": [], "errors": [{"code": "deck_type", "path": [], "details": {}}]}
+	var deck_payload := {"id": "network", "name": "Network", "cards": value}
+	var errors := Schema.validate(Schema.KIND_DECK, deck_payload)
+	if not errors.is_empty():
+		return {"ok": false, "cards": [], "errors": errors}
+	var cards: Array = []
+	for data in value:
+		cards.append(deserialize_card(data))
+	return {"ok": true, "cards": cards, "errors": []}
+
+
 static func serialize_deck(deck: Dictionary) -> Dictionary:
 	var cards_data: Array = []
 	for card in deck.get("cards", []):
@@ -317,11 +502,7 @@ func _find_card_in_array(cards: Array, card_id: String) -> CardData:
 
 
 func find_card_by_id(card_id: String) -> CardData:
-	for deck in deck_library:
-		for card in deck.get("cards", []):
-			if card.card_id == card_id:
-				return card
-	return null
+	return LibraryRepo.find_card(deck_library, card_id)
 
 
 func find_card_index_by_id(card_id: String) -> int:
@@ -332,10 +513,7 @@ func find_card_index_by_id(card_id: String) -> int:
 
 
 func get_deck(deck_id: String) -> Dictionary:
-	for deck in deck_library:
-		if deck.get("id", "") == deck_id:
-			return deck
-	return {}
+	return LibraryRepo.find_deck(deck_library, deck_id)
 
 
 func get_current_deck() -> Dictionary:
@@ -359,11 +537,7 @@ func find_deck_card(deck_id: String, instance_id: String) -> CardData:
 
 
 func find_deck_card_index(deck_id: String, instance_id: String) -> int:
-	var cards := get_cards_for_deck(deck_id)
-	for i in range(cards.size()):
-		if cards[i].instance_id == instance_id:
-			return i
-	return -1
+	return LibraryRepo.find_instance_index(get_deck(deck_id), instance_id)
 
 
 func create_deck(deck_name: String, cards: Array = []) -> Dictionary:
@@ -449,10 +623,7 @@ func copy_cards_between_decks(source_deck_id: String, instance_ids: Array, targe
 
 
 func rebuild_card_library_cache() -> void:
-	card_library.clear()
-	for deck in deck_library:
-		for card in deck.get("cards", []):
-			card_library.append(card)
+	card_library = LibraryRepo.flatten(deck_library)
 
 
 func add_card_to_deck(deck_id: String, card_id: String) -> void:
@@ -488,19 +659,22 @@ func _serialize_card_for_share(card: CardData) -> Dictionary:
 
 
 func parse_share_package(json_string: String) -> Dictionary:
-	var json := JSON.new()
-	var error := json.parse(json_string)
-	if error != OK:
-		return {"ok": false, "error": json.get_error_message()}
-	var root = json.get_data()
-	if typeof(root) != TYPE_DICTIONARY:
-		return {"ok": false, "error": "Invalid JSON package."}
-	if not ["cards", "deck"].has(root.get("type", "")):
-		return {"ok": false, "error": "Unknown package type."}
-	return {"ok": true, "package": root}
+	var result := Schema.parse_and_migrate(Schema.KIND_SHARE_PACKAGE, json_string)
+	if not bool(result.get("ok", false)):
+		var issues: Array = result.get("errors", [])
+		return {"ok": false, "error": Locale.t("share.error_ugc_unsafe", [UgcSafetyPolicy.first_error_text(issues)])}
+	return {"ok": true, "package": result.get("data", {})}
+
+
+func _validate_share_package(package: Dictionary) -> Array:
+	var result := Schema.migrate_and_validate(Schema.KIND_SHARE_PACKAGE, package)
+	return result.get("errors", [])
 
 
 func prepare_import_cards(package: Dictionary, target_deck_id: String = "") -> Dictionary:
+	var package_issues := _validate_share_package(package)
+	if not package_issues.is_empty():
+		return {"incoming": [], "skipped": [], "conflicts": [], "id_map": {}, "invalid": true, "errors": package_issues}
 	var incoming: Array = []
 	var skipped: Array = []
 	var conflicts: Array = []
@@ -537,6 +711,9 @@ func apply_prepared_import(prepared: Dictionary, package: Dictionary, replace_li
 
 
 func import_package_as_new_deck(package: Dictionary, deck_name: String) -> Dictionary:
+	var package_issues := _validate_share_package(package)
+	if not package_issues.is_empty():
+		return {"added": 0, "deck_name": "", "invalid": true, "errors": package_issues}
 	var deck_cards: Array = []
 	var id_map := {}
 	var added_count: int = 0
@@ -630,15 +807,7 @@ func _save_backup_path() -> String:
 
 
 func _is_valid_library_json(json_string: String) -> bool:
-	var json := JSON.new()
-	if json.parse(json_string) != OK:
-		return false
-	var root = json.get_data()
-	if not root is Dictionary:
-		return false
-	# Version 1/2 saves may only have a top-level cards list; version 3 stores
-	# complete deck entries. Accept both so recovery never breaks migrations.
-	return root.has("decks") or root.has("cards")
+	return bool(Schema.parse_and_migrate(Schema.KIND_LIBRARY, json_string).get("ok", false))
 
 
 func _read_library_file(path: String) -> String:
@@ -654,9 +823,12 @@ func _read_library_file(path: String) -> String:
 
 func _load_library_file(path: String) -> bool:
 	var json_string := _read_library_file(path)
-	if json_string == "" or not _is_valid_library_json(json_string):
+	if json_string == "":
 		return false
-	card_library = deserialize_library(json_string)
+	var result := Schema.parse_and_migrate(Schema.KIND_LIBRARY, json_string)
+	if not bool(result.get("ok", false)):
+		return false
+	card_library = deserialize_library(JSON.stringify(result.get("data", {})))
 	return true
 
 
@@ -665,15 +837,28 @@ func _remove_file_if_present(path: String) -> void:
 		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
 
 
-func _read_json_dictionary(path: String) -> Dictionary:
-	var text := _read_library_file(path)
-	if text.is_empty():
-		return {}
-	var parsed = JSON.parse_string(text)
-	return parsed if parsed is Dictionary else {}
+func _read_json_dictionary(path: String, schema_kind: String = "") -> Dictionary:
+	var candidates := [path, path + ".bak"] if schema_kind != "" else [path]
+	for index in range(candidates.size()):
+		var candidate: String = candidates[index]
+		var text := _read_library_file(candidate)
+		if text.is_empty():
+			continue
+		if schema_kind == "":
+			var parsed = JSON.parse_string(text)
+			return parsed if parsed is Dictionary else {}
+		var result := Schema.parse_and_migrate(schema_kind, text)
+		if bool(result.get("ok", false)):
+			if index == 1:
+				_remove_file_if_present(path)
+				DirAccess.copy_absolute(ProjectSettings.globalize_path(candidate), ProjectSettings.globalize_path(path))
+			return result.get("data", {})
+	return {}
 
 
-func _write_json_atomic(path: String, payload: Dictionary) -> bool:
+func _write_json_atomic(path: String, payload: Dictionary, schema_kind: String = "") -> bool:
+	if schema_kind != "" and not bool(Schema.migrate_and_validate(schema_kind, payload).get("ok", false)):
+		return false
 	var encoded := JSON.stringify(payload)
 	if encoded.is_empty() or not (JSON.parse_string(encoded) is Dictionary):
 		return false
@@ -686,7 +871,11 @@ func _write_json_atomic(path: String, payload: Dictionary) -> bool:
 	file.store_string(encoded)
 	file.flush()
 	file.close()
-	if not (JSON.parse_string(_read_library_file(temp_path)) is Dictionary):
+	var disk_text := _read_library_file(temp_path)
+	if schema_kind != "" and not bool(Schema.parse_and_migrate(schema_kind, disk_text).get("ok", false)):
+		_remove_file_if_present(temp_path)
+		return false
+	if schema_kind == "" and not (JSON.parse_string(disk_text) is Dictionary):
 		_remove_file_if_present(temp_path)
 		return false
 	_remove_file_if_present(backup_path)
@@ -912,14 +1101,14 @@ func clear_library():
 # ============================================
 
 func queue_card_draft_recovery() -> void:
-	if card_draft.is_empty():
+	if skill_tutorial_active or card_draft.is_empty():
 		return
 	_draft_save_pending = true
 	_draft_save_at = Time.get_ticks_msec() / 1000.0 + 0.45
 
 
 func save_card_draft_recovery() -> bool:
-	if card_draft.is_empty():
+	if skill_tutorial_active or card_draft.is_empty():
 		return false
 	var payload := {
 		"version": DRAFT_RECOVERY_VERSION,
@@ -930,18 +1119,18 @@ func save_card_draft_recovery() -> bool:
 		"editing_instance_id": editing_instance_id,
 		"return_scene": card_editor_return_scene,
 	}
-	var ok := _write_json_atomic(DRAFT_RECOVERY_PATH, payload)
+	var ok := _write_json_atomic(DRAFT_RECOVERY_PATH, payload, Schema.KIND_DRAFT_RECOVERY)
 	if ok:
 		recovered_card_draft = payload.duplicate(true)
 	return ok
 
 
 func _load_card_draft_recovery() -> void:
-	var payload := _read_json_dictionary(DRAFT_RECOVERY_PATH)
-	if int(payload.get("version", 0)) != DRAFT_RECOVERY_VERSION or not (payload.get("draft", {}) is Dictionary):
+	var payload := _read_json_dictionary(DRAFT_RECOVERY_PATH, Schema.KIND_DRAFT_RECOVERY)
+	if payload.is_empty():
 		recovered_card_draft = {}
 		return
-	recovered_card_draft = payload
+	recovered_card_draft = EditorRepo.draft_from_payload(payload)
 
 
 func restore_card_draft_recovery() -> bool:
@@ -973,37 +1162,31 @@ func clear_card_draft_recovery() -> void:
 
 func save_custom_skill_template(name: String, skill: Dictionary) -> bool:
 	var clean_name := name.strip_edges()
-	if clean_name.is_empty() or skill.is_empty():
+	if clean_name.is_empty() or skill.is_empty() or not UgcSafetyPolicy.validate_skill(skill).is_empty():
 		return false
-	for entry in custom_skill_templates:
-		if str(entry.get("name", "")) == clean_name:
-			entry["skill"] = skill.duplicate(true)
-			return _save_skill_templates()
-	custom_skill_templates.append({"name": clean_name, "skill": skill.duplicate(true)})
+	custom_skill_templates = EditorRepo.upsert_template(custom_skill_templates, clean_name, skill)
 	return _save_skill_templates()
 
 
 func delete_custom_skill_template(index: int) -> bool:
 	if index < 0 or index >= custom_skill_templates.size():
 		return false
-	custom_skill_templates.remove_at(index)
+	custom_skill_templates = EditorRepo.remove_template(custom_skill_templates, index)
 	return _save_skill_templates()
 
 
 func _load_skill_templates() -> void:
-	var payload := _read_json_dictionary(SKILL_TEMPLATES_PATH)
-	var entries = payload.get("templates", [])
-	custom_skill_templates = entries.duplicate(true) if entries is Array else []
+	var payload := _read_json_dictionary(SKILL_TEMPLATES_PATH, Schema.KIND_SKILL_TEMPLATES)
+	custom_skill_templates = EditorRepo.templates_from_payload(payload)
 
 
 func _save_skill_templates() -> bool:
-	return _write_json_atomic(SKILL_TEMPLATES_PATH, {"version": 1, "templates": custom_skill_templates})
+	return _write_json_atomic(SKILL_TEMPLATES_PATH, {"version": 1, "templates": custom_skill_templates}, Schema.KIND_SKILL_TEMPLATES)
 
 
 func _load_match_history() -> void:
-	var payload := _read_json_dictionary(MATCH_HISTORY_PATH)
-	var entries = payload.get("matches", [])
-	match_history = entries.duplicate(true) if entries is Array else []
+	var payload := _read_json_dictionary(MATCH_HISTORY_PATH, Schema.KIND_MATCH_HISTORY)
+	match_history = HistoryRepo.from_payload(payload, MAX_MATCH_HISTORY)
 
 
 func add_match_history(entry: Dictionary) -> bool:
@@ -1012,10 +1195,8 @@ func add_match_history(entry: Dictionary) -> bool:
 	var stored := entry.duplicate(true)
 	stored["id"] = str(stored.get("id", make_id("match")))
 	stored["timestamp"] = int(stored.get("timestamp", Time.get_unix_time_from_system()))
-	match_history.push_front(stored)
-	if match_history.size() > MAX_MATCH_HISTORY:
-		match_history.resize(MAX_MATCH_HISTORY)
-	return _write_json_atomic(MATCH_HISTORY_PATH, {"version": 1, "matches": match_history})
+	match_history = HistoryRepo.add(match_history, stored, MAX_MATCH_HISTORY)
+	return _write_json_atomic(MATCH_HISTORY_PATH, HistoryRepo.payload(match_history), Schema.KIND_MATCH_HISTORY)
 
 
 func clear_match_history() -> bool:

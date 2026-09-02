@@ -1,9 +1,10 @@
-[gd_scene load_steps=9 format=3 uid="uid://c5vcnqomic4ja"]
+[gd_scene load_steps=10 format=3 uid="uid://c5vcnqomic4ja"]
 
 [ext_resource type="Script" uid="uid://ccd1flnpmy3lm" path="res://Main.gd" id="1_ig7tw"]
 [ext_resource type="PackedScene" uid="uid://cehdtymn5plrv" path="res://SlotUI.tscn" id="2_0xm2m"]
 [ext_resource type="Script" uid="uid://ja8vgee7rvlk" path="res://DiscardZone.gd" id="3_discard"]
 [ext_resource type="Script" path="res://ArrowLine.gd" id="4_arrow"]
+[ext_resource type="Script" path="res://BattleBackdrop2D.gd" id="6_backdrop2d"]
 
 [sub_resource type="Gradient" id="Gradient_enemy_aura"]
 offsets = PackedFloat32Array(0, 0.18, 0.5, 0.82, 1)
@@ -38,6 +39,16 @@ anchor_right = 1.0
 anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
+
+[node name="BattleBackdrop2D" type="Control" parent="CanvasLayer/MainBackground"]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("6_backdrop2d")
 
 [node name="EnemyAura" type="TextureRect" parent="CanvasLayer/MainBackground"]
 layout_mode = 1
@@ -324,6 +335,15 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 mouse_filter = 2
+
+[node name="HandRail" type="ColorRect" parent="CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock/HandArea"]
+layout_mode = 1
+anchors_preset = 10
+anchor_right = 1.0
+offset_bottom = 2.0
+grow_horizontal = 2
+mouse_filter = 2
+color = Color(0.2, 0.72, 0.84, 0.42)
 
 [node name="HandContent" type="MarginContainer" parent="CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock/HandArea"]
 layout_mode = 1

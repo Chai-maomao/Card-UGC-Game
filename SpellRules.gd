@@ -8,6 +8,7 @@ const REASON_NOT_SPELL := "not_spell"
 const REASON_NO_SKILL := "no_skill"
 const REASON_WRONG_TRIGGER := "wrong_trigger"
 const REASON_NO_MANA := "no_mana"
+const REASON_ENEMY_TARGET_TURN_ONE := "enemy_target_turn_one"
 
 
 static func is_spell(card: CardData) -> bool:
@@ -50,7 +51,7 @@ static func normalize_spell_card(card: CardData) -> void:
 		card.skills[0] = normalize_spell_skill(card, card.skills[0])
 
 
-static func can_cast(card: CardData, current_mana: int, skill_index: int = CAST_SKILL_INDEX) -> Dictionary:
+static func can_cast(card: CardData, current_mana: int, skill_index: int = CAST_SKILL_INDEX, turn_number: int = 2) -> Dictionary:
 	if not is_spell(card):
 		return {"ok": false, "reason": REASON_NOT_SPELL}
 	if skill_index < 0 or skill_index >= card.skills.size():
@@ -60,7 +61,35 @@ static func can_cast(card: CardData, current_mana: int, skill_index: int = CAST_
 		return {"ok": false, "reason": REASON_WRONG_TRIGGER}
 	if card.cost > current_mana:
 		return {"ok": false, "reason": REASON_NO_MANA}
+	if turn_number <= 1 and targets_enemy(skill):
+		return {"ok": false, "reason": REASON_ENEMY_TARGET_TURN_ONE, "skill": skill}
 	return {"ok": true, "reason": REASON_OK, "skill": skill, "needs_target": needs_target(skill)}
+
+
+static func targets_enemy(skill: Dictionary) -> bool:
+	return _effects_target_enemy(_effects_for(skill))
+
+
+static func _effects_target_enemy(effects: Array) -> bool:
+	for value in effects:
+		if not value is Dictionary:
+			continue
+		var effect: Dictionary = value
+		var target := str(effect.get("target", ""))
+		var side := str(effect.get("target_side", ""))
+		if target == "all_enemies":
+			return true
+		var can_select_field := target in [
+			SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES, SkillEngine.TARGET_ALL,
+			SkillEngine.TARGET_MALE, SkillEngine.TARGET_FEMALE, SkillEngine.TARGET_NONHUMAN,
+		]
+		if can_select_field and side in ["", SkillEngine.TARGET_SIDE_ENEMY, SkillEngine.TARGET_SIDE_ALL]:
+			return true
+		for branch in ["then_effects", "else_effects"]:
+			var nested = effect.get(branch, [])
+			if nested is Array and _effects_target_enemy(nested):
+				return true
+	return false
 
 
 static func needs_target(skill: Dictionary) -> bool:

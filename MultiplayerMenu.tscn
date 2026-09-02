@@ -41,7 +41,7 @@ autowrap_mode = 3
 
 [node name="DirectButton" type="Button" parent="CenterContainer/VBoxContainer" unique_id=9000006]
 layout_mode = 2
-text = "Direct Connect (P2P)"
+text = "LAN Multiplayer"
 
 [node name="DirectHintLabel" type="Label" parent="CenterContainer/VBoxContainer" unique_id=9000009]
 layout_mode = 2
