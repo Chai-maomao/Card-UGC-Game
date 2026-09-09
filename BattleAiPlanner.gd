@@ -47,6 +47,10 @@ static func generate_legal_actions(game: RefCounted) -> Array:
 				var skill: Dictionary = source.skills[skill_index]
 				if str(skill.get("trigger", "")) != SkillEngine.TRIGGER_ON_ACTIVATE:
 					continue
+				if source.skills_used.has(skill_index) or not SkillEngine.has_uses_remaining(source, skill, skill_index):
+					continue
+				if game.turn_number <= 1 and SkillRegistry.skill_changes_enemy_hp_or_presence(skill):
+					continue
 				_append_skill_actions(actions, game, source_slot, skill_index, skill)
 	actions.append({"type": "end_turn"})
 	return actions
@@ -68,6 +72,8 @@ static func choose_action(game: RefCounted, difficulty: String, rng: RandomNumbe
 	if scored.is_empty():
 		return {"type": "end_turn", "score": 0.0, "explanation": ["no_legal_action"]}
 	var level := difficulty if difficulty in DIFFICULTIES else "normal"
+	if level == "hard" and scored.size() > 1 and BattleSearch.needs_search(game):
+		return BattleSearch.choose(game, scored)
 	var pick := 0
 	if level == "normal" and scored.size() > 1 and rng.randf() < 0.15:
 		pick = 1
@@ -121,8 +127,9 @@ static func score_action(game: RefCounted, action: Dictionary) -> Dictionary:
 			var parasite: CardData = game.active_hand()[int(action["hand_index"])]
 			var target_field: BattleField = game.player_field if int(action["target_player"]) == 1 else game.player2_field
 			var host: CardData = target_field.slots[int(action["target_slot"])]
-			score += parasite.hp * 2.0 + host.effective_atk() * 0.5
-			factors.append("protect_host")
+			var protection_value := parasite.hp * 2.0 if parasite.parasite_absorbs_host_damage() else 0.0
+			score += protection_value + parasite.atk * 2.0 + host.effective_atk() * 0.5
+			factors.append("attach_parasite")
 		"end_turn":
 			score = -4.0 if _has_non_end_action(generate_legal_actions(game)) else 0.0
 			factors.append("end_turn")
@@ -130,7 +137,7 @@ static func score_action(game: RefCounted, action: Dictionary) -> Dictionary:
 
 
 static func _append_spell_actions(actions: Array, game: RefCounted, card: CardData, hand_index: int) -> void:
-	var check := SpellRules.can_cast(card, game.active_field().get_total_mana(), 0)
+	var check := SpellRules.can_cast(card, game.active_field().get_total_mana(), 0, game.turn_number)
 	if not bool(check.get("ok", false)):
 		return
 	var skill: Dictionary = check.get("skill", {})
@@ -157,6 +164,12 @@ static func _append_target_variants(actions: Array, game: RefCounted, base: Dict
 	for player in players:
 		var field: BattleField = game.player_field if player == 1 else game.player2_field
 		for slot in _live_slots(field):
+			# Directed enemy skills obey the same taunt gate as manual targeting.
+			# Area effects remain unaffected because they never enter this path.
+			if player == 3 - game.current_player and field.has_any_taunt():
+				var target: CardData = field.slots[slot]
+				if target == null or not target.has_taunt():
+					continue
 			var action := base.duplicate(true)
 			action["target_slot"] = slot
 			action["target_player"] = player

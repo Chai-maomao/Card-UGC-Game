@@ -15,7 +15,7 @@ var failures: Array = []
 func _ready() -> void:
 	Locale.language = "zh"
 	_test_card_serialize_round_trip()
-	_test_editor_state_round_trip()
+	await _test_editor_state_round_trip()
 	await get_tree().process_frame
 	if failures.is_empty():
 		print("TEST_SKILL_RICH_FIELDS_OK")
@@ -178,6 +178,10 @@ func _test_editor_state_round_trip() -> void:
 	_assert(int(e3.get("value_min", -1)) == 2, "editor value_min lost")
 	_assert(int(e3.get("value_max", -1)) == 5, "editor value_max lost")
 	_assert(int(e3.get("probability", -1)) == 30, "editor probability lost")
+
+	sed.queue_free()
+	await get_tree().process_frame
+	await get_tree().process_frame
 
 
 func _assert(cond: bool, message: String) -> void:

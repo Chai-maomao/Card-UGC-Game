@@ -1324,6 +1324,24 @@ func rpc_player_ready(card_data_list: Array):
 	EventBus.rpc_ready_received.emit(card_data_list)
 
 
+signal match_offer_received(offer: Dictionary)
+signal match_offer_accepted(hash_value: String)
+
+
+@rpc("any_peer", "call_remote", "reliable", 1)
+func rpc_match_offer(offer: Dictionary) -> void:
+	if not _accept_remote_player_claim(1) or JSON.stringify(offer).length() > 2048:
+		return
+	match_offer_received.emit(offer)
+
+
+@rpc("any_peer", "call_remote", "reliable", 1)
+func rpc_match_offer_accept(hash_value: String, player: int) -> void:
+	if not _accept_remote_player_claim(player) or hash_value.length() != 64:
+		return
+	match_offer_accepted.emit(hash_value)
+
+
 # Card art transfer. Direct P2P always allowed; relay mode only when the
 # dedicated server opted in (server_allows_card_art, sent in the lobby response).
 func send_card_arts(arts: Array) -> void:

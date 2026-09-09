@@ -117,7 +117,44 @@ static func _migrate(kind: String, data: Dictionary, from_version: int) -> Dicti
 				return _failure("unsupported_version", [], {"actual": from_version})
 		_:
 			pass
+	# Ability-slot normalization is idempotent and also runs for documents that
+	# already carry the current schema version. This keeps legacy local saves,
+	# shared decks and reconnect snapshots loadable after Slot 1 became
+	# Skill-or-Talent instead of permitting a fourth ability.
+	_normalize_ability_slots(data)
 	return {"ok": true, "data": data}
+
+
+static func _normalize_ability_slots(value: Variant) -> void:
+	if value is Dictionary:
+		var dict: Dictionary = value
+		if dict.has("skill1") and dict.has("talent"):
+			var talent = dict.get("talent", {})
+			if talent is Dictionary and not talent.is_empty():
+				dict["skill1"] = {}
+		if dict.has("skills") and dict.get("skills") is Array:
+			var skills: Array = dict.get("skills")
+			var talents: Array = []
+			var normal: Array = []
+			for skill in skills:
+				if skill is Dictionary and str(skill.get("skill_type", SkillRegistry.SKILL_TYPE_NORMAL)) == SkillRegistry.SKILL_TYPE_TALENT:
+					talents.append(skill)
+				else:
+					normal.append(skill)
+			if not talents.is_empty():
+				var normalized: Array = []
+				var start := maxi(0, normal.size() - 2)
+				for i in range(start, normal.size()):
+					normalized.append(normal[i])
+				normalized.append(talents[0])
+				dict["skills"] = normalized
+			elif normal.size() > UgcSafetyPolicy.MAX_SKILLS_PER_CARD:
+				dict["skills"] = normal.slice(0, UgcSafetyPolicy.MAX_SKILLS_PER_CARD)
+		for child in dict.values():
+			_normalize_ability_slots(child)
+	elif value is Array:
+		for child in value:
+			_normalize_ability_slots(child)
 
 
 static func _validate_library(value: Variant, errors: Array) -> void:
@@ -177,6 +214,7 @@ static func _validate_card(value: Variant, path: Array, errors: Array, parasite_
 	elif card.has("max_hp"):
 		_validate_integer(card.get("max_hp"), path + ["max_hp"], errors)
 	_validate_enum(card.get("card_type", "minion"), ["minion", "spell", "parasite"], path + ["card_type"], errors)
+	_validate_enum(card.get("parasite_damage_mode", CardData.PARASITE_DAMAGE_ABSORB), [CardData.PARASITE_DAMAGE_ABSORB, CardData.PARASITE_DAMAGE_LINKED], path + ["parasite_damage_mode"], errors)
 	_validate_enum(card.get("gender", "female"), ["female", "male", "nonhuman"], path + ["gender"], errors)
 	if card.has("card_id"):
 		_validate_string(card.get("card_id"), path + ["card_id"], 0, MAX_ID_LENGTH, errors)
@@ -211,6 +249,9 @@ static func _validate_skill(value: Variant, path: Array, errors: Array) -> void:
 	var skill: Dictionary = value
 	_validate_string(skill.get("skill_name", ""), path + ["skill_name"], 0, MAX_SKILL_NAME_LENGTH, errors)
 	_validate_enum(skill.get("trigger", ""), SkillRegistry.TRIGGER_META.keys(), path + ["trigger"], errors)
+	if str(skill.get("trigger", "")) == SkillRegistry.TRIGGER_ON_BOARD_CHANGED:
+		_validate_enum(skill.get("trigger_side", SkillRegistry.TARGET_SIDE_ALL), SkillRegistry.TARGET_SIDE_IDS, path + ["trigger_side"], errors)
+	_validate_enum(skill.get("skill_type", SkillRegistry.SKILL_TYPE_NORMAL), [SkillRegistry.SKILL_TYPE_NORMAL, SkillRegistry.SKILL_TYPE_TALENT], path + ["skill_type"], errors)
 	if skill.has("probability"):
 		_validate_integer(skill.get("probability"), path + ["probability"], errors)
 	var effects = skill.get("effects", null)
@@ -249,6 +290,8 @@ static func _validate_effects(effects: Array, path: Array, errors: Array) -> voi
 				_validate_enum(effect.get("target"), compatible_targets, item_path + ["target"], errors)
 			if effect.has("target_side"):
 				_validate_enum(effect.get("target_side"), SkillRegistry.TARGET_SIDE_IDS, item_path + ["target_side"], errors)
+			if effect_id == SkillRegistry.EFFECT_ZERO_COST and effect.has("cost_reduction_mode"):
+				_validate_enum(effect.get("cost_reduction_mode"), SkillRegistry.COST_REDUCTION_MODES, item_path + ["cost_reduction_mode"], errors)
 			if effect.has("buff_id") and str(effect.get("buff_id", "")) != "":
 				_validate_enum(effect.get("buff_id"), SkillRegistry.BUFF_IDS, item_path + ["buff_id"], errors)
 			for branch in ["then_effects", "else_effects"]:
@@ -264,6 +307,12 @@ static func _validate_share(value: Variant, errors: Array) -> void:
 	if int(root.get("version", 0)) != 2:
 		errors.append(_issue("version", ["version"], {"expected": 2}))
 	_validate_enum(root.get("type", ""), ["cards", "deck"], ["type"], errors)
+	if root.has("provenance"):
+		if not root.provenance is Dictionary:
+			errors.append(_issue("provenance_type", ["provenance"], {}))
+		else:
+			for field in [["author", 80], ["revision", 40], ["source", 240]]:
+				_validate_string(root.provenance.get(field[0], ""), ["provenance", field[0]], 0, field[1], errors)
 	var cards = root.get("cards", null)
 	if not (cards is Array) or cards.size() > MAX_CARDS_PER_DECK:
 		errors.append(_issue("cards_type_or_limit", ["cards"], {}))
@@ -286,7 +335,8 @@ static func _validate_draft_recovery(value: Variant, errors: Array) -> void:
 	for field in ["cost", "hp", "atk"]:
 		_validate_integer(draft.get(field, null), ["draft", field], errors)
 	_validate_enum(draft.get("card_type", "minion"), ["minion", "spell", "parasite"], ["draft", "card_type"], errors)
-	for key in ["skill1", "skill2", "skill3"]:
+	_validate_enum(draft.get("parasite_damage_mode", CardData.PARASITE_DAMAGE_ABSORB), [CardData.PARASITE_DAMAGE_ABSORB, CardData.PARASITE_DAMAGE_LINKED], ["draft", "parasite_damage_mode"], errors)
+	for key in ["skill1", "skill2", "skill3", "talent"]:
 		var skill = draft.get(key, {})
 		if not (skill is Dictionary):
 			errors.append(_issue("skill_type", ["draft", key], {}))

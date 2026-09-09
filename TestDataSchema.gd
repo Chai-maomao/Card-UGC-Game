@@ -25,6 +25,10 @@ func _test_all_schema_entry_points() -> void:
 	var card := _card()
 	var skill: Dictionary = card["skills"][0]
 	_assert(Schema.validate(Schema.KIND_CARD, card).is_empty(), "card schema rejected valid card")
+	var linked_parasite := card.duplicate(true)
+	linked_parasite["card_type"] = "parasite"
+	linked_parasite["parasite_damage_mode"] = CardData.PARASITE_DAMAGE_LINKED
+	_assert(Schema.validate(Schema.KIND_CARD, linked_parasite).is_empty(), "card schema rejected linked parasite mode")
 	_assert(Schema.validate(Schema.KIND_SKILL, skill).is_empty(), "skill schema rejected valid skill")
 	_assert(Schema.validate(Schema.KIND_DECK, {"id": "d", "name": "Deck", "cards": [card]}).is_empty(), "deck schema rejected valid deck")
 	var library := {"version": 3, "decks": [{"id": "d", "name": "Deck", "cards": [card]}]}
@@ -51,6 +55,10 @@ func _test_invalid_boundaries() -> void:
 	var unknown := _card()
 	unknown["skills"][0]["effects"][0]["effect"] = "run_arbitrary_code"
 	_assert(_has_code(Schema.validate(Schema.KIND_CARD, unknown), "unknown_effect"), "unknown effect was accepted")
+	var invalid_parasite := _card()
+	invalid_parasite["card_type"] = "parasite"
+	invalid_parasite["parasite_damage_mode"] = "invulnerable"
+	_assert(not Schema.validate(Schema.KIND_CARD, invalid_parasite).is_empty(), "unknown parasite damage mode was accepted")
 	_assert(not bool(Schema.parse_and_migrate(Schema.KIND_LIBRARY, "{\"version\":3,\"decks\":[").get("ok", true)), "partial JSON was accepted")
 	var oversized := "x".repeat(UgcSafety.MAX_SHARE_PACKAGE_BYTES + 1)
 	_assert(_has_code(Schema.parse_and_migrate(Schema.KIND_SHARE_PACKAGE, oversized).get("errors", []), "document_too_large"), "oversized document was not rejected before parsing")

@@ -24,6 +24,22 @@ func _ready() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 
+	# Reduce-cost uses the target field as a hand-selection shape, but its
+	# sentence intentionally has no target socket. It must therefore be valid
+	# immediately, including legacy blocks whose target was saved empty.
+	var cost_default: Dictionary = sed.call("_default_effect", SkillEngine.EFFECT_ZERO_COST)
+	_assert(str(cost_default.get("target", "")) == SkillEngine.TARGET_SINGLE,
+			"reduce-cost default must select one hand card")
+	_assert(str(cost_default.get("target_side", "")) == SkillEngine.TARGET_SIDE_ALL,
+			"reduce-cost default must not require a battlefield faction")
+	var legacy_cost := {
+		"effect": SkillEngine.EFFECT_ZERO_COST, "target": "", "target_side": "",
+		"value": 1, "cost_reduction_mode": SkillRegistry.COST_REDUCTION_TURN,
+	}
+	var legacy_issues: Array = []
+	SkillErrorChecker.new().walk_issues([legacy_cost], legacy_issues, [])
+	_assert(legacy_issues.is_empty(), "legacy reduce-cost block must not report a missing target")
+
 	sed.call("_add_effect_block", SkillEngine.EFFECT_DAMAGE)
 	await get_tree().process_frame
 	var block: SkillBlock = _find_effect_block(sed, SkillEngine.EFFECT_DAMAGE)
@@ -37,6 +53,7 @@ func _ready() -> void:
 	_assert(tgt_slot != null, "target slot missing")
 	_assert(side_slot != null, "side slot missing")
 	if tgt_slot != null:
+		_assert((tgt_slot.call("_ids") as Array).has(SkillEngine.TARGET_PLAYER), "damage target picker must offer the player target")
 		var t_chip: Button = null
 		for sub in tgt_slot.get_children():
 			if sub is Button:
@@ -44,6 +61,10 @@ func _ready() -> void:
 				break
 		if t_chip != null:
 			_assert(t_chip.text.contains("选择目标"), "unset target slot should show a pick placeholder (got: %s)" % t_chip.text)
+	var unit_only_probe := TargetSlot.new()
+	unit_only_probe.setup({"effect": SkillEngine.EFFECT_SHIELD}, "target")
+	_assert(not (unit_only_probe.call("_ids") as Array).has(SkillEngine.TARGET_PLAYER), "unit-only effect picker must hide the player target")
+	unit_only_probe.free()
 	# A fresh effect has no target yet: the side chip stays hidden until the
 	# user picks a shape that splits by faction (自身 needs no faction).
 	_assert(side_slot == null or not side_slot.visible, "side slot should be hidden while the target is unset")

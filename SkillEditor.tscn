@@ -139,6 +139,18 @@ layout_mode = 2
 text = "-"
 autowrap_mode = 3
 
+[node name="TriggerSideRow" type="HBoxContainer" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox"]
+layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="Label" type="Label" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/TriggerSideRow"]
+layout_mode = 2
+text = "Side:"
+
+[node name="Option" type="OptionButton" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/TriggerSideRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+
 [node name="SeparatorMid" type="HSeparator" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox" unique_id=2000015]
 layout_mode = 2
 

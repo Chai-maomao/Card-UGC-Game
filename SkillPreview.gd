@@ -746,8 +746,9 @@ func _run_drag_simulation() -> void:
 	# (random_count / probability header spins were removed for a cleaner block
 	# header; they are edited in the config form and surfaced as badges.)
 
-	# --- CHARM. Charm always pulls the target into hand at 0 cost — its
-	# numeric value is meaningless, so the block must NOT render a value slot.
+	# --- CHARM. Charm always pulls the target into hand at 0 cost for the
+	# current turn — its numeric value is meaningless, so the block must NOT
+	# render a value slot.
 	var charm_ed: Array = _sed.get("effect_data")
 	charm_ed.clear()
 	charm_ed.append({"effect": SkillEngine.EFFECT_CHARM, "target": SkillEngine.TARGET_SINGLE, "target_side": SkillEngine.TARGET_SIDE_ENEMY, "value": 1})
@@ -1124,6 +1125,14 @@ func _run_drag_simulation() -> void:
 		print("ROUNDTRIP_TEST_FAIL reloaded editor did not render nested tree")
 		get_tree().quit(1)
 		return
+	await get_tree().process_frame
+	var drag_stuck := get_viewport().gui_is_dragging()
+	var pointer_visible := Input.mouse_mode == Input.MOUSE_MODE_VISIBLE
+	print("POINTER_RELEASE_TEST dragging=", drag_stuck, " visible=", pointer_visible)
+	if drag_stuck or not pointer_visible:
+		print("POINTER_RELEASE_TEST_FAIL GUI drag retained the mouse after release")
+		get_tree().quit(1)
+		return
 
 	print("DRAG_TEST_PASS=true")
 	get_tree().quit(0)
@@ -1219,11 +1228,12 @@ func _find_target_slot(block: SkillBlock, kind: String) -> TargetSlot:
 func _find_banner_text() -> String:
 	var title: String = Locale.t("skill_editor.error_title")
 	var hint: String = Locale.t("skill_editor.error_empty_skill")
-	for c in _sed.find_children("*", "Label", true, false):
-		if c is Label:
-			var t: String = (c as Label).text
-			if t.contains(title) or t == hint:
-				return t
+	var candidates: Array[Node] = _sed.find_children("*", "Label", true, false)
+	candidates.append_array(_sed.find_children("*", "Button", true, false))
+	for c in candidates:
+		var t: String = (c as Label).text if c is Label else (c as Button).text
+		if t.contains(title) or t == hint:
+			return t
 	return ""
 
 

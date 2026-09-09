@@ -185,7 +185,13 @@ func _on_viewport_size_changed() -> void:
 	_apply_responsive_layout()
 
 
+var match_agreement: MatchAgreement
+
+
 func _ready():
+	match_agreement = MatchAgreement.new()
+	add_child(match_agreement)
+	match_agreement.setup(self)
 	host_btn.pressed.connect(_on_host_pressed)
 	join_btn.pressed.connect(_on_join_pressed)
 	back_btn.pressed.connect(_on_back_pressed)
@@ -424,7 +430,7 @@ func _show_waiting_room(initial_message: String = ""):
 		grid.add_child(card_box)
 		inner.add_child(cui)
 		cui.set_card(card_data)
-		cui.set_actions_visible(false)
+		cui.set_battle_layout_preview(true)
 		cui.apply_ui_scale(s)
 
 	start_btn = Button.new()
@@ -624,6 +630,13 @@ func _show_start_now_button() -> void:
 
 
 func _begin_start() -> void:
+	if NetworkManager.is_online:
+		match_agreement.begin()
+	else:
+		_continue_agreed_start()
+
+
+func _continue_agreed_start() -> void:
 	if _battle_starting:
 		return
 	_battle_starting = true

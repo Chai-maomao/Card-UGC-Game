@@ -2,6 +2,7 @@ class_name CardDatabase
 extends RefCounted
 
 const _TargetResolver = preload("res://SkillTargetResolver.gd")
+const PLAYTEST_SUPPORT_IDS := ["playtest:medic", "playtest:sparring"]
 
 # ============================================
 # Preset card database — all built-in cards defined here
@@ -17,8 +18,88 @@ static func player_starters() -> Array:
 	]
 
 
-# Default library seeded into a player's collection on first launch.
-# Five vanilla bodies plus five skill cards.
+# Beginner deck: 16 cards, cost curve 1/2/3/4 = 4/6/4/2.
+# Repeated roles make early draws reliable. Skilled units each teach a different
+# editor building block without asking a new player to parse multi-effect skills.
+# Return fresh instances so test battles and new collections never share runtime state.
+static func beginner_deck() -> Array:
+	var cards: Array = []
+	for _copy in range(2):
+		cards.append(CardData.new("侦察兵", 1, 1, 1, [
+			_fx_skill("侦察情报", SkillEngine.TRIGGER_ON_SUMMON, [
+				_fx(SkillEngine.TARGET_SELF, SkillEngine.EFFECT_DRAW_CARDS, 1),
+			]),
+		]))
+		cards.append(CardData.new("盾卫", 2, 4, 1, [
+			_fx_skill("守护阵线", SkillEngine.TRIGGER_ON_SUMMON, [
+				_fx(SkillEngine.TARGET_SELF, SkillEngine.EFFECT_ADD_BUFF, 1, SkillEngine.BUFF_TAUNT, 2),
+			]),
+		]))
+		cards.append(CardData.new("剑士", 2, 3, 2, []))
+		cards.append(CardData.new("重装骑士", 4, 6, 3, []))
+		cards.append(CardData.new("弓箭手", 3, 3, 2, [
+			_fx_skill("箭雨", SkillEngine.TRIGGER_ON_ACTIVATE, [
+				_fx(SkillEngine.TARGET_SIDES, SkillEngine.EFFECT_DAMAGE, 1, "", 0, 0, 100, SkillEngine.TARGET_SIDE_ENEMY),
+			]),
+		]))
+		cards.append(CardData.new("医护兵", 3, 4, 1, [
+			_fx_skill("包扎", SkillEngine.TRIGGER_ON_ACTIVATE, [
+				_fx(SkillEngine.TARGET_SINGLE, SkillEngine.EFFECT_HEAL, 2, "", 0, 0, 100, SkillEngine.TARGET_SIDE_ALLY),
+			]),
+		]))
+		cards.append(_spell_card("火花", 1, [
+			_fx_skill("火花", SkillEngine.TRIGGER_ON_CAST, [
+				_fx(SkillEngine.TARGET_SINGLE, SkillEngine.EFFECT_DAMAGE, 2, "", 0, 0, 100, SkillEngine.TARGET_SIDE_ENEMY),
+			]),
+		]))
+	cards.append(_spell_card("急救", 2, [
+		_fx_skill("急救", SkillEngine.TRIGGER_ON_CAST, [
+			_fx(SkillEngine.TARGET_SINGLE, SkillEngine.EFFECT_HEAL, 3, "", 0, 0, 100, SkillEngine.TARGET_SIDE_ALLY),
+		]),
+	]))
+	cards.append(_spell_card("补给", 2, [
+		_fx_skill("补给", SkillEngine.TRIGGER_ON_CAST, [
+			_fx(SkillEngine.TARGET_SELF, SkillEngine.EFFECT_DRAW_CARDS, 2),
+		]),
+	]))
+	return cards
+
+
+# Dedicated testing fixtures, not a balanced starter deck. The first two cards
+# are reserved for BOTH opening hands, so essential triggers never depend on RNG.
+static func playtest_deck() -> Array:
+	var cards: Array = []
+	for side in [SkillEngine.TARGET_SIDE_ALLY, SkillEngine.TARGET_SIDE_ENEMY]:
+		var ally: bool = side == SkillEngine.TARGET_SIDE_ALLY
+		var helper := CardData.new("测试医师" if ally else "测试陪练", 0, 30, 0 if ally else 1, [
+			_fx_skill("治疗友方" if ally else "治疗敌方", SkillEngine.TRIGGER_ON_ACTIVATE, [
+				_fx(SkillEngine.TARGET_SINGLE, SkillEngine.EFFECT_HEAL, 3, "", 0, 0, 100, side),
+			]),
+			_fx_skill("轻伤友方" if ally else "轻伤敌方", SkillEngine.TRIGGER_ON_ACTIVATE, [
+				_fx(SkillEngine.TARGET_SINGLE, SkillEngine.EFFECT_DAMAGE, 1, "", 0, 0, 100, side),
+			]),
+			_fx_skill("击杀友方" if ally else "击杀敌方", SkillEngine.TRIGGER_ON_ACTIVATE, [
+				_fx(SkillEngine.TARGET_SINGLE, SkillEngine.EFFECT_EXECUTE, 1000000, "", 0, 0, 100, side),
+			]),
+		])
+		helper.card_id = PLAYTEST_SUPPORT_IDS[0 if ally else 1]
+		helper.gender = "female" if ally else "male"
+		cards.append(helper)
+	# Extra bodies offer different gender/cost/attack targets and enough draw pile
+	# material for draw, discard and hand-count effects. They have no passive noise.
+	for index in range(12):
+		var body := CardData.new("测试靶标 %d" % (index + 1), index % 3, 12, 1 + index % 3, [])
+		body.gender = ["female", "male", "nonhuman"][index % 3]
+		cards.append(body)
+	cards.append(_spell_card("测试补牌", 0, [_fx_skill("补牌", SkillEngine.TRIGGER_ON_CAST, [
+		_fx(SkillEngine.TARGET_SELF, SkillEngine.EFFECT_DRAW_CARDS, 2),
+	])]))
+	cards.append(_parasite_card("测试寄生", 0, 3, 1))
+	return cards
+
+
+# Advanced examples used by practice opponents and skill regression tests.
+# Kept separate from the simpler first-launch deck; existing saves are untouched.
 static func starter_library() -> Array:
 	return [
 		# --- No-skill bodies (cost / hp / atk) ---
@@ -283,8 +364,8 @@ static func _fx_condition(target: String, effect: String, value: int, condition_
 	return eff
 
 
-# Build a parasite card: a card that attaches to a unit, grants its attack,
-# and loses parasite HP before the host takes directed damage.
+# Build a parasite card: it attaches to a unit and grants its attack. Built-in
+# cards retain the legacy default of intercepting directed damage.
 static func _parasite_card(sname: String, cost: int, hp: int, atk: int) -> CardData:
 	var card := CardData.new(sname, cost, hp, atk, [])
 	card.card_type = "parasite"

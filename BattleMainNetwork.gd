@@ -8,7 +8,7 @@ var _processed_command_ids: Dictionary = {}
 # ============================================
 
 func is_my_turn() -> bool:
-	if match_paused:
+	if match_paused or is_resolution_locked():
 		return false
 	if NetworkManager.is_online and not NetworkManager.is_authority() and NetworkManager.pending_game_command_count() > 0:
 		return false
@@ -358,7 +358,7 @@ func _on_rpc_game_intent(kind: String, payload: Dictionary, player: int, command
 		"summon":
 			_host_apply_summon(int(payload.get("hand_index", -1)), int(payload.get("slot_index", -1)), player)
 		"summon_skill":
-			_host_apply_summon_skill(int(payload.get("slot_index", -1)), int(payload.get("skill_index", -1)), int(payload.get("target_slot", -1)), player)
+			_host_apply_summon_skill(int(payload.get("slot_index", -1)), int(payload.get("skill_index", -1)), int(payload.get("target_slot", -1)), player, int(payload.get("target_player", 0)))
 		"attack":
 			_host_apply_attack(int(payload.get("source_slot", -1)), int(payload.get("target_slot", -1)), player)
 		"activate_skill":
@@ -394,28 +394,55 @@ func _host_apply_summon(hand_index: int, slot_index: int, player: int) -> void:
 		game.current_player = saved
 		return
 	game.current_player = saved
-	# on_summon skills are activated manually by the summoning player this turn;
-	# nothing auto-fires here. The summoned_this_turn flag travels in the state.
-	_refresh_hand_ui()
-	update_entire_screen()
 	_play_summon_feedback(_slot_ui_for_player(player, slot_index))
 	_record_feedback_event("summon", player, slot_index)
+	_host_auto_resolve_summon_skills(slot_index, player)
+	_refresh_hand_ui()
+	update_entire_screen()
 	_commit_authority_state("summon")
+	if player == _view_player():
+		_resume_auto_summon_targeting.call_deferred(slot_index)
 
 
-func _host_apply_summon_skill(slot_index: int, skill_index: int, target_slot: int, player: int) -> void:
+func _host_auto_resolve_summon_skills(slot_index: int, player: int) -> void:
+	var field := _field_for_player(player)
+	var card: CardData = field.slots[slot_index] if slot_index >= 0 and slot_index < field.slots.size() else null
+	if card == null:
+		return
+	for skill_index in range(card.skills.size()):
+		if not _summon_skill_is_pending(card, skill_index):
+			continue
+		var skill: Dictionary = card.skills[skill_index]
+		if _skill_needs_targeting(skill) and _summon_skill_has_live_manual_target(skill, player):
+			continue
+		_host_apply_summon_skill(slot_index, skill_index, -1, player, 0, false)
+		card = field.slots[slot_index]
+		if card == null:
+			break
+
+
+func _host_apply_summon_skill(slot_index: int, skill_index: int, target_slot: int, player: int, target_player: int = 0, commit_state: bool = true) -> void:
 	if match_paused or not NetworkManager.is_authority() or player != game.current_player:
 		return
-	var source_card: CardData = _field_for_player(player).slots[slot_index]
-	var target_card: CardData = _field_for_player(_opponent_of_player(player)).slots[target_slot] if target_slot >= 0 else null
-	var skill: Dictionary = source_card.skills[skill_index] if source_card != null and skill_index < source_card.skills.size() else {}
+	var source_field := _field_for_player(player)
+	if slot_index < 0 or slot_index >= source_field.slots.size():
+		return
+	var source_card: CardData = source_field.slots[slot_index]
+	if source_card == null or skill_index < 0 or skill_index >= source_card.skills.size():
+		return
+	var skill: Dictionary = source_card.skills[skill_index]
+	if not _summon_skill_is_pending(source_card, skill_index):
+		return
+	var resolved_target_player := target_player if target_player in [1, 2] else _opponent_of_player(player)
+	var target_field := _field_for_player(resolved_target_player)
+	var target_card: CardData = target_field.slots[target_slot] if target_slot >= 0 and target_slot < target_field.slots.size() else null
 	_begin_action_broadcast("summon_skill", player, source_card.card_name if source_card != null else Locale.t("battle.log.unit"), target_card.card_name if target_card != null else "", {"skill": skill.get("skill_name", Locale.t("battle.log.skill_word"))})
 	var saved = game.current_player
 	game.current_player = player
 	var card: CardData = game.active_field().slots[slot_index]
 	if card != null and not card.skills_used.has(skill_index):
 		card.skills_used.append(skill_index)
-	game.trigger_summon_skills(slot_index, target_slot, skill_index)
+	game.trigger_summon_skills(slot_index, target_slot, skill_index, resolved_target_player)
 	game.current_player = saved
 	_finish_action_broadcast()
 	_play_skill_cast_feedback(player, slot_index)
@@ -426,9 +453,13 @@ func _host_apply_summon_skill(slot_index: int, skill_index: int, target_slot: in
 	_refresh_hand_ui()
 	update_entire_screen()
 	if _check_and_show_game_over():
-		_commit_authority_state("game over")
+		if commit_state:
+			_commit_authority_state("game over")
 		return
-	_commit_authority_state("summon skill")
+	if commit_state:
+		_commit_authority_state("summon skill")
+		if player == _view_player():
+			_resume_auto_summon_targeting.call_deferred(slot_index)
 
 
 func _host_apply_attack(source_slot: int, target_slot: int, player: int) -> void:
@@ -462,9 +493,21 @@ func _host_apply_attack(source_slot: int, target_slot: int, player: int) -> void
 func _host_apply_skill(slot_index: int, skill_index: int, target_slot: int, player: int) -> void:
 	if match_paused or not NetworkManager.is_authority() or player != game.current_player:
 		return
-	var source_card: CardData = _field_for_player(player).slots[slot_index]
-	var target_card: CardData = _field_for_player(_opponent_of_player(player)).slots[target_slot] if target_slot >= 0 else null
-	var skill: Dictionary = source_card.skills[skill_index] if source_card != null and skill_index < source_card.skills.size() else {}
+	var source_field := _field_for_player(player)
+	if slot_index < 0 or slot_index >= source_field.slots.size():
+		return
+	var source_card: CardData = source_field.slots[slot_index]
+	if source_card == null or skill_index < 0 or skill_index >= source_card.skills.size():
+		return
+	var enemy_field := _field_for_player(_opponent_of_player(player))
+	var target_card: CardData = enemy_field.slots[target_slot] if target_slot >= 0 and target_slot < enemy_field.slots.size() else null
+	var skill: Dictionary = source_card.skills[skill_index]
+	if source_card == null or source_card.skills_used.has(skill_index) \
+			or str(skill.get("trigger", "")) != SkillEngine.TRIGGER_ON_ACTIVATE \
+			or not SkillEngine.has_uses_remaining(source_card, skill, skill_index):
+		return
+	if game.turn_number <= 1 and SkillRegistry.skill_changes_enemy_hp_or_presence(skill):
+		return
 	_begin_action_broadcast("skill", player, source_card.card_name if source_card != null else Locale.t("battle.log.unit"), target_card.card_name if target_card != null else "", {"skill": skill.get("skill_name", Locale.t("battle.log.skill_word"))})
 	var saved = game.current_player
 	game.current_player = player
@@ -969,196 +1012,21 @@ func _on_discard_pile_clicked():
 func _show_pile_viewer(cards: Array, title_text: String):
 	if cards.is_empty():
 		return
-
-	var s := _ui_scale()
-	var popup_layer := CanvasLayer.new()
-	popup_layer.layer = 100
-	add_child(popup_layer)
-
-	var bg := ColorRect.new()
-	bg.anchor_right = 1.0
-	bg.anchor_bottom = 1.0
-	var mat := ShaderMaterial.new()
-	mat.shader = load("res://blur.gdshader")
-	mat.set_shader_parameter("strength", 2.5)
-	bg.material = mat
-	bg.gui_input.connect(func(event: InputEvent):
-		if event is InputEventMouseButton and event.pressed:
-			popup_layer.queue_free()
-	)
-	popup_layer.add_child(bg)
-
-	var panel := Panel.new()
-	UITheme.apply_panel(panel, "gold")
-	panel.clip_contents = true
-	panel.anchor_left = 0.1
-	panel.anchor_right = 0.9
-	panel.anchor_top = 0.1
-	panel.anchor_bottom = 0.9
-	popup_layer.add_child(panel)
-	UITheme.animate_popup_enter(panel)
-
-	var vbox := VBoxContainer.new()
-	vbox.anchor_right = 1.0
-	vbox.anchor_bottom = 1.0
-	vbox.add_theme_constant_override("separation", int(10 * s))
-	panel.add_child(vbox)
-
-	var title := Label.new()
-	title.text = title_text
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	UITheme.apply_title(title, max(15, int(20 * s)))
-	vbox.add_child(title)
-
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_horizontal = Control.SIZE_EXPAND | Control.SIZE_FILL
-	scroll.size_flags_vertical = Control.SIZE_EXPAND | Control.SIZE_FILL
-	vbox.add_child(scroll)
-
-	var grid := GridContainer.new()
-	grid.columns = 4
-	grid.add_theme_constant_override("h_separation", int(8 * s))
-	grid.add_theme_constant_override("v_separation", int(8 * s))
-	scroll.add_child(grid)
-
-	for c in cards:
-		var cui := card_ui_scene.instantiate()
-		grid.add_child(cui)
-		cui.set_card(c)
-		if cui.has_method("set_skill_preview_visible"):
-			cui.call("set_skill_preview_visible", true)
-		else:
-			cui.set_actions_visible(false)
-		if cui.has_method("apply_ui_scale"):
-			cui.call("apply_ui_scale", s)
-
-	var close_btn := Button.new()
-	close_btn.text = Locale.t("battle.close")
-	close_btn.custom_minimum_size = Vector2(100, 40) * s
-	close_btn.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-	UITheme.apply_button(close_btn, "secondary")
-	close_btn.pressed.connect(popup_layer.queue_free)
-	vbox.add_child(close_btn)
+	preload("res://CardCollectionDialog.gd").show_cards(self, cards, title_text)
 
 
 
-# ============================================
-# Charm overflow
-# ============================================
-
-func _check_charm_overflow():
-	if _charm_popup_active:
+# Capacity is now enforced at the instant every card enters a hand. Keep this
+# as a defensive migration guard for old/local snapshots that may already
+# contain an oversized hand; never ask the player to repair engine state.
+func _check_charm_overflow() -> void:
+	if NetworkManager.is_online and not NetworkManager.is_authority():
 		return
-	var hand = _my_hand()
-	if hand.size() <= SkillEngine.MAX_HAND_SIZE:
-		return
-	var charmed_cards = hand.filter(func(c): return c != null and c.is_charmed())
-	if charmed_cards.is_empty():
-		return
-	var non_charmed = hand.size() - charmed_cards.size()
-	var max_picks = max(0, SkillEngine.MAX_HAND_SIZE - non_charmed)
-	if max_picks <= 0:
-		for c in charmed_cards:
-			hand.erase(c)
-		_refresh_hand_ui()
-		return
-	if max_picks >= charmed_cards.size():
+	for player in [1, 2]:
+		var hand := _hand_for_player(player)
 		while hand.size() > SkillEngine.MAX_HAND_SIZE:
-			hand.erase(charmed_cards.pop_back())
-		_refresh_hand_ui()
-		return
-	_show_charm_selection(charmed_cards, max_picks)
-
-
-func _show_charm_selection(charmed_cards: Array, max_picks: int):
-	_charm_popup_active = true
-	var popup_layer := CanvasLayer.new()
-	popup_layer.layer = 100
-	add_child(popup_layer)
-
-	var bg := ColorRect.new()
-	bg.anchor_right = 1.0
-	bg.anchor_bottom = 1.0
-	var mat := ShaderMaterial.new()
-	mat.shader = load("res://blur.gdshader")
-	mat.set_shader_parameter("strength", 2.5)
-	bg.material = mat
-	popup_layer.add_child(bg)
-
-	var panel := Panel.new()
-	UITheme.apply_panel(panel, "gold")
-	panel.anchor_left = 0.1
-	panel.anchor_right = 0.9
-	panel.anchor_top = 0.15
-	panel.anchor_bottom = 0.85
-	popup_layer.add_child(panel)
-	UITheme.animate_popup_enter(panel)
-
-	var vbox := VBoxContainer.new()
-	vbox.anchor_right = 1.0
-	vbox.anchor_bottom = 1.0
-	panel.add_child(vbox)
-
-	var title := Label.new()
-	title.text = Locale.t("battle.choose_keep")
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	UITheme.apply_title(title, 22)
-	vbox.add_child(title)
-
-	var info := Label.new()
-	info.text = Locale.t("battle.hand_remaining", [max_picks, max_picks])
-	info.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	info.add_theme_font_size_override("font_size", 16)
-	UITheme.apply_label(info, true)
-	vbox.add_child(info)
-
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_horizontal = Control.SIZE_EXPAND | Control.SIZE_FILL
-	scroll.size_flags_vertical = Control.SIZE_EXPAND | Control.SIZE_FILL
-	vbox.add_child(scroll)
-
-	var card_hbox := HBoxContainer.new()
-	card_hbox.alignment = BoxContainer.ALIGNMENT_CENTER
-	scroll.add_child(card_hbox)
-
-	var selected := {}
-	for c in charmed_cards:
-		selected[c] = false
-
-	var card_uis := []
-	for c in charmed_cards:
-		var cui := card_ui_scene.instantiate()
-		card_hbox.add_child(cui)
-		cui.set_card(c)
-		cui.modulate = Color(0.4, 0.4, 0.4)
-		card_uis.append(cui)
-
-		var click_handler = func(event: InputEvent, card_data: CardData, ui: Control):
-			if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
-				selected[card_data] = not selected[card_data]
-				if selected[card_data]:
-					ui.modulate = Color.WHITE
-				else:
-					ui.modulate = Color(0.4, 0.4, 0.4)
-				var sel_count := 0
-				for v in selected.values():
-					if v: sel_count += 1
-				if sel_count > max_picks:
-					selected[card_data] = false
-					ui.modulate = Color(0.4, 0.4, 0.4)
-		cui.gui_input.connect(click_handler.bind(c, cui))
-
-	var confirm_btn := Button.new()
-	confirm_btn.text = Locale.t("battle.confirm")
-	confirm_btn.custom_minimum_size = Vector2(120, 40)
-	vbox.add_child(confirm_btn)
-
-	confirm_btn.pressed.connect(func():
-		var hand = _my_hand()
-		for c in charmed_cards:
-			if not selected.get(c, false):
-				hand.erase(c)
-		_charm_popup_active = false
-		popup_layer.queue_free()
-		_refresh_hand_ui()
-	)
+			var overflow: CardData = hand.pop_back()
+			game.move_card_to_shared_discard(overflow)
+			EventBus.hand_entry_resolved.emit(overflow, player, "discard", "hand", {
+				"source_instance_id": overflow.instance_id,
+			})

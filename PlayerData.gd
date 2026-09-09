@@ -25,6 +25,7 @@ const SKILL_TEMPLATES_PATH := "user://skill_templates.json"
 const MATCH_HISTORY_PATH := "user://match_history.json"
 const MAX_MATCH_HISTORY := 100
 const DRAFT_RECOVERY_VERSION := 1
+const BEGINNER_DEFAULT_DECK_NAME := "新手默认"
 
 var card_library: Array = []
 var deck_library: Array = []
@@ -35,6 +36,7 @@ var editing_deck_id: String = ""
 var editing_instance_id: String = ""
 var card_draft: Dictionary = {}
 var editing_skill_index: int = 0
+var skill_focus_path: Array = []
 var card_editor_return_scene: String = "res://MainMenu.tscn"
 var return_to_waiting_room: bool = false
 var continue_editing_flag: bool = false  # "继续编辑"跳转标记
@@ -43,6 +45,7 @@ var battle_deck: Array = []
 var opponent_battle_deck: Array = []
 var battle_mode: String = "hotseat"
 var practice_ai_difficulty: String = "normal"
+var practice_challenge_id: String = ""
 var battle_select_mode: String = "practice"
 var battle_select_next_scene: String = "res://Main.tscn"
 var battle_select_step: int = 1
@@ -107,6 +110,19 @@ func configure_hotseat_battle(player_one_cards: Array, player_two_cards: Array) 
 	card_playtest_context = {}
 
 
+func configure_card_playtest(saved_card: CardData) -> void:
+	# Capture the editor and previous setup before replacing the battle decks.
+	begin_card_playtest(saved_card)
+	_apply_battle_preparation(BattlePrep.hotseat(CardDatabase.playtest_deck(), CardDatabase.playtest_deck()))
+
+
+func card_playtest_opening_card() -> CardData:
+	if battle_mode != "hotseat" or NetworkManager.is_online:
+		return null
+	var saved: Dictionary = card_playtest_context.get("test_card", {})
+	return deserialize_card(saved) if not saved.is_empty() else null
+
+
 func configure_online_battle(player_cards: Array, next_scene: String = "res://Lobby.tscn") -> void:
 	_apply_battle_preparation(BattlePrep.online(player_cards, next_scene))
 	card_playtest_context = {}
@@ -120,12 +136,12 @@ func prepare_tutorial_battle(card: CardData = null) -> void:
 	if card != null:
 		tutorial_created_card = card.duplicate_card()
 	var player_cards: Array = []
-	for starter in CardDatabase.player_starters():
+	for starter in CardDatabase.beginner_deck():
 		player_cards.append(starter.duplicate_card())
 	if tutorial_created_card != null:
 		player_cards.append(tutorial_created_card.duplicate_card())
 	var opponent_cards: Array = []
-	for starter in CardDatabase.player_starters():
+	for starter in CardDatabase.beginner_deck():
 		opponent_cards.append(starter.duplicate_card())
 	_apply_battle_preparation(BattlePrep.tutorial(player_cards, opponent_cards))
 	card_playtest_context = {}
@@ -159,6 +175,7 @@ func begin_card_tutorial() -> void:
 		"skill1": {},
 		"skill2": {},
 		"skill3": {},
+		"talent": {},
 	}
 	editing_index = -1
 	editing_deck_id = ""
@@ -305,6 +322,7 @@ static func serialize_card(card: CardData) -> Dictionary:
 		"gender": card.gender,
 		"art_path": card.art_path,
 		"card_type": card.card_type,
+		"parasite_damage_mode": card.parasite_damage_mode,
 		"skills": skills_data,
 		"has_acted": card.has_acted,
 		"has_attacked": card.has_attacked,
@@ -313,6 +331,9 @@ static func serialize_card(card: CardData) -> Dictionary:
 		"skills_used_count": card.skills_used_count.duplicate(),
 		"charmed_slot": card.charmed_slot,
 		"original_cost": card.original_cost,
+		"permanent_cost_reduction": card.permanent_cost_reduction,
+		"turn_cost_reduction": card.turn_cost_reduction,
+		"match_cost_delta": card.match_cost_delta,
 		"temp_hp": card.temp_hp,
 		"parasite_cards": parasites_data,
 		"status_effects": card.status_effects.duplicate(true),
@@ -340,6 +361,7 @@ static func deserialize_card(data: Dictionary) -> CardData:
 	card.art_path = data.get("art_path", "")
 	card.gender = data.get("gender", "female")
 	card.card_type = data.get("card_type", "minion")
+	card.parasite_damage_mode = CardData.normalize_parasite_damage_mode(str(data.get("parasite_damage_mode", CardData.PARASITE_DAMAGE_ABSORB)))
 	card.has_acted = bool(data.get("has_acted", false))
 	card.has_attacked = bool(data.get("has_attacked", false))
 	card.summoned_this_turn = bool(data.get("summoned_this_turn", false))
@@ -347,6 +369,9 @@ static func deserialize_card(data: Dictionary) -> CardData:
 	card.skills_used_count = data.get("skills_used_count", {})
 	card.charmed_slot = int(data.get("charmed_slot", -1))
 	card.original_cost = int(data.get("original_cost", -1))
+	card.permanent_cost_reduction = maxi(0, int(data.get("permanent_cost_reduction", 0)))
+	card.turn_cost_reduction = maxi(0, int(data.get("turn_cost_reduction", 0)))
+	card.match_cost_delta = int(data.get("match_cost_delta", 0))
 	card.temp_hp = int(data.get("temp_hp", 0))
 	card.parasite_cards.clear()
 	for parasite_data in data.get("parasite_cards", []):
@@ -357,6 +382,15 @@ static func deserialize_card(data: Dictionary) -> CardData:
 	card.field_atk_bonus = int(data.get("field_atk_bonus", 0))
 	card.immune_lethal = bool(data.get("immune_lethal", false))
 	card.zero_cost_until_deploy = bool(data.get("zero_cost_until_deploy", false))
+	# Old online snapshots represented every temporary discount as a zero-cost
+	# until-deploy flag. Preserve the discounted state, but migrate it to the
+	# new current-turn lifecycle.
+	if card.zero_cost_until_deploy and card.turn_cost_reduction <= 0:
+		card.turn_cost_reduction = maxi(0, card.base_cost - card.cost)
+	if card.is_charmed():
+		card.cost = 0
+	elif card.permanent_cost_reduction > 0 or card.turn_cost_reduction > 0 or card.match_cost_delta != 0:
+		card._recalculate_cost()
 	ensure_card_id(card)
 	ensure_instance_id(card)
 	return card
@@ -385,6 +419,7 @@ static func serialize_deck(deck: Dictionary) -> Dictionary:
 	return {
 		"id": deck.get("id", make_id("deck")),
 		"name": deck.get("name", "Deck"),
+		"provenance": SharePackage.metadata(deck.get("provenance", {})),
 		"cards": cards_data,
 	}
 
@@ -430,6 +465,7 @@ func deserialize_library(json_string: String) -> Array:
 			"id": deck_data.get("id", make_id("deck")),
 			"name": deck_data.get("name", Locale.t("deck.default_name") if Engine.has_singleton("Locale") else "默认卡组"),
 			"cards": deck_cards,
+			"provenance": SharePackage.metadata(deck_data.get("provenance", {})),
 		})
 	if deck_library.is_empty() and not old_cards_by_id.is_empty():
 		var migrated_cards: Array = []
@@ -488,6 +524,10 @@ func card_content_fingerprint(card: CardData) -> String:
 	data.erase("skills_used")
 	data.erase("charmed_slot")
 	data.erase("original_cost")
+	data.erase("permanent_cost_reduction")
+	data.erase("turn_cost_reduction")
+	data.erase("match_cost_delta")
+	data.erase("zero_cost_until_deploy")
 	data.erase("temp_hp")
 	data.erase("parasite_cards")
 	data.erase("status_effects")
@@ -549,6 +589,42 @@ func create_deck(deck_name: String, cards: Array = []) -> Dictionary:
 	current_deck_id = deck["id"]
 	save_library()
 	return deck
+
+
+# Replace only the named built-in beginner deck. User-created decks and the
+# current deck selection remain untouched; a missing beginner deck is created.
+func sync_beginner_default_deck(deck_name: String = BEGINNER_DEFAULT_DECK_NAME) -> Dictionary:
+	var previous_decks := deck_library.duplicate(true)
+	var previous_current_deck_id := current_deck_id
+	var fresh_cards: Array = []
+	for card: CardData in CardDatabase.beginner_deck():
+		fresh_cards.append(prepare_deck_card(card, false))
+
+	var matched_deck: Dictionary = {}
+	var created := false
+	for deck: Dictionary in deck_library:
+		if str(deck.get("name", "")) == deck_name:
+			matched_deck = deck
+			break
+	if matched_deck.is_empty():
+		matched_deck = {"id": make_id("deck"), "name": deck_name, "cards": fresh_cards}
+		deck_library.append(matched_deck)
+		created = true
+	else:
+		matched_deck["cards"] = fresh_cards
+
+	rebuild_card_library_cache()
+	if not save_library():
+		deck_library = previous_decks
+		current_deck_id = previous_current_deck_id
+		rebuild_card_library_cache()
+		return {"ok": false, "created": created, "deck_id": "", "card_count": 0}
+	return {
+		"ok": true,
+		"created": created,
+		"deck_id": str(matched_deck.get("id", "")),
+		"card_count": fresh_cards.size(),
+	}
 
 
 func find_deck_conflict(deck_id: String, card: CardData, ignore_instance_id: String = "") -> Dictionary:
@@ -636,14 +712,14 @@ func serialize_cards_for_share(cards: Array) -> String:
 	var cards_data: Array = []
 	for card in cards:
 		cards_data.append(_serialize_card_for_share(card))
-	return JSON.stringify({"version": SHARE_VERSION, "type": "cards", "cards": cards_data}, "\t")
+	return JSON.stringify(SharePackage.build(cards_data), "\t")
 
 
 func serialize_deck_for_share(deck: Dictionary) -> String:
 	var cards: Array = []
 	for card in deck.get("cards", []):
 		cards.append(_serialize_card_for_share(card))
-	return JSON.stringify({"version": SHARE_VERSION, "type": "deck", "deck": serialize_deck(deck), "cards": cards}, "\t")
+	return JSON.stringify(SharePackage.build(cards, serialize_deck(deck), deck.get("provenance", {})), "\t")
 
 
 func _serialize_card_for_share(card: CardData) -> Dictionary:
@@ -741,7 +817,7 @@ func import_package_as_new_deck(package: Dictionary, deck_name: String) -> Dicti
 	var final_name := deck_name.strip_edges()
 	if final_name == "":
 		final_name = Locale.t("share.import_deck_name")
-	var deck := {"id": make_id("deck"), "name": final_name, "cards": final_cards}
+	var deck := {"id": make_id("deck"), "name": final_name, "cards": final_cards, "provenance": SharePackage.metadata(package.get("provenance", {}))}
 	deck_library.append(deck)
 	current_deck_id = deck.get("id", "")
 	rebuild_card_library_cache()
@@ -972,7 +1048,7 @@ func load_library() -> void:
 
 # Populate a fresh collection with the default starter cards, then persist it.
 func _seed_starter_library() -> void:
-	card_library = CardDatabase.starter_library()
+	card_library = CardDatabase.beginner_deck()
 	_normalize_library()
 	print("Seeded starter library (%d cards)" % card_library.size())
 	save_library()
@@ -1209,6 +1285,8 @@ func clear_match_history() -> bool:
 
 func begin_card_playtest(saved_card: CardData) -> void:
 	card_playtest_context = {
+		"test_card": serialize_card(saved_card),
+		"battle_preparation": battle_preparation_snapshot(),
 		"draft": card_draft.duplicate(true),
 		"editing_index": editing_index,
 		"editing_deck_id": editing_deck_id,
@@ -1235,6 +1313,8 @@ func restore_after_card_playtest() -> bool:
 	card_editor_return_scene = str(card_playtest_context.get("return_scene", "res://MainMenu.tscn"))
 	battle_deck = (card_playtest_context.get("battle_deck", []) as Array).duplicate()
 	opponent_battle_deck = (card_playtest_context.get("opponent_deck", []) as Array).duplicate()
+	if card_playtest_context.has("battle_preparation"):
+		_apply_battle_preparation(card_playtest_context["battle_preparation"])
 	card_playtest_context = {}
 	queue_card_draft_recovery()
 	return true
@@ -1249,7 +1329,9 @@ func init_card_draft():
 		"card_type": "minion",
 		"art_path": "",
 		"skill1": {},
-		"skill2": {}
+		"skill2": {},
+		"skill3": {},
+		"talent": {}
 	}
 	queue_card_draft_recovery()
 
@@ -1271,12 +1353,13 @@ func init_spell_draft():
 			"probability": 100,
 			"effects": [{
 				"target": SkillEngine.TARGET_SINGLE,
-				"target_side": SkillEngine.TARGET_SIDE_ALL,
+				"target_side": SkillEngine.TARGET_SIDE_ENEMY,
 				"effect": SkillEngine.EFFECT_DAMAGE,
 				"value": 3,
 			}],
 		},
 		"skill2": {},
+		"talent": {},
 	}
 	queue_card_draft_recovery()
 
@@ -1290,6 +1373,7 @@ func init_parasite_draft():
 		"gender": "nonhuman",
 		"art_path": "",
 		"card_type": "parasite",
+		"parasite_damage_mode": CardData.PARASITE_DAMAGE_ABSORB,
 		"skill1": {
 			"skill_name": Locale.t("skill.parasite_default"),
 			"trigger": SkillEngine.TRIGGER_ON_ATTACK,
@@ -1302,18 +1386,13 @@ func init_parasite_draft():
 			}],
 		},
 		"skill2": {},
+		"talent": {},
 	}
 	queue_card_draft_recovery()
 
 
 func load_card_to_draft(card: CardData):
 	card_draft = card_to_draft(card)
-	if card.skills.size() >= 1:
-		card_draft["skill1"] = card.skills[0].duplicate(true)
-	if card.skills.size() >= 2:
-		card_draft["skill2"] = card.skills[1].duplicate(true)
-	if card.skills.size() >= 3:
-		card_draft["skill3"] = card.skills[2].duplicate(true)
 	queue_card_draft_recovery()
 
 
@@ -1325,17 +1404,30 @@ func card_to_draft(card: CardData) -> Dictionary:
 		"atk": card.atk,
 		"gender": card.gender,
 		"card_type": card.card_type,
+		"parasite_damage_mode": card.parasite_damage_mode,
 		"art_path": card.art_path,
 		"skill1": {},
 		"skill2": {},
-		"skill3": {}
+		"skill3": {},
+		"talent": {}
 	}
-	if card.skills.size() >= 1:
-		draft["skill1"] = SpellRules.normalize_spell_skill(card, card.skills[0]) if card.is_spell() else card.skills[0].duplicate(true)
-	if card.skills.size() >= 2 and not card.is_spell():
-		draft["skill2"] = card.skills[1].duplicate(true)
-	if card.skills.size() >= 3 and not card.is_spell():
-		draft["skill3"] = card.skills[2].duplicate(true)
+	var normal_skills: Array = []
+	for skill_value in card.skills:
+		if not skill_value is Dictionary:
+			continue
+		var skill: Dictionary = skill_value
+		if str(skill.get("skill_type", SkillEngine.SKILL_TYPE_NORMAL)) == SkillEngine.SKILL_TYPE_TALENT:
+			# Only one talent can occupy the first ability slot. Legacy cards with
+			# duplicates keep the first deterministic value.
+			if draft["talent"].is_empty():
+				draft["talent"] = skill.duplicate(true)
+			continue
+		normal_skills.append(SpellRules.normalize_spell_skill(card, skill) if card.is_spell() else skill.duplicate(true))
+	# Slot 1 is either Skill 1 or Talent. With a talent, the two remaining
+	# ordinary skills belong to slots 2 and 3; without one all three are skills.
+	var first_normal_slot := 2 if not draft["talent"].is_empty() else 1
+	for i in range(mini(normal_skills.size(), 4 - first_normal_slot)):
+		draft["skill%d" % (first_normal_slot + i)] = normal_skills[i]
 	return draft
 
 
@@ -1351,7 +1443,8 @@ func build_card_from_draft() -> CardData:
 	var is_spell: bool = card_type == "spell"
 	var is_parasite: bool = card_type == "parasite"
 	var skills: Array = []
-	if not card_draft.get("skill1", {}).is_empty():
+	var has_talent: bool = not card_draft.get("talent", {}).is_empty() and not is_spell
+	if not has_talent and not card_draft.get("skill1", {}).is_empty():
 		var skill1: Dictionary = card_draft["skill1"].duplicate(true)
 		if is_spell:
 			skill1 = SpellRules.normalize_spell_skill(_draft_spell_shell(card_name), skill1)
@@ -1360,6 +1453,12 @@ func build_card_from_draft() -> CardData:
 		skills.append(card_draft["skill2"].duplicate(true))
 	if not card_draft.get("skill3", {}).is_empty() and not is_spell and not is_parasite:
 		skills.append(card_draft["skill3"].duplicate(true))
+	if has_talent:
+		var talent: Dictionary = card_draft["talent"].duplicate(true)
+		talent["skill_type"] = SkillEngine.SKILL_TYPE_TALENT
+		talent["probability"] = 100
+		talent["max_uses"] = 0
+		skills.append(talent)
 
 	var card := CardData.new(
 		card_name,
@@ -1371,6 +1470,7 @@ func build_card_from_draft() -> CardData:
 	card.art_path = card_draft.get("art_path", "")
 	card.gender = card_draft.get("gender", "female")
 	card.card_type = card_type
+	card.parasite_damage_mode = CardData.normalize_parasite_damage_mode(str(card_draft.get("parasite_damage_mode", CardData.PARASITE_DAMAGE_ABSORB)))
 	SpellRules.normalize_spell_card(card)
 	ParasiteRules.normalize_parasite_card(card)
 	return card

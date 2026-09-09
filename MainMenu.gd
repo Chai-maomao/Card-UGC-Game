@@ -173,7 +173,7 @@ func _show_battle_hub_popup() -> void:
 	if battle_hub_layer and is_instance_valid(battle_hub_layer):
 		battle_hub_layer.queue_free()
 	var has_resume := NetworkManager.has_resumable_match_session()
-	var panel_height := 400.0 if has_resume else 344.0
+	var panel_height := 456.0 if has_resume else 400.0
 	var popup := UITheme.make_popup_layer(self, 110)
 	battle_hub_layer = popup["layer"] as CanvasLayer
 	var panel := Panel.new()
@@ -231,6 +231,9 @@ func _show_battle_hub_popup() -> void:
 		_on_tutorial_pressed("battle_hub")
 	)
 	box.add_child(guide_btn)
+	var challenge_btn := _battle_hub_button("组合挑战 / Skill challenges", "secondary")
+	challenge_btn.pressed.connect(func(): PracticeChallenges.show_picker(self))
+	box.add_child(challenge_btn)
 	var back_btn := _battle_hub_button(Locale.t("common.back"), "secondary")
 	back_btn.pressed.connect(_close_battle_hub)
 	box.add_child(back_btn)
@@ -470,6 +473,7 @@ func _show_card_type_popup():
 	box.add_child(title)
 	var minion_btn := Button.new()
 	minion_btn.text = Locale.t("editor.create_minion")
+	minion_btn.tooltip_text = SkillHelp.description("card_type", "minion")
 	minion_btn.custom_minimum_size = Vector2(280, 42)
 	UITheme.apply_button(minion_btn, "primary")
 	minion_btn.pressed.connect(func():
@@ -480,6 +484,7 @@ func _show_card_type_popup():
 	box.add_child(minion_btn)
 	var spell_btn := Button.new()
 	spell_btn.text = Locale.t("editor.create_spell")
+	spell_btn.tooltip_text = SkillHelp.description("card_type", "spell")
 	spell_btn.custom_minimum_size = Vector2(280, 42)
 	UITheme.apply_button(spell_btn, "primary")
 	spell_btn.pressed.connect(func():
@@ -490,6 +495,7 @@ func _show_card_type_popup():
 	box.add_child(spell_btn)
 	var parasite_btn := Button.new()
 	parasite_btn.text = Locale.t("editor.create_parasite")
+	parasite_btn.tooltip_text = SkillHelp.description("card_type", "parasite")
 	parasite_btn.custom_minimum_size = Vector2(280, 42)
 	UITheme.apply_button(parasite_btn, "primary")
 	parasite_btn.pressed.connect(func():

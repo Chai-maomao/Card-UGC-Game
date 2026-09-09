@@ -77,6 +77,7 @@ func _apply_slot_style() -> void:
 
 
 func _ready() -> void:
+	gui_input.connect(_on_rounding_input.bind(self))
 	if data.is_empty():
 		return
 	_apply_slot_style()
@@ -112,6 +113,12 @@ func _rebuild() -> void:
 	for child in get_children():
 		child.queue_free()
 	_mode = _slot_mode()
+	if _mode == "var":
+		tooltip_text = SkillHelp.description("value_var", str(data.get(var_field, "")))
+	elif _mode == "expr":
+		tooltip_text = SkillHelp.description("math", str(_expr_inner().get("op", "+")))
+	else:
+		tooltip_text = ""
 	match _mode:
 		"var":
 			_build_var_mode()
@@ -189,12 +196,42 @@ func _build_expr_mode() -> void:
 		changed.emit()
 	)
 	_set_param_pass(op_sel)
+	op_sel.gui_input.connect(_on_rounding_input.bind(op_sel))
+	op_sel.tooltip_text = Locale.t("skill_editor.rounding_hint", [Locale.t("skill_editor.rounding_" + str(inner.get("rounding", "round")))])
 	row.add_child(op_sel)
 	var slot_b := ValueSlot.new()
 	slot_b.setup(inner.get("b", {"kind": "num", "value": 1}), "value", "var_id", "kind", allow_negative, max_value)
 	slot_b.changed.connect(func(): changed.emit())
 	row.add_child(slot_b)
 	add_child(row)
+
+
+func _on_rounding_input(event: InputEvent, anchor: Control) -> void:
+	if _slot_mode() != "expr" or not event is InputEventMouseButton:
+		return
+	if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		anchor.accept_event()
+		_open_rounding_menu(anchor)
+
+
+func _open_rounding_menu(anchor: Control) -> PopupMenu:
+	var inner := _expr_inner()
+	var modes := ["round", "ceil", "floor"]
+	var menu := PopupMenu.new()
+	for index in range(modes.size()):
+		menu.add_radio_check_item(Locale.t("skill_editor.rounding_" + modes[index]), index)
+		menu.set_item_checked(index, str(inner.get("rounding", "round")) == modes[index])
+	menu.id_pressed.connect(func(index: int):
+		inner["rounding"] = modes[index]
+		_rebuild()
+		changed.emit()
+	)
+	menu.popup_hide.connect(menu.queue_free)
+	add_child(menu)
+	UITheme.apply_popup_menu(menu)
+	menu.position = Vector2i(anchor.get_global_rect().position + Vector2(0, anchor.size.y))
+	menu.popup()
+	return menu
 
 
 func _op_label(op: String) -> String:
@@ -278,6 +315,7 @@ func clear_to_number() -> void:
 		data.erase("op")
 		data.erase("a")
 		data.erase("b")
+		data.erase("rounding")
 	if not data.has(num_field):
 		data[num_field] = 1
 	_rebuild()
@@ -286,9 +324,11 @@ func clear_to_number() -> void:
 
 func _open_var_menu(anchor: Control) -> void:
 	var menu := PopupMenu.new()
+	menu.popup_hide.connect(menu.queue_free)
 	var ids: Array = SkillRegistry.VALUE_VAR_IDS
 	for i in range(ids.size()):
 		menu.add_item(Locale.term("value_var", ids[i]), i)
+		menu.set_item_tooltip(i, SkillHelp.description("value_var", ids[i]))
 	menu.id_pressed.connect(func(id: int):
 		data[var_field] = ids[id]
 		if kind_field != "":
@@ -332,7 +372,7 @@ func _slot_get_drag_data(_pos: Vector2):
 		_set_drag_preview_label(_op_label(op))
 		_dragging = true
 		_animate_slot(Vector2(0.94, 0.94), Color(0.72, 0.76, 0.84, 0.48), 0.07)
-		return {"type": "expr_block", "expr_kind": op, "from_slot": self}
+		return {"type": "expr_block", "expr_kind": op, "expression": inner.duplicate(true), "from_slot": self}
 	return null
 
 
@@ -369,6 +409,10 @@ func _drop_var(_pos: Vector2, payload) -> void:
 	# Move semantics: if the reporter came from another slot, clear that slot
 	# (Scratch-style dragging moves the reporter, it is not copied).
 	var src: Object = payload.get("from_slot", null)
+	if src == self:
+		return
+	if src is Node and src.is_ancestor_of(self):
+		return
 	if src != null and src != self and is_instance_valid(src) and src.has_method("clear_to_number"):
 		src.call("clear_to_number")
 	var ptype: String = str(payload.get("type", ""))
@@ -389,6 +433,7 @@ func _drop_var(_pos: Vector2, payload) -> void:
 	data.erase("op")
 	data.erase("a")
 	data.erase("b")
+	data.erase("rounding")
 	_rebuild()
 	changed.emit()
 	_play_drop_pulse()
@@ -410,10 +455,12 @@ func _drop_expr(payload) -> void:
 		data[expr_field] = inner
 	else:
 		inner = data
-	inner["kind"] = "expr"
-	inner["op"] = str(payload.get("expr_kind", "+"))
-	inner["a"] = {"kind": "num", "value": 1}
-	inner["b"] = {"kind": "num", "value": 1}
+	var expression: Dictionary = payload.get("expression", {
+		"kind": "expr", "op": str(payload.get("expr_kind", "+")), "rounding": "round",
+		"a": {"kind": "num", "value": 1}, "b": {"kind": "num", "value": 1},
+	})
+	inner.clear()
+	inner.merge(expression.duplicate(true))
 	data.erase(num_field)
 	data.erase(var_field)
 	data.erase(offset_field)

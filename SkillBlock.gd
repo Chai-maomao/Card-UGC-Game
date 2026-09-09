@@ -346,7 +346,8 @@ func _make_slot(parent: Node) -> VBoxContainer:
 
 
 # Event hat container: "当 攻击时" wrapping the whole skill body.
-func setup_event_block(trigger_key: String) -> void:
+func setup_event_block(trigger_key: String, trigger_side: String = SkillEngine.TARGET_SIDE_ALL) -> void:
+	tooltip_text = SkillHelp.description("trigger", trigger_key)
 	is_hat = true
 	_apply_style(trigger_color(), 10)
 	size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -355,12 +356,15 @@ func setup_event_block(trigger_key: String) -> void:
 	outer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	add_child(outer)
 	var name_text: String = Locale.term("trigger", trigger_key)
+	if trigger_key == SkillEngine.TRIGGER_ON_BOARD_CHANGED:
+		name_text = Locale.t("skill_editor.board_change_trigger", [Locale.term("board_side", trigger_side)])
 	outer.add_child(_make_label(Locale.t("skill_editor.block_trigger", [name_text]), 15))
 	body_container = _make_slot(outer)
 
 
 # Trigger hat block (standalone, used when the event block is hidden).
 func setup_hat(trigger_key: String) -> void:
+	tooltip_text = SkillHelp.description("trigger", trigger_key)
 	is_hat = true
 	_apply_style(trigger_color())
 	var name_text: String = Locale.term("trigger", trigger_key)
@@ -373,6 +377,7 @@ func setup_effect(eff: Dictionary, path: Array) -> void:
 	effect_path = path
 	_effect = eff
 	var effect_id: String = eff.get("effect", "")
+	tooltip_text = SkillHelp.description("effect", effect_id)
 	var category: String = str(SkillRegistry.effect_meta(effect_id).get("category", "utility"))
 	_apply_style(category_color(category))
 	_apply_socket_notch()
@@ -446,7 +451,7 @@ func _build_sentence_row(eff: Dictionary) -> HBoxContainer:
 				var _sync_side := func():
 					var tgt: String = str(eff.get("target", ""))
 					var needs_side: bool = tgt in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES,
-							SkillEngine.TARGET_ALL, SkillEngine.TARGET_MALE,
+							SkillEngine.TARGET_ALL, SkillEngine.TARGET_PLAYER, SkillEngine.TARGET_MALE,
 							SkillEngine.TARGET_FEMALE, SkillEngine.TARGET_NONHUMAN]
 					side_slot.visible = needs_side
 					if tgt in [SkillEngine.TARGET_SELF, SkillEngine.TARGET_SELF_SIDES]:
@@ -466,6 +471,8 @@ func _build_sentence_row(eff: Dictionary) -> HBoxContainer:
 				row.add_child(_make_buff_option(eff))
 			"duration":
 				row.add_child(_make_number_spin(eff, "duration"))
+			"cost_mode":
+				row.add_child(_make_cost_mode_option(eff))
 	return row
 
 
@@ -506,6 +513,24 @@ func _make_buff_option(eff: Dictionary) -> OptionButton:
 	opt.selected = _idx_of(str(eff.get("buff_id", SkillEngine.BUFF_ATK_BOOST)), SkillRegistry.BUFF_IDS)
 	opt.item_selected.connect(func(_i: int):
 		_effect["buff_id"] = SkillRegistry.BUFF_IDS[opt.selected]
+		_on_param_changed()
+	)
+	_set_param_pass(opt)
+	return opt
+
+
+func _make_cost_mode_option(eff: Dictionary) -> OptionButton:
+	var opt := OptionButton.new()
+	for style_name in ["normal", "hover", "pressed"]:
+		opt.add_theme_stylebox_override(style_name, _make_param_style())
+	opt.add_theme_color_override("font_color", Color.WHITE)
+	opt.add_theme_font_size_override("font_size", 12)
+	for i in range(SkillRegistry.COST_REDUCTION_MODES.size()):
+		var mode: String = SkillRegistry.COST_REDUCTION_MODES[i]
+		opt.add_item(Locale.term("cost_reduction_mode", mode), i)
+	opt.selected = _idx_of(str(eff.get("cost_reduction_mode", SkillRegistry.COST_REDUCTION_TURN)), SkillRegistry.COST_REDUCTION_MODES)
+	opt.item_selected.connect(func(_i: int):
+		_effect["cost_reduction_mode"] = SkillRegistry.COST_REDUCTION_MODES[opt.selected]
 		_on_param_changed()
 	)
 	_set_param_pass(opt)
@@ -588,6 +613,7 @@ func _idx_of(key: String, keys: Array) -> int:
 # if / if-else control block (C-shaped): "如果 [条件] 那么" header with a
 # condition reporter slot, plus an optional else slot for EFFECT_IF_ELSE.
 func setup_if_else(eff: Dictionary, path: Array) -> void:
+	tooltip_text = SkillHelp.description("effect", str(eff.get("effect", SkillEngine.EFFECT_IF)))
 	effect_path = path
 	_effect = eff
 	has_else = str(eff.get("effect", "")) == SkillEngine.EFFECT_IF_ELSE
@@ -627,6 +653,7 @@ func setup_if_else(eff: Dictionary, path: Array) -> void:
 # "Repeat N times" C-shaped control block: "重复 [N] 次" header plus a loop
 # body slot. The count is edited inline; the body is filled by dragging blocks.
 func setup_repeat_block(eff: Dictionary, path: Array) -> void:
+	tooltip_text = SkillHelp.description("effect", SkillEngine.EFFECT_REPEAT)
 	effect_path = path
 	_effect = eff
 	_apply_style(repeat_color(), 8)
@@ -957,6 +984,7 @@ func _on_cond_changed() -> void:
 
 # Stop block: halts the current block when executed.
 func setup_stop_block(path: Array) -> void:
+	tooltip_text = SkillHelp.description("effect", SkillEngine.EFFECT_STOP)
 	effect_path = path
 	_effect = {"effect": SkillEngine.EFFECT_STOP}
 	_apply_style(stop_color())
@@ -994,7 +1022,7 @@ func _effect_badges(eff: Dictionary) -> Array:
 	if prob < 100:
 		result.append(Locale.t("skill.chance", [prob]))
 	var rcount: int = int(eff.get("random_count", 0))
-	if rcount > 0:
+	if rcount > 0 and SkillRegistry.supports_random_count(str(eff.get("effect", ""))):
 		result.append(Locale.t("skill.max_targets", [rcount]))
 	if eff.has("value_var"):
 		result.append(Locale.term("value_var", eff.get("value_var", "")))

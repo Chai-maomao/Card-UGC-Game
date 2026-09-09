@@ -25,6 +25,11 @@ jobs:
           unzip -q /tmp/godot.zip -d /tmp/godot
           chmod +x /tmp/godot/Godot_v4.6.3-stable_linux.x86_64
 
+      - name: Install CJK fonts
+        # Card-layout tests render Chinese skill names; without a CJK font the
+        # fallback line metrics are degenerate and the chip column overflows.
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-noto-cjk
+
       - name: Run project tests
         run: ./scripts/run_tests.sh /tmp/godot/Godot_v4.6.3-stable_linux.x86_64
 

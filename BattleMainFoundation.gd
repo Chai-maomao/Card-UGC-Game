@@ -73,6 +73,10 @@ var _action_failed_events: Array = []
 var _end_turn_pulse: Tween = null
 var _turn_pop_tween: Tween = null
 var _turn_last_text: String = ""
+var _status_hud_state: Dictionary = {}
+var _status_value_tweens: Dictionary = {}
+var _suppress_status_feedback_once: bool = false
+var _pending_hand_entry_ids: Dictionary = {}
 var my_player: int = 0
 var remote_arrow_source: int = -1
 var remote_arrow_target: int = -1
@@ -89,6 +93,9 @@ var _resume_deadline: float = 0.0
 var _resume_next_request_at: float = 0.0
 var _resume_request_count: int = 0
 var _screen_refresh_queued: bool = false
+var _resolution_pending_steps: int = 0
+var _resolution_running: bool = false
+var _resolution_blocker: Control
 var _network_command_phase: String = ""
 var tutorial_controller: BattleTutorialController
 var _last_pile_counts := Vector2i(-1, -1)
@@ -142,63 +149,15 @@ func _apply_theme() -> void:
 
 
 func _apply_status_hud_theme(hud: Panel, enemy: bool, active: bool) -> void:
-	if hud == null:
-		return
-	var faction_color: Color = UITheme.COLOR_ENEMY if enemy else UITheme.COLOR_PLAYER
-	var border_color: Color = UITheme.COLOR_GOLD if active else faction_color
-	var fill_color := Color(0.105, 0.045, 0.08, 0.94) if enemy else Color(0.025, 0.095, 0.14, 0.94)
-	var glow := Color(border_color.r, border_color.g, border_color.b, 0.30 if active else 0.12)
-	hud.add_theme_stylebox_override("panel", UITheme.panel_style(
-		fill_color, border_color, 2 if active else 1, 9, glow, 4 if active else 2
-	))
-
-	var content := hud.get_node("Margin/Content") as HBoxContainer
-	var side_label := content.get_node("SideLabel") as Label
-	var hp_label := content.get_node("HpLabel") as Label
-	var mana_value_label := content.get_node("ManaLabel") as Label
-	var hand_label := content.get_node("HandLabel") as Label
-	for label in [side_label, hp_label, mana_value_label, hand_label]:
-		UITheme.apply_label(label)
-	side_label.add_theme_color_override("font_color", border_color.lightened(0.22))
-	hp_label.add_theme_color_override("font_color", Color(1.0, 0.50, 0.48))
-	mana_value_label.add_theme_color_override("font_color", Color(0.40, 0.86, 1.0))
-	hand_label.add_theme_color_override("font_color", UITheme.COLOR_TEXT_MUTED)
-
-	var hp_bar := content.get_node("HpBar") as ProgressBar
-	var mana_bar := content.get_node("ManaBar") as ProgressBar
-	_style_status_bar(hp_bar, Color(0.88, 0.24, 0.24))
-	_style_status_bar(mana_bar, Color(0.20, 0.72, 0.88))
+	BattleStatusHud._apply_status_hud_theme(hud, enemy, active)
 
 
 func _style_status_bar(bar: ProgressBar, fill_color: Color) -> void:
-	if bar == null:
-		return
-	bar.add_theme_stylebox_override("background", UITheme.panel_style(
-		Color(0.025, 0.03, 0.045, 0.90), Color(0.20, 0.24, 0.31, 0.85), 1, 7
-	))
-	bar.add_theme_stylebox_override("fill", UITheme.panel_style(
-		fill_color, fill_color.lightened(0.20), 1, 7
-	))
+	BattleStatusHud._style_status_bar(bar, fill_color)
 
 
 func _scale_status_hud(hud: Panel, scale_value: float) -> void:
-	if hud == null:
-		return
-	hud.custom_minimum_size = Vector2(720, 38) * scale_value
-	var margin := hud.get_node("Margin") as MarginContainer
-	margin.add_theme_constant_override("margin_left", max(7, int(14 * scale_value)))
-	margin.add_theme_constant_override("margin_right", max(7, int(14 * scale_value)))
-	var content := hud.get_node("Margin/Content") as HBoxContainer
-	content.add_theme_constant_override("separation", max(4, int(10 * scale_value)))
-	var label_size: int = max(9, int(13 * scale_value))
-	for label in [content.get_node("SideLabel"), content.get_node("HpLabel"), content.get_node("ManaLabel"), content.get_node("HandLabel")]:
-		(label as Label).add_theme_font_size_override("font_size", label_size)
-	content.get_node("SideLabel").custom_minimum_size = Vector2(72 * scale_value, 0)
-	content.get_node("HpLabel").custom_minimum_size = Vector2(108 * scale_value, 0)
-	content.get_node("HpBar").custom_minimum_size = Vector2(128, 14) * scale_value
-	content.get_node("ManaLabel").custom_minimum_size = Vector2(108 * scale_value, 0)
-	content.get_node("ManaBar").custom_minimum_size = Vector2(104, 14) * scale_value
-	content.get_node("HandLabel").custom_minimum_size = Vector2(104 * scale_value, 0)
+	BattleStatusHud._scale_status_hud(hud, scale_value)
 
 
 func _apply_responsive_layout() -> void:
@@ -430,6 +389,14 @@ func _commit_authority_state(label: String) -> void:
 
 
 func _apply_authority_state(state: Dictionary, label: String = "authority") -> void:
+	if label in ["initial", "reconnect recovery", "room server recovery"]:
+		_suppress_status_feedback_once = true
+	var feedback_events: Array = state.get("_feedback_events", [])
+	for event in feedback_events:
+		if str(event.get("kind", "")) == "hand_entry" \
+				and str(event.get("destination", "")) == "hand" \
+				and int(event.get("player", 0)) == _view_player():
+			_pending_hand_entry_ids[str(event.get("instance_id", ""))] = true
 	game.apply_initial_state(state)
 	NetworkManager.save_match_snapshot(game.export_initial_state())
 	_restore_local_art_paths()
@@ -443,7 +410,6 @@ func _apply_authority_state(state: Dictionary, label: String = "authority") -> v
 		_turn_ending = false
 		if end_turn_button:
 			end_turn_button.disabled = false
-	var feedback_events: Array = state.get("_feedback_events", [])
 	for ev in feedback_events:
 		_replay_feedback_event(ev)
 	# Replay floating text for damage/heal that happened on the authority.
@@ -451,56 +417,21 @@ func _apply_authority_state(state: Dictionary, label: String = "authority") -> v
 	for ev in hp_events:
 		_show_floating_for(int(ev.get("player", 0)), int(ev.get("slot", -1)), int(ev.get("delta", 0)))
 	_check_and_show_game_over()
+	# An authoritative summon may have left a choice-requiring battlecry
+	# pending for this client. Resume its target picker after the new card UI
+	# has been rebuilt; non-targeted summon skills were already resolved by
+	# the authority before this state was sent.
+	if has_method("_resume_auto_summon_targeting"):
+		call_deferred("_resume_auto_summon_targeting")
 	_print_authority_state(label)
 
 
 func _restore_local_art_paths() -> void:
-	if not NetworkManager.is_online:
-		return
-	var local_art_by_key := {}
-	# Opponent arts were downloaded during the lobby and saved to local net_arts
-	# paths in opponent_battle_deck. The authority state carries the authority's
-	# own (remote) art paths for these cards, so we must remap them to our local
-	# copies — otherwise the non-authority can't display the opponent's art.
-	for card in PlayerData.opponent_battle_deck:
-		if card is CardData and card.art_path != "":
-			local_art_by_key[_card_identity_key(card)] = card.art_path
-	# Our own cards take precedence on identity collisions.
-	for card in PlayerData.battle_deck:
-		if card is CardData and card.art_path != "":
-			local_art_by_key[_card_identity_key(card)] = card.art_path
-	for card in PlayerData.card_library:
-		if card is CardData and card.art_path != "":
-			local_art_by_key[_card_identity_key(card)] = card.art_path
-	_restore_art_paths_in_cards(game.player_hand, local_art_by_key)
-	_restore_art_paths_in_cards(game.player2_hand, local_art_by_key)
-	_restore_art_paths_in_cards(game.shared_deck, local_art_by_key)
-	_restore_art_paths_in_cards(game.shared_discard, local_art_by_key)
-	_restore_art_paths_in_slots(game.player_field.slots, local_art_by_key)
-	_restore_art_paths_in_slots(game.player2_field.slots, local_art_by_key)
-
-
-func _restore_art_paths_in_cards(cards: Array, local_art_by_key: Dictionary) -> void:
-	for card in cards:
-		_restore_art_path(card, local_art_by_key)
-
-
-func _restore_art_paths_in_slots(slots: Array, local_art_by_key: Dictionary) -> void:
-	for card in slots:
-		_restore_art_path(card, local_art_by_key)
-
-
-func _restore_art_path(card, local_art_by_key: Dictionary) -> void:
-	if not (card is CardData):
-		return
-	var key := _card_identity_key(card)
-	if not local_art_by_key.has(key):
-		return
-	card.art_path = local_art_by_key[key]
+	BattleArtResolver.restore(game)
 
 
 func _card_identity_key(card: CardData) -> String:
-	return "%s|%d|%d|%d|%s" % [card.card_name, card.cost, card.max_hp, card.atk, card.gender]
+	return BattleArtResolver._card_identity_key(card)
 
 
 # ============================================
@@ -578,6 +509,10 @@ func _ready():
 		EventBus.skill_roll_failed.connect(_on_skill_roll_failed)
 	if EventBus.has_signal("skill_safety_limit_hit"):
 		EventBus.skill_safety_limit_hit.connect(_on_skill_safety_limit_hit)
+	if EventBus.has_signal("skill_effect_resolved"):
+		EventBus.skill_effect_resolved.connect(_on_skill_effect_resolved)
+	if EventBus.has_signal("first_turn_effect_blocked"):
+		EventBus.first_turn_effect_blocked.connect(_on_first_turn_effect_blocked)
 	if EventBus.has_signal("shuffle_discard_into_deck"):
 		EventBus.shuffle_discard_into_deck.connect(_on_shuffle_discard_into_deck)
 	if EventBus.has_signal("view_discard_select"):
@@ -586,6 +521,8 @@ func _ready():
 		EventBus.view_deck_select.connect(_on_view_deck_select)
 	if EventBus.has_signal("make_zero_cost_select"):
 		EventBus.make_zero_cost_select.connect(_on_make_zero_cost_select)
+	if EventBus.has_signal("hand_entry_resolved"):
+		EventBus.hand_entry_resolved.connect(_on_hand_entry_resolved)
 
 	_refresh_hand_ui()
 	_apply_responsive_layout()
@@ -609,11 +546,72 @@ func _ready():
 			NetworkManager.rpc_request_initial_state.rpc()
 
 
+func is_resolution_locked() -> bool:
+	return _resolution_running or _resolution_pending_steps > 1
+
+
+func _on_skill_effect_resolved(_source: CardData, _effect_id: String, _target: Variant, _chain_depth: int) -> void:
+	if GamePreferences.animation_acceleration_enabled() or battle_finished:
+		return
+	_resolution_pending_steps += 1
+	if _resolution_pending_steps > 1:
+		_ensure_resolution_blocker()
+	if not _resolution_running:
+		_drain_resolution_steps.call_deferred()
+
+
+func _on_first_turn_effect_blocked(_source: CardData, _effect_id: String) -> void:
+	_spawn_toast(Locale.t("tip.no_enemy_hp_effect_turn1"), "warn", 1.8)
+
+
+func _ensure_resolution_blocker() -> void:
+	if _resolution_blocker != null and is_instance_valid(_resolution_blocker):
+		_resolution_blocker.visible = true
+		return
+	_resolution_blocker = Control.new()
+	_resolution_blocker.name = "ResolutionInputBlocker"
+	_resolution_blocker.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_resolution_blocker.mouse_filter = Control.MOUSE_FILTER_STOP
+	_resolution_blocker.z_index = 900
+	$CanvasLayer.add_child(_resolution_blocker)
+	var badge := PanelContainer.new()
+	badge.name = "Badge"
+	badge.anchor_left = 0.5
+	badge.anchor_right = 0.5
+	badge.anchor_top = 0.36
+	badge.anchor_bottom = 0.36
+	badge.offset_left = -150
+	badge.offset_right = 150
+	badge.offset_top = -24
+	badge.offset_bottom = 24
+	UITheme.apply_panel(badge, "gold")
+	_resolution_blocker.add_child(badge)
+	var label := Label.new()
+	label.text = Locale.t("battle.resolving")
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	UITheme.apply_label(label)
+	badge.add_child(label)
+
+
+func _drain_resolution_steps() -> void:
+	if _resolution_running:
+		return
+	_resolution_running = true
+	# A lone effect needs no artificial delay. With N effects there are N-1
+	# readable gaps, which is what the player experiences as ordered resolution.
+	if _resolution_pending_steps > 0:
+		_resolution_pending_steps -= 1
+	while _resolution_pending_steps > 0 and is_inside_tree():
+		_resolution_pending_steps -= 1
+		await get_tree().create_timer(0.28).timeout
+	_resolution_running = false
+	if _resolution_blocker != null and is_instance_valid(_resolution_blocker):
+		_resolution_blocker.visible = false
+
+
 func _on_game_draw_cards(amount: int):
-	var drawing_player: int = game.current_player
 	var drawn = game.draw_cards(amount)
-	if drawn.size() > 0:
-		_play_draw_fly_feedback(drawing_player, drawn.size())
 	for card_data in drawn:
 		var card_ui = card_ui_scene.instantiate()
 		_active_hand_container().add_child(card_ui)
@@ -621,7 +619,7 @@ func _on_game_draw_cards(amount: int):
 		_scale_control(card_ui, BASE_CARD_SIZE)
 		card_ui.is_hand_card = true
 		_apply_hand_castability(card_ui, card_data)
-		_play_hand_card_enter_feedback(card_ui)
+		_prepare_hand_entry_ui(card_ui, card_data)
 		_connect_hand_card_signals(card_ui)
 
 
@@ -736,6 +734,14 @@ func _build_action_log() -> void:
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	UITheme.apply_title(title, 16)
 	header.add_child(title)
+	if PlayerData.is_card_playtest_active():
+		var inspector := PlaytestInspector.new()
+		add_child(inspector)
+		inspector.setup(self, header)
+	if not PlayerData.practice_challenge_id.is_empty():
+		var challenge := ChallengeController.new()
+		add_child(challenge)
+		challenge.setup(self, header)
 	var clear_btn := Button.new()
 	clear_btn.text = Locale.t("battle.clear_log")
 	clear_btn.custom_minimum_size = Vector2(64, 26)
@@ -1003,6 +1009,32 @@ func _replay_feedback_event(event: Dictionary) -> void:
 		_show_turn_banner()
 	elif kind == "discard":
 		_play_discard_feedback()
+	elif kind == "hand_entry":
+		var meta: Dictionary = event.get("source_meta", {}).duplicate(true)
+		_play_hand_resolution_feedback(
+			_find_feedback_card(str(event.get("instance_id", ""))),
+			player,
+			str(event.get("destination", "")),
+			str(event.get("source", "generated")),
+			meta
+		)
+		if str(event.get("destination", "")) == "discard":
+			_spawn_toast(Locale.t("tip.hand_overflow", [str(event.get("card_name", Locale.t("battle.card")))]), "warn", 2.0)
+
+
+func _find_feedback_card(instance_id: String) -> CardData:
+	if instance_id == "":
+		return null
+	var collections: Array = [game.player_hand, game.player2_hand, game.shared_deck, game.shared_discard]
+	for cards: Array in collections:
+		for card in cards:
+			if card is CardData and card.instance_id == instance_id:
+				return card
+	for field: BattleField in [game.player_field, game.player2_field]:
+		for card in field.slots:
+			if card is CardData and card.instance_id == instance_id:
+				return card
+	return null
 
 
 func _slot_ui_for_player(player: int, slot: int) -> Control:
@@ -1051,11 +1083,16 @@ func _play_attack_feedback(player: int, source_slot: int, target_slot: int = -1)
 func _play_summon_feedback(slot_ui: Control) -> void:
 	if slot_ui == null or not is_instance_valid(slot_ui):
 		return
+	# Screen refreshes are coalesced and deferred. Summon callers mutate game
+	# state, queue the refresh, then request feedback; wait until the new CardUI
+	# actually exists instead of silently dropping the animation.
+	if _screen_refresh_queued:
+		_play_summon_feedback.call_deferred(slot_ui)
+		return
 	var card_ui = slot_ui.get("current_card_ui")
 	if card_ui == null or not is_instance_valid(card_ui):
 		return
-	var center: Vector2 = slot_ui.global_position + slot_ui.size / 2
-	BattleFx.summon_landing($CanvasLayer, card_ui, center, _ui_scale())
+	BattleFx.summon_landing($CanvasLayer, slot_ui, _ui_scale())
 
 
 # Swap transition for a move: both involved cards fly along a small arc to each
@@ -1079,20 +1116,20 @@ func _play_move_feedback(player: int, source_slot: int, target_slot: int, revers
 	if reverse:
 		# Post-swap: the moved card now sits in target_slot, the displaced card
 		# in source_slot — start each ghost from the slot it left.
-		_append_move_entry(entries, dst_ui, to_dst, src_center)
-		_append_move_entry(entries, src_ui, to_src, dst_center)
+		_append_move_entry(entries, dst_ui, to_dst, src_center, dst_ui)
+		_append_move_entry(entries, src_ui, to_src, dst_center, src_ui)
 	else:
 		# Pre-swap: the moved card sits in source_slot, the displaced card in target_slot.
-		_append_move_entry(entries, src_ui, to_dst)
-		_append_move_entry(entries, dst_ui, to_src)
+		_append_move_entry(entries, src_ui, to_dst, Vector2.INF, dst_ui)
+		_append_move_entry(entries, dst_ui, to_src, Vector2.INF, src_ui)
 	BattleFx.move_swap($CanvasLayer, entries, _ui_scale())
 
 
-func _append_move_entry(entries: Array, slot_ui: Control, delta: Vector2, start_pos: Vector2 = Vector2.INF) -> void:
+func _append_move_entry(entries: Array, slot_ui: Control, delta: Vector2, start_pos: Vector2 = Vector2.INF, target_slot: Control = null) -> void:
 	var card_ui = slot_ui.get("current_card_ui")
 	if card_ui == null or not is_instance_valid(card_ui):
 		return
-	entries.append([card_ui, delta, start_pos])
+	entries.append([card_ui, delta, start_pos, target_slot])
 
 
 # Lightweight turn-start banner (fade in -> hold -> fade out), replaces the
@@ -1100,8 +1137,13 @@ func _append_move_entry(entries: Array, slot_ui: Control, delta: Vector2, start_
 func _show_turn_banner() -> void:
 	if battle_finished:
 		return
-	var text := Locale.t("battle.your_turn") if game.current_player == _view_player() else Locale.t("battle.opponent_turn")
-	BattleFx.turn_banner($CanvasLayer, text, _ui_scale(), get_viewport_rect().size)
+	BattleFx.turn_banner($CanvasLayer, _turn_owner_text(), _ui_scale(), get_viewport_rect().size)
+
+
+func _turn_owner_text() -> String:
+	if not NetworkManager.is_online and PlayerData.battle_mode == "hotseat":
+		return Locale.t("battle.hotseat_turn", [game.current_player])
+	return Locale.t("battle.your_turn") if game.current_player == _view_player() else Locale.t("battle.opponent_turn")
 
 
 func _play_skill_cast_feedback(player: int, slot: int) -> void:
@@ -1406,7 +1448,10 @@ func _on_end_turn_pressed():
 func _on_enemy_slot_clicked(enemy_index: int):
 	pass
 
-func _on_make_zero_cost_select(count: int, _current_player: int, hand: Array, target: String, _random_count: int) -> void:
+func _on_make_zero_cost_select(reduction: int, cost_mode: String, _current_player: int, hand: Array, target: String, _random_count: int) -> void:
+	pass
+
+func _on_hand_entry_resolved(_card: CardData, _player: int, _destination: String, _source: String, _source_meta: Dictionary) -> void:
 	pass
 
 func _on_player_slot_clicked(index: int):
@@ -1431,6 +1476,12 @@ func _play_draw_fly_feedback(player: int, count: int) -> void:
 	pass
 
 func _play_hand_card_enter_feedback(card_ui: Control) -> void:
+	pass
+
+func _prepare_hand_entry_ui(_card_ui: Control, _card_data: CardData) -> void:
+	pass
+
+func _play_hand_resolution_feedback(_card: CardData, _player: int, _destination: String, _source: String, _source_meta: Dictionary) -> void:
 	pass
 
 func _play_opening_draw_feedback() -> void:
@@ -1481,7 +1532,7 @@ func _host_apply_skill(slot_index: int, skill_index: int, target_slot: int, play
 func _host_apply_summon(hand_index: int, slot_index: int, player: int) -> void:
 	pass
 
-func _host_apply_summon_skill(slot_index: int, skill_index: int, target_slot: int, player: int) -> void:
+func _host_apply_summon_skill(slot_index: int, skill_index: int, target_slot: int, player: int, target_player: int = 0, commit_state: bool = true) -> void:
 	pass
 
 func _parasite_intent_source(hand_index: int, target_player: int) -> int:

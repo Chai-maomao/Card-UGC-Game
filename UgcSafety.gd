@@ -7,7 +7,7 @@ const MAX_EFFECT_NESTING_DEPTH := 8
 const MAX_EXPRESSION_NESTING_DEPTH := 12
 const MAX_EFFECT_NODES_PER_SKILL := 100
 const MAX_EFFECT_NODES_PER_CARD := 200
-const MAX_SKILLS_PER_CARD := 3
+const MAX_SKILLS_PER_CARD := 3 # slot 1 is Skill 1 or Talent; slots 2-3 are skills
 const MAX_EXECUTED_EFFECT_NODES := 200
 const MAX_TRIGGER_CHAIN_DEPTH := 16
 const MAX_SHARE_PACKAGE_BYTES := 12 * 1024 * 1024
@@ -35,6 +35,12 @@ static func validate_serialized_card(card: Variant) -> Array:
 		return [_issue("skills_type", ["skills"], {})]
 	if skills.size() > MAX_SKILLS_PER_CARD:
 		issues.append(_issue("too_many_skills", ["skills"], {"limit": MAX_SKILLS_PER_CARD, "actual": skills.size()}))
+	var talent_count := 0
+	for value in skills:
+		if value is Dictionary and str(value.get("skill_type", SkillRegistry.SKILL_TYPE_NORMAL)) == SkillRegistry.SKILL_TYPE_TALENT:
+			talent_count += 1
+	if talent_count > 1:
+		issues.append(_issue("too_many_talents", ["skills"], {"limit": 1, "actual": talent_count}))
 	var total_nodes := 0
 	for index in range(mini(skills.size(), MAX_SKILLS_PER_CARD + 1)):
 		var skill_issues := validate_skill(skills[index])
@@ -52,11 +58,23 @@ static func validate_serialized_card(card: Variant) -> Array:
 
 static func validate_draft_card(draft: Dictionary) -> Array:
 	var serialized := {"skills": []}
-	for key in ["skill1", "skill2", "skill3"]:
+	var skill1 = draft.get("skill1", {})
+	var talent = draft.get("talent", {})
+	var conflict: bool = skill1 is Dictionary and not skill1.is_empty() and talent is Dictionary and not talent.is_empty()
+	if conflict:
+		serialized["skills"].append(skill1)
+	else:
+		var first = talent if talent is Dictionary and not talent.is_empty() else skill1
+		if first is Dictionary and not first.is_empty():
+			serialized["skills"].append(first)
+	for key in ["skill2", "skill3"]:
 		var skill = draft.get(key, {})
 		if skill is Dictionary and not skill.is_empty():
 			serialized["skills"].append(skill)
-	return validate_serialized_card(serialized)
+	var issues := validate_serialized_card(serialized)
+	if conflict:
+		issues.push_front(_issue("skill1_talent_conflict", ["skill1"], {}))
+	return issues
 
 
 static func count_effect_nodes(skill: Variant) -> int:

@@ -24,6 +24,7 @@ static func can_attach(card: CardData, target: CardData, current_mana: int) -> D
 static func normalize_parasite_card(card: CardData) -> void:
 	if not is_parasite(card):
 		return
+	card.parasite_damage_mode = CardData.normalize_parasite_damage_mode(card.parasite_damage_mode)
 	for i in range(card.skills.size() - 1, -1, -1):
 		var skill: Dictionary = card.skills[i]
 		if not is_passive_trigger(skill.get("trigger", "")):
@@ -64,6 +65,15 @@ static func release_all_to_discard(host: CardData, discard_pile: Array) -> void:
 	host.parasite_cards.clear()
 
 
+static func has_damage_absorber(host: CardData) -> bool:
+	if host == null:
+		return false
+	for parasite in host.parasite_cards:
+		if parasite is CardData and parasite.parasite_absorbs_host_damage():
+			return true
+	return false
+
+
 static func absorb_damage(target: CardData, amount: int, discard_pile: Array) -> int:
 	return absorb_damage_detail(target, amount, discard_pile).get("remaining", amount)
 
@@ -76,6 +86,8 @@ static func absorb_damage_detail(target: CardData, amount: int, discard_pile: Ar
 		var parasite: CardData = target.parasite_cards[i]
 		if parasite == null:
 			target.parasite_cards.remove_at(i)
+			continue
+		if not parasite.parasite_absorbs_host_damage():
 			continue
 		var before_hp: int = parasite.hp
 		parasite.hp = max(0, parasite.hp - amount)

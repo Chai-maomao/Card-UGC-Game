@@ -194,6 +194,22 @@ static func apply_input(control: Control) -> void:
 	control.add_theme_color_override("font_placeholder_color", COLOR_TEXT_MUTED)
 
 
+static func apply_popup_menu(menu: PopupMenu) -> void:
+	menu.add_theme_stylebox_override("panel", panel_style(COLOR_PANEL_DARK, COLOR_GOLD_SOFT, 1, 8, COLOR_SHADOW, 4))
+	menu.add_theme_stylebox_override("hover", panel_style(COLOR_BUTTON_HOVER, COLOR_BLUE, 1, 5))
+	var separator := StyleBoxLine.new()
+	separator.color = COLOR_BLUE.darkened(0.35)
+	separator.thickness = 1
+	menu.add_theme_stylebox_override("separator", separator)
+	menu.add_theme_color_override("font_color", COLOR_TEXT)
+	menu.add_theme_color_override("font_hover_color", Color(1, 0.94, 0.72))
+	menu.add_theme_color_override("font_disabled_color", COLOR_TEXT_MUTED.darkened(0.25))
+	menu.add_theme_color_override("font_accelerator_color", COLOR_TEXT_MUTED)
+	menu.add_theme_font_size_override("font_size", 14)
+	menu.add_theme_constant_override("v_separation", 8)
+	menu.add_theme_constant_override("h_separation", 12)
+
+
 static func apply_overlay(rect: ColorRect) -> void:
 	if rect == null:
 		return

@@ -101,7 +101,7 @@ func _add_card_box(card_data: CardData) -> void:
 	var card_ui_instance = card_ui_scene.instantiate()
 	box.add_child(card_ui_instance)
 	card_ui_instance.set_card(card_data)
-	card_ui_instance.set_actions_visible(false)
+	card_ui_instance.set_battle_layout_preview(true)
 	card_ui_instance.apply_ui_scale(s)
 
 

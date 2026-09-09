@@ -19,6 +19,9 @@ const _TutorialController = preload("res://SkillEditorTutorialController.gd")
 @onready var skill_name_label = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/SkillNameLabel
 @onready var trigger_label = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/TriggerLabel
 @onready var trigger_preview_label = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/TriggerPreviewLabel
+@onready var trigger_side_row = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/TriggerSideRow
+@onready var trigger_side_label = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/TriggerSideRow/Label
+@onready var trigger_side_select = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/TriggerSideRow/Option
 @onready var settings_label = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/SettingsLabel
 @onready var settings_row = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/SettingsRow
 @onready var effects_label = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/EffectsLabel
@@ -36,6 +39,7 @@ const _TutorialController = preload("res://SkillEditorTutorialController.gd")
 var effect_data: Array = []        # [{target, effect, value, buff_id, duration, ...}, ...]
 var editing_effect_path: Array = [] # [] = none; last element -1 = append to the list at path
 var current_trigger_key: String = SkillEngine.TRIGGER_ON_ATTACK
+var current_trigger_side: String = SkillEngine.TARGET_SIDE_ALL
 var skill_prob_spin: SpinBox       # skill-level probability
 var max_uses_spin: SpinBox         # max uses per game (限定技)
 var skill_type_select: OptionButton # normal or talent
@@ -49,6 +53,9 @@ var _undo_btn: Button
 var _redo_btn: Button
 var _template_btn: Button
 var skill_tutorial_controller: SkillEditorTutorialController
+var _drag_in_progress: bool = false
+var _script_refresh_pending: bool = false
+var _palette_drop_overlay: Control
 
 
 # ============================================
@@ -60,6 +67,7 @@ func _editor_state() -> Dictionary:
 	# restore settings-level edits too, not just the block list.
 	return {
 		"trigger": current_trigger_key,
+		"trigger_side": current_trigger_side,
 		"effects": effect_data.duplicate(true),
 		"probability": int(skill_prob_spin.value) if skill_prob_spin != null else 100,
 		"max_uses": int(max_uses_spin.value) if max_uses_spin != null else 0,
@@ -69,6 +77,7 @@ func _editor_state() -> Dictionary:
 
 func _apply_state(s: Dictionary) -> void:
 	current_trigger_key = str(s.get("trigger", current_trigger_key))
+	current_trigger_side = str(s.get("trigger_side", current_trigger_side))
 	effect_data = (s.get("effects", []) as Array).duplicate(true)
 	if skill_prob_spin != null:
 		skill_prob_spin.set_value_no_signal(float(s.get("probability", 100)))
@@ -76,8 +85,11 @@ func _apply_state(s: Dictionary) -> void:
 		max_uses_spin.set_value_no_signal(float(s.get("max_uses", 0)))
 	if skill_type_select != null:
 		skill_type_select.select(int(s.get("skill_type", 0)))
+	_sync_trigger_side_select()
 	_update_trigger_preview()
 	_update_skill_type_visibility()
+	if _is_talent_mode():
+		_build_palette()
 	_refresh_script()
 	_update_summary()
 	_refresh_undo_buttons()
@@ -117,6 +129,12 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	var key_ev := event as InputEventKey
 	if key_ev == null or not key_ev.pressed or key_ev.echo:
 		return
+	# Escape is also an emergency way out of an interrupted GUI drag. This is
+	# intentionally handled before the Ctrl shortcut filter below.
+	if key_ev.keycode == Key.KEY_ESCAPE and _is_editor_drag_active():
+		_recover_pointer_after_drag()
+		accept_event()
+		return
 	if not key_ev.ctrl_pressed:
 		return
 	if key_ev.keycode == Key.KEY_Z:
@@ -138,11 +156,15 @@ func _is_parasite() -> bool:
 	return PlayerData.card_draft.get("card_type", "minion") == "parasite"
 
 
+func _is_talent_mode() -> bool:
+	return PlayerData.editing_skill_index == 3 and not _is_spell()
+
+
 func _apply_texts() -> void:
 	var skill_index: int = PlayerData.editing_skill_index
 	var is_spell := _is_spell()
-	title_label.text = Locale.t("skill_editor.title_spell") if is_spell else Locale.t("skill_editor.title", [skill_index + 1])
-	help_label.text = Locale.t("skill_editor.help_spell" if is_spell else "skill_editor.help")
+	title_label.text = Locale.t("skill_editor.title_spell") if is_spell else (Locale.t("skill_editor.title_talent") if _is_talent_mode() else Locale.t("skill_editor.title", [skill_index + 1]))
+	help_label.text = Locale.t("skill_editor.help_spell" if is_spell else ("skill_editor.help_talent" if _is_talent_mode() else "skill_editor.help"))
 	palette_title.text = Locale.t("skill_editor.palette_title")
 	palette_search.placeholder_text = Locale.t("skill_editor.palette_search")
 	effects_label.text = Locale.t("skill_editor.effects" if not is_spell else "skill_editor.spell_effects")
@@ -157,6 +179,7 @@ func _apply_texts() -> void:
 	skill_name_input.visible = not is_spell
 	trigger_label.visible = not is_spell
 	trigger_preview_label.visible = not is_spell
+	trigger_side_label.text = Locale.t("skill_editor.trigger_side")
 	if not is_spell:
 		skill_name_label.text = Locale.t("skill_editor.name")
 		skill_name_input.placeholder_text = Locale.t("skill_editor.name_placeholder")
@@ -183,7 +206,7 @@ func _apply_responsive_layout() -> void:
 	panel.offset_right = 460.0 * s
 	panel.offset_bottom = 320.0 * s
 	$Panel/Margin/HBox/PalettePanel.custom_minimum_size = Vector2(250 * s, 0)
-	for label in [title_label, help_label, skill_name_label, trigger_label, trigger_preview_label,
+	for label in [title_label, help_label, skill_name_label, trigger_label, trigger_preview_label, trigger_side_label,
 			settings_label, effects_label, effects_hint_label, preview_label, skill_summary, palette_title]:
 		if label:
 			var is_title: bool = label == title_label or label == palette_title
@@ -217,8 +240,9 @@ func _apply_theme() -> void:
 	UITheme.apply_button(cancel_button, "secondary")
 	for soft_label in [help_label, trigger_preview_label, skill_summary]:
 		UITheme.apply_label(soft_label, true)
-	for label in [skill_name_label, trigger_label, settings_label, effects_label, effects_hint_label, preview_label]:
+	for label in [skill_name_label, trigger_label, trigger_side_label, settings_label, effects_label, effects_hint_label, preview_label]:
 		UITheme.apply_label(label)
+	UITheme.apply_button(trigger_side_select, "secondary")
 	# Entrance: fade the whole editor panel in (full-rect, no scale).
 	UITheme.fade_enter($Panel, 0.22)
 
@@ -263,8 +287,11 @@ func _select_trigger(trigger_key: String) -> void:
 	if skill_tutorial_controller and not skill_tutorial_controller.allows("trigger", {"id": trigger_key}):
 		return
 	current_trigger_key = trigger_key
+	_update_trigger_side_visibility()
 	_update_trigger_preview()
 	_update_skill_type_visibility()
+	if _is_talent_mode():
+		_build_palette()
 	_refresh_script()
 	_update_summary()
 	_maybe_snapshot()
@@ -288,6 +315,37 @@ func _add_effect_block(effect_id: String) -> void:
 # ============================================
 
 func _refresh_script() -> void:
+	# Dropping a block mutates the data while Godot is still finishing the GUI
+	# drag callback. Rebuilding here would queue the drag source and target for
+	# deletion before the engine has released its Windows mouse capture. Defer
+	# the rebuild until the input callback unwinds and DRAG_END can finish.
+	if is_inside_tree() and get_viewport() != null and get_viewport().gui_is_dragging():
+		_queue_script_refresh_after_drag()
+		return
+	_refresh_script_now()
+
+
+func _queue_script_refresh_after_drag() -> void:
+	if _script_refresh_pending or not is_inside_tree():
+		return
+	_script_refresh_pending = true
+	_flush_script_refresh_after_drag.call_deferred()
+
+
+func _flush_script_refresh_after_drag() -> void:
+	_script_refresh_pending = false
+	if not is_inside_tree():
+		return
+	# A lost release event must not keep the editor waiting forever. The data
+	# mutation already completed, so cancelling a still-active drag is safe.
+	if get_viewport() != null and get_viewport().gui_is_dragging():
+		get_viewport().gui_cancel_drag()
+	_drag_in_progress = false
+	_restore_pointer_visibility()
+	_refresh_script_now()
+
+
+func _refresh_script_now() -> void:
 	for child in effects_list.get_children():
 		child.queue_free()
 	if _is_spell():
@@ -297,7 +355,7 @@ func _refresh_script() -> void:
 	else:
 		# The whole skill lives inside one event hat block (Scratch-style).
 		var event_block := SkillBlock.new()
-		event_block.setup_event_block(current_trigger_key)
+		event_block.setup_event_block(current_trigger_key, current_trigger_side)
 		effects_list.add_child(event_block)
 		_render_effects(effect_data, event_block.body_container, [], true)
 		_maybe_add_slot_hint(event_block.body_container)
@@ -449,8 +507,21 @@ func _setup_drop_targets() -> void:
 	# The script list accepts palette drops (append) and script-internal reorders.
 	_setup_slot_drop(effects_list, [])
 	# Dragging a script block back onto the palette deletes it (Scratch-like).
+	# A temporary overlay is raised during a drag so headers, search controls,
+	# scrollbars and palette buttons cannot punch holes in the discard zone.
 	var palette_panel: Panel = $Panel/Margin/HBox/PalettePanel
 	palette_panel.set_drag_forwarding(
+		Callable(self, "_get_drag_data_from_list"),
+		Callable(self, "_can_drop_on_palette"),
+		Callable(self, "_drop_on_palette"),
+	)
+	_palette_drop_overlay = Control.new()
+	_palette_drop_overlay.name = "PaletteDropOverlay"
+	_palette_drop_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_palette_drop_overlay.z_index = 100
+	palette_panel.add_child(_palette_drop_overlay)
+	_palette_drop_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_palette_drop_overlay.set_drag_forwarding(
 		Callable(self, "_get_drag_data_from_list"),
 		Callable(self, "_can_drop_on_palette"),
 		Callable(self, "_drop_on_palette"),
@@ -569,6 +640,13 @@ func _hide_insertion_line() -> void:
 
 
 func _process(_delta: float) -> void:
+	# If Windows/Godot lost the release notification while rebuilding GUI
+	# controls, the global button state is already up even though the viewport
+	# may still believe a drag is active. Repair that state immediately.
+	if _is_editor_drag_active() and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+		_recover_pointer_after_drag()
+	elif Input.mouse_mode != Input.MOUSE_MODE_VISIBLE:
+		_restore_pointer_visibility()
 	# A drag that ends over an invalid spot leaves the insertion line behind;
 	# once the GUI drag is finished, drop it.
 	if _insertion_line != null and _insertion_line.get_parent() != null \
@@ -580,6 +658,56 @@ func _process(_delta: float) -> void:
 		var palette_panel: Panel = $Panel/Margin/HBox/PalettePanel
 		if not palette_panel.get_global_rect().has_point(get_global_mouse_position()):
 			_set_palette_discard_highlight(false)
+
+
+func _input(event: InputEvent) -> void:
+	var mouse_button := event as InputEventMouseButton
+	if mouse_button != null and mouse_button.button_index == MOUSE_BUTTON_LEFT \
+			and not mouse_button.pressed and _drag_in_progress:
+		# Run after the viewport has had a chance to perform the normal drop. If
+		# it failed to end the drag, gui_cancel_drag() releases the capture.
+		_recover_pointer_after_drag.call_deferred()
+
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_DRAG_BEGIN:
+		_drag_in_progress = true
+		_set_palette_drop_overlay_active(true)
+	elif what == NOTIFICATION_DRAG_END:
+		_drag_in_progress = false
+		_set_palette_drop_overlay_active(false)
+		_restore_pointer_visibility.call_deferred()
+	elif what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+		_recover_pointer_after_drag()
+
+
+func _is_editor_drag_active() -> bool:
+	return _drag_in_progress or (get_viewport() != null and get_viewport().gui_is_dragging())
+
+
+func _recover_pointer_after_drag() -> void:
+	if not is_inside_tree():
+		return
+	var viewport := get_viewport()
+	if viewport != null and viewport.gui_is_dragging():
+		viewport.gui_cancel_drag()
+	_drag_in_progress = false
+	_set_palette_drop_overlay_active(false)
+	_hide_insertion_line()
+	_set_palette_discard_highlight(false)
+	_restore_pointer_visibility()
+
+
+func _set_palette_drop_overlay_active(active: bool) -> void:
+	if _palette_drop_overlay != null and is_instance_valid(_palette_drop_overlay):
+		_palette_drop_overlay.mouse_filter = Control.MOUSE_FILTER_STOP if active else Control.MOUSE_FILTER_IGNORE
+
+
+func _restore_pointer_visibility() -> void:
+	# Re-applying VISIBLE also asks the Windows display backend to release any
+	# stale capture/confine state left by an interrupted drag.
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	Input.set_default_cursor_shape(Input.CURSOR_ARROW)
 
 
 func _can_drop_on_palette(_pos: Vector2, data) -> bool:
@@ -817,6 +945,7 @@ func _on_block_changed(_path: Array) -> void:
 
 func _on_block_context_requested(path: Array, at: Vector2) -> void:
 	var menu := PopupMenu.new()
+	menu.popup_hide.connect(menu.queue_free)
 	menu.add_item(Locale.t("skill_editor.duplicate"), 0)
 	menu.add_item(Locale.t("skill_editor.delete"), 1)
 	menu.id_pressed.connect(func(id: int):
@@ -892,6 +1021,22 @@ func _default_effect(effect_id: String) -> Dictionary:
 	if effect_id == SkillEngine.EFFECT_ADD_BUFF:
 		eff["buff_id"] = SkillEngine.BUFF_ATK_BOOST
 		eff["duration"] = 2
+	if effect_id == SkillEngine.EFFECT_ZERO_COST:
+		# The selector shape describes cards in the active hand, not a battlefield
+		# target.  Unlike ordinary effects this block has no inline target socket,
+		# so it must start with a usable single-card default.
+		eff["target"] = SkillEngine.TARGET_SINGLE
+		eff["target_side"] = SkillEngine.TARGET_SIDE_ALL
+		eff["cost_reduction_mode"] = SkillRegistry.COST_REDUCTION_TURN
+	if effect_id == SkillEngine.EFFECT_CLONE_ENEMY:
+		eff["target"] = SkillEngine.TARGET_SINGLE
+		eff["target_side"] = SkillEngine.TARGET_SIDE_ENEMY
+	# Passive talents never interrupt battle flow with a manual target picker.
+	# Their effect target is the talent card itself; the board-side choice, when
+	# relevant, belongs to the trigger rather than to the effect block.
+	if _is_talent_mode():
+		eff["target"] = SkillEngine.TARGET_SELF
+		eff["target_side"] = SkillEngine.TARGET_SIDE_ALL
 	return _TargetResolver.normalize_effect_target(eff)
 
 
@@ -1217,12 +1362,20 @@ func _build_settings_row() -> void:
 func _update_skill_type_visibility() -> void:
 	if skill_type_select == null:
 		return
-	var show_talent: bool = not _is_spell() and SkillRegistry.trigger_is_passive(_selected_trigger_key())
+	var show_talent := false
 	if skill_type_row != null:
 		skill_type_row.visible = show_talent
 	skill_type_select.visible = show_talent
-	if not show_talent and skill_type_select.selected != 0:
-		skill_type_select.selected = 0
+	skill_type_select.selected = 1 if _is_talent_mode() else 0
+	if _is_talent_mode():
+		if skill_prob_spin:
+			skill_prob_spin.value = 100
+		if max_uses_spin:
+			max_uses_spin.value = 0
+	if settings_row:
+		settings_row.visible = not _is_talent_mode()
+	if settings_label:
+		settings_label.visible = not _is_talent_mode()
 
 
 # ============================================
@@ -1230,6 +1383,11 @@ func _update_skill_type_visibility() -> void:
 # ============================================
 
 func _trigger_keys() -> Array:
+	if _is_talent_mode():
+		return [
+			SkillEngine.TRIGGER_ALWAYS, SkillEngine.TRIGGER_ON_ADDED, SkillEngine.TRIGGER_ON_DISCARDED,
+			SkillEngine.TRIGGER_ON_BOARD_CHANGED,
+		]
 	if _is_parasite():
 		return [
 			SkillEngine.TRIGGER_ON_ATTACK,
@@ -1241,6 +1399,7 @@ func _trigger_keys() -> Array:
 		SkillEngine.TRIGGER_ON_SUMMON, SkillEngine.TRIGGER_ON_DEATH, SkillEngine.TRIGGER_ON_DAMAGED,
 		SkillEngine.TRIGGER_ON_TURN_START, SkillEngine.TRIGGER_ON_TURN_END,
 		SkillEngine.TRIGGER_ON_HEALED, SkillEngine.TRIGGER_ON_ATTACKED,
+		SkillEngine.TRIGGER_ON_BOARD_CHANGED,
 	]
 
 
@@ -1256,6 +1415,34 @@ func _update_trigger_preview() -> void:
 		return
 	var trigger_key: String = _selected_trigger_key()
 	trigger_preview_label.text = Locale.t("skill_editor.trigger_help.%s" % trigger_key)
+	_update_trigger_side_visibility()
+
+
+func _setup_trigger_side_select() -> void:
+	trigger_side_select.clear()
+	for side_id: String in SkillRegistry.TARGET_SIDE_IDS:
+		trigger_side_select.add_item(Locale.term("board_side", side_id))
+	trigger_side_select.item_selected.connect(func(index: int):
+		if index >= 0 and index < SkillRegistry.TARGET_SIDE_IDS.size():
+			current_trigger_side = SkillRegistry.TARGET_SIDE_IDS[index]
+			_refresh_script()
+			_update_summary()
+			_maybe_snapshot()
+	)
+	_sync_trigger_side_select()
+	_update_trigger_side_visibility()
+
+
+func _sync_trigger_side_select() -> void:
+	if trigger_side_select == null:
+		return
+	var index := SkillRegistry.TARGET_SIDE_IDS.find(current_trigger_side)
+	trigger_side_select.select(maxi(0, index))
+
+
+func _update_trigger_side_visibility() -> void:
+	if trigger_side_row != null:
+		trigger_side_row.visible = not _is_spell() and current_trigger_key == SkillEngine.TRIGGER_ON_BOARD_CHANGED
 
 
 # ============================================
@@ -1268,13 +1455,18 @@ func _load_skill(skill: Dictionary):
 		current_trigger_key = SkillEngine.TRIGGER_ON_CAST
 	else:
 		current_trigger_key = skill.get("trigger", SkillEngine.TRIGGER_ON_ATTACK)
+	current_trigger_side = str(skill.get("trigger_side", SkillEngine.TARGET_SIDE_ALL))
+	_sync_trigger_side_select()
 	if skill_prob_spin:
 		skill_prob_spin.value = float(skill.get("probability", 100))
 	if max_uses_spin:
 		max_uses_spin.value = float(skill.get("max_uses", 0))
 	if skill_type_select:
 		skill_type_select.selected = 0 if skill.get("skill_type", SkillEngine.SKILL_TYPE_NORMAL) != SkillEngine.SKILL_TYPE_TALENT else 1
+	_update_trigger_preview()
 	_update_skill_type_visibility()
+	if _is_talent_mode():
+		_build_palette()
 
 	var effects: Array = SkillEngine.legacy_skill_effects(skill)
 	var normalized_effects: Array = []
@@ -1291,18 +1483,18 @@ func _build_skill() -> Dictionary:
 		return {}
 	var is_spell := _is_spell()
 	var trigger_key: String = _selected_trigger_key()
-	var skill_type_val: String = SkillEngine.SKILL_TYPE_NORMAL
-	# Talent only applies to passive skills (not on_activate, not spell).
-	if not is_spell and SkillRegistry.trigger_is_passive(trigger_key) and skill_type_select and skill_type_select.selected == 1:
-		skill_type_val = SkillEngine.SKILL_TYPE_TALENT
-	return {
+	var skill_type_val: String = SkillEngine.SKILL_TYPE_TALENT if _is_talent_mode() else SkillEngine.SKILL_TYPE_NORMAL
+	var result := {
 		"skill_name": PlayerData.card_draft.get("name", "") if is_spell else skill_name_input.text.strip_edges(),
 		"trigger": trigger_key,
-		"probability": int(skill_prob_spin.value) if skill_prob_spin else 100,
-		"max_uses": int(max_uses_spin.value) if max_uses_spin else 0,
+		"probability": 100 if _is_talent_mode() else (int(skill_prob_spin.value) if skill_prob_spin else 100),
+		"max_uses": 0 if _is_talent_mode() else (int(max_uses_spin.value) if max_uses_spin else 0),
 		"skill_type": skill_type_val,
 		"effects": effect_data.duplicate(true),
 	}
+	if trigger_key == SkillEngine.TRIGGER_ON_BOARD_CHANGED:
+		result["trigger_side"] = current_trigger_side
+	return result
 
 
 func _update_summary():
@@ -1322,7 +1514,10 @@ func _format_skill(skill: Dictionary) -> String:
 		var sname: String = skill.get("skill_name", "?")
 		if sname == "":
 			sname = Locale.t("skill.no_name")
-		var tname: String = Locale.term("trigger", skill.get("trigger", SkillEngine.TRIGGER_ON_ATTACK))
+		var trigger_id: String = str(skill.get("trigger", SkillEngine.TRIGGER_ON_ATTACK))
+		var tname: String = Locale.term("trigger", trigger_id)
+		if trigger_id == SkillEngine.TRIGGER_ON_BOARD_CHANGED:
+			tname = Locale.t("skill_editor.board_change_trigger", [Locale.term("board_side", str(skill.get("trigger_side", SkillEngine.TARGET_SIDE_ALL)))])
 		lines = "[%s] %s\n" % [sname, tname]
 		if skill_type == SkillEngine.SKILL_TYPE_TALENT:
 			lines += "  %s " % Locale.t("skill.talent_badge")
@@ -1345,17 +1540,25 @@ func _format_skill(skill: Dictionary) -> String:
 # ============================================
 
 func _ready():
+	_focus_playtest_block.call_deferred()
+	_restore_pointer_visibility()
 	# Long reporters widen their block; the script area scrolls horizontally
 	# (bottom bar, like the existing vertical scroll) so every part of a wide
 	# block stays reachable without auto-wrapping the sentence.
 	var script_scroll: ScrollContainer = $Panel/Margin/HBox/MainPanel/Margin/Scroll
 	script_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	_apply_theme()
+	_setup_trigger_side_select()
+	if _is_talent_mode():
+		current_trigger_key = SkillEngine.TRIGGER_ALWAYS
 	_apply_texts()
 	_build_settings_row()
+	_update_skill_type_visibility()
 	_build_palette()
 	_build_undo_buttons()
 	_build_skill_template_button()
+	if _is_talent_mode() and _template_btn:
+		_template_btn.visible = false
 	_connect_signals()
 	_setup_drop_targets()
 
@@ -1541,6 +1744,8 @@ func _skill_key_for_index(index: int) -> String:
 			return "skill1"
 		1:
 			return "skill2"
+		3:
+			return "talent"
 	return "skill3"
 
 
@@ -1558,6 +1763,11 @@ func _on_save_pressed():
 		skill_tutorial_controller.handle_save(skill)
 		return
 	var skill_key: String = _skill_key_for_index(PlayerData.editing_skill_index)
+	if not skill.is_empty():
+		if skill_key == "skill1":
+			PlayerData.card_draft["talent"] = {}
+		elif skill_key == "talent":
+			PlayerData.card_draft["skill1"] = {}
 	PlayerData.card_draft[skill_key] = skill
 	PlayerData.save_card_draft_recovery()
 	print("Skill saved: %s" % skill.get("skill_name", ""))
@@ -1633,6 +1843,20 @@ func _show_save_blocked_popup(errors: Array) -> void:
 			layer.queue_free()
 	)
 	vb.add_child(close_btn)
+
+
+func _focus_playtest_block() -> void:
+	var path := PlayerData.skill_focus_path.duplicate()
+	PlayerData.skill_focus_path.clear()
+	if path.is_empty():
+		return
+	var effect := _effect_at(path)
+	if effect.is_empty():
+		return
+	if str(effect.get("effect", "")) in [SkillEngine.EFFECT_IF, SkillEngine.EFFECT_IF_ELSE]:
+		_open_if_condition_popup(path)
+	else:
+		_open_effect_popup(path)
 
 
 func _on_cancel_pressed():

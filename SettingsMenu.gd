@@ -8,6 +8,7 @@ const UITheme = preload("res://UITheme.gd")
 @onready var language_option = $CenterContainer/VBoxContainer/LanguageOption
 @onready var resolution_label = $CenterContainer/VBoxContainer/ResolutionLabel
 @onready var resolution_option = $CenterContainer/VBoxContainer/ResolutionOption
+@onready var animation_acceleration = $CenterContainer/VBoxContainer/AnimationAcceleration
 @onready var back_button = $CenterContainer/VBoxContainer/BackButton
 @onready var version_label = $VersionLabel
 
@@ -22,6 +23,7 @@ func _ready() -> void:
 	_apply_responsive_layout()
 	language_option.item_selected.connect(_on_language_selected)
 	resolution_option.item_selected.connect(_on_resolution_selected)
+	animation_acceleration.toggled.connect(GamePreferences.set_animation_acceleration)
 	back_button.pressed.connect(func(): UIMotion.go_back("res://MainMenu.tscn"))
 	Locale.language_changed.connect(_apply_texts)
 	get_viewport().size_changed.connect(_apply_responsive_layout)
@@ -36,12 +38,15 @@ func _setup_options() -> void:
 	for index in WindowSizeController.WINDOW_PRESETS.size():
 		resolution_option.add_item(WindowSizeController.preset_label(index))
 	resolution_option.selected = WindowSizeController.get_current_preset_index()
+	animation_acceleration.set_pressed_no_signal(GamePreferences.animation_acceleration_enabled())
 
 
 func _apply_texts() -> void:
 	title_label.text = Locale.t("settings.title")
 	language_label.text = Locale.t("settings.language")
 	resolution_label.text = Locale.t("settings.resolution")
+	animation_acceleration.text = Locale.t("settings.animation_acceleration")
+	animation_acceleration.tooltip_text = Locale.t("settings.animation_acceleration_help")
 	back_button.text = Locale.t("common.back")
 	version_label.text = Locale.t("settings.version", [AppVersion.VERSION])
 
@@ -60,6 +65,7 @@ func _apply_theme() -> void:
 	UITheme.apply_label(version_label, true)
 	UITheme.apply_button(language_option, "secondary")
 	UITheme.apply_button(resolution_option, "secondary")
+	UITheme.apply_button(animation_acceleration, "secondary")
 	UITheme.apply_button(back_button, "primary")
 	# Entrance motion: breathing title + staggered controls.
 	UITheme.title_breathe(title_label)
@@ -69,7 +75,7 @@ func _apply_theme() -> void:
 func _apply_responsive_layout() -> void:
 	var viewport_size := get_viewport_rect().size
 	var scale_value: float = min(viewport_size.x / BASE_VIEWPORT_SIZE.x, viewport_size.y / BASE_VIEWPORT_SIZE.y)
-	for control in [language_option, resolution_option, back_button]:
+	for control in [language_option, resolution_option, animation_acceleration, back_button]:
 		control.custom_minimum_size = Vector2(260, 42) * scale_value
 		control.add_theme_font_size_override("font_size", max(12, int(16 * scale_value)))
 	title_label.add_theme_font_size_override("font_size", max(18, int(28 * scale_value)))

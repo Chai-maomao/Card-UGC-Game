@@ -24,6 +24,9 @@ var _motion_tween: Tween
 
 
 func _ready() -> void:
+	var help := SkillHelp.palette(self)
+	if not help.is_empty():
+		tooltip_text = help
 	resized.connect(_update_pivot)
 	mouse_entered.connect(_on_mouse_entered)
 	mouse_exited.connect(_on_mouse_exited)
@@ -67,16 +70,17 @@ func _on_button_up() -> void:
 
 
 func _get_drag_data(_at_position: Vector2):
-	var preview := duplicate()
-	preview.modulate = Color(1.06, 1.06, 1.06, 0.95)
-	preview.scale = Vector2(1.025, 1.025)
-	preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var drag_control := Control.new()
-	drag_control.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	drag_control.add_child(preview)
-	set_drag_preview(drag_control)
-	_dragging = true
-	_animate_to(Vector2(0.96, 0.96), Color(0.72, 0.76, 0.84, 0.45), 0.08)
+	if get_viewport().gui_is_dragging():
+		var preview := duplicate()
+		preview.modulate = Color(1.06, 1.06, 1.06, 0.95)
+		preview.scale = Vector2(1.025, 1.025)
+		preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var drag_control := Control.new()
+		drag_control.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		drag_control.add_child(preview)
+		set_drag_preview(drag_control)
+		_dragging = true
+		_animate_to(Vector2(0.96, 0.96), Color(0.72, 0.76, 0.84, 0.45), 0.08)
 	if var_id != "":
 		return {"type": "var_block", "var_id": var_id}
 	if expr_kind != "":

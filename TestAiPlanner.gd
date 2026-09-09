@@ -64,7 +64,31 @@ func _test_taunt_and_legality() -> void:
 	_add_taunt(game.player2_field.slots[1])
 	var attacks := _actions_of(game, "attack")
 	_expect("taunt restricts all attacks", attacks.all(func(a): return int(a["target_slot"]) == 1))
+	_expect("core attack rejects bypassing taunt", game.execute_attack(0, 0).is_empty())
+	_expect("core attack accepts the taunt target", not game.execute_attack(0, 1).is_empty())
 
+	game = _game()
+	game.player_field.slots[0] = _card("Striker", 2, 5, 4)
+	game.player2_field.slots[0] = _card("Normal", 2, 5, 2)
+	game.player2_field.slots[1] = _card("Value-less Taunt", 2, 5, 2)
+	_add_taunt(game.player2_field.slots[1], 0)
+	attacks = _actions_of(game, "attack")
+	_expect("value-less taunt still restricts attacks", attacks.size() == 1 and int(attacks[0]["target_slot"]) == 1)
+
+	game = _game()
+	game.turn_number = 2
+	game.player_field.slots[0] = _skill_card("Mage", _effect_skill(SkillEngine.EFFECT_DAMAGE, 3, SkillEngine.TARGET_SIDE_ENEMY))
+	game.player2_field.slots[0] = _card("High threat", 6, 2, 9)
+	game.player2_field.slots[1] = _card("Taunt", 1, 8, 0)
+	_add_taunt(game.player2_field.slots[1])
+	var skills := _actions_of(game, "activate")
+	_expect("taunt restricts AI directed skills", not skills.is_empty() and skills.all(func(a): return int(a["target_slot"]) == 1))
+
+	game = _game()
+	game.player_field.slots[0] = _card("Striker", 2, 5, 4)
+	game.player2_field.slots[0] = _card("Normal", 2, 5, 2)
+	game.player2_field.slots[1] = _card("Taunt", 2, 5, 2)
+	_add_taunt(game.player2_field.slots[1])
 	game.player2_field.slots[2] = _card("Taunt2", 2, 5, 2)
 	_add_taunt(game.player2_field.slots[2])
 	attacks = _actions_of(game, "attack")
@@ -80,7 +104,7 @@ func _test_taunt_and_legality() -> void:
 
 func _test_skill_targets() -> void:
 	var game = _game()
-	game.turn_number = 1
+	game.turn_number = 2
 	game.player_field.slots[0] = _skill_card("Mage", _effect_skill(SkillEngine.EFFECT_DAMAGE, 3, SkillEngine.TARGET_SIDE_ENEMY))
 	game.player2_field.slots[0] = _card("Killable", 2, 2, 1)
 	game.player2_field.slots[1] = _card("Healthy", 2, 10, 1)
@@ -108,8 +132,11 @@ func _test_skill_targets() -> void:
 	var ally_actions := _actions_of(game, "activate")
 	_expect("ally skill does not target enemy", ally_actions.all(func(a): return int(a["target_player"]) == 1))
 	game.player_field.slots[0].skills = [_effect_skill(SkillEngine.EFFECT_DAMAGE, 2, SkillEngine.TARGET_SIDE_ENEMY)]
+	game.turn_number = 2
 	var enemy_actions := _actions_of(game, "activate")
 	_expect("enemy skill does not target ally", enemy_actions.all(func(a): return int(a["target_player"]) == 2))
+	game.turn_number = 1
+	_expect("turn one omits enemy HP-changing skills", _actions_of(game, "activate").is_empty())
 
 
 func _test_resource_use() -> void:
@@ -184,8 +211,8 @@ func _effect_skill(effect: String, value: int, side: String, buff: String = "") 
 	return {"skill_name": "Puzzle", "trigger": SkillEngine.TRIGGER_ON_ACTIVATE, "probability": 100, "effects": [data]}
 
 
-func _add_taunt(card: CardData) -> void:
-	card.status_effects.append({"buff_id": SkillEngine.BUFF_TAUNT, "value": 1, "duration": 2})
+func _add_taunt(card: CardData, value: int = 1) -> void:
+	card.status_effects.append({"buff_id": SkillEngine.BUFF_TAUNT, "value": value, "duration": 2})
 
 
 func _pick(game) -> Dictionary:

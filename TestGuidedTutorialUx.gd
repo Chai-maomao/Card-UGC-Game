@@ -120,7 +120,7 @@ func _ready() -> void:
 	_assert(not PlayerData.skill_tutorial_active and PlayerData.battle_mode == "tutorial", "card confirmation must hand off to tutorial battle")
 	_assert(PlayerData.card_draft == original_draft and PlayerData.editing_index == 12 and PlayerData.editing_skill_index == 2,
 			"tutorial must restore the player's original draft and editing context")
-	_assert(PlayerData.battle_deck.size() == CardDatabase.player_starters().size() + 1,
+	_assert(PlayerData.battle_deck.size() == CardDatabase.beginner_deck().size() + 1,
 			"tutorial player deck must be one starter set plus the custom card")
 	card_editor.queue_free()
 	await _settle()
@@ -145,7 +145,8 @@ func _ready() -> void:
 			"battle tutorial prompt must render above its highlight frames")
 	battle_tutorial._on_next()
 	battle._on_card_drag_summoned(trainee, null, 2)
-	battle._on_skill_activated(2, 0)
+	_assert(trainee.skills_used.has(0), "tutorial summon skill must resolve automatically")
+	battle_tutorial._on_next()
 	battle._on_attack_requested(2)
 	var target: CardData = battle.game.player2_field.slots[2]
 	var target_hp := target.hp

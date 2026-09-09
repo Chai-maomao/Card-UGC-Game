@@ -190,6 +190,8 @@ func _configure_controls() -> void:
 	editor.hp_input.editable = phase == Phase.STATS
 	editor.atk_input.editable = phase == Phase.STATS
 	editor.edit_skill1_btn.disabled = phase != Phase.SKILL
+	if editor.edit_talent_btn:
+		editor.edit_talent_btn.disabled = true
 	editor.edit_skill2_btn.disabled = true
 	editor.edit_skill3_btn.disabled = true
 	editor.save_button.disabled = phase != Phase.CONFIRM

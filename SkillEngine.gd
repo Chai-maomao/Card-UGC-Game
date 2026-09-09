@@ -27,15 +27,20 @@ static func _is_talent_skill(skill: Dictionary) -> bool:
 	return skill.get("skill_type", SKILL_TYPE_NORMAL) == SKILL_TYPE_TALENT
 
 
+static func has_uses_remaining(card: CardData, skill: Dictionary, skill_index: int) -> bool:
+	if card == null:
+		return false
+	var max_uses: int = int(skill.get("max_uses", 0))
+	return max_uses <= 0 or int(card.skills_used_count.get(skill_index, 0)) < max_uses
+
+
 static func _check_max_uses(card: CardData, skill: Dictionary, skill_index: int) -> bool:
 	var max_uses: int = skill.get("max_uses", 0)
-	if max_uses <= 0:
-		return true  # unlimited
-	var count: int = card.skills_used_count.get(skill_index, 0)
-	if count >= max_uses:
+	if has_uses_remaining(card, skill, skill_index):
+		return true
+	if max_uses > 0:
 		print("[SkillEngine] %s: max_uses (%d) reached for '%s'" % [card.card_name, max_uses, skill.get("skill_name", "???")])
-		return false
-	return true
+	return false
 
 
 static func _mark_skill_used(card: CardData, skill_index: int) -> void:
@@ -56,14 +61,20 @@ static func trigger_skills(trigger: String, source_card: CardData, context: Dict
 		var skill_dict: Dictionary = source_card.skills[skill_index]
 		if skill_dict.get("trigger", "") != trigger:
 			continue
+		trigger_context["trace_skill_index"] = skill_index
+		_trace(trigger_context, source_card, "trigger", {"trigger": trigger})
 		# Talent skills bypass silence; normal skills are blocked
 		if silenced and not _is_talent_skill(skill_dict):
+			_trace(trigger_context, source_card, "silenced")
 			continue
 		if not _check_max_uses(source_card, skill_dict, skill_index):
+			_trace(trigger_context, source_card, "uses_exhausted")
 			continue
 		if _passes_skill_roll(skill_dict, source_card, trigger_context):
 			_execute_skill(skill_dict, source_card, trigger_context)
 			_mark_skill_used(source_card, skill_index)
+		else:
+			_trace(trigger_context, source_card, "probability_failed")
 	_leave_trigger_budget(budget)
 
 
@@ -73,11 +84,16 @@ static func trigger_single_skill(card: CardData, skill_index: int, context: Dict
 	var budget := _ensure_budget(context)
 	if not _enter_trigger_budget(budget, card):
 		return
+	context = context.duplicate()
+	context["trace_skill_index"] = skill_index
+	_trace(context, card, "trigger", {"trigger": card.skills[skill_index].get("trigger", "")})
 	var skill_dict: Dictionary = card.skills[skill_index]
 	if card.is_silenced() and not _is_talent_skill(skill_dict):
+		_trace(context, card, "silenced")
 		_leave_trigger_budget(budget)
 		return
 	if not _check_max_uses(card, skill_dict, skill_index):
+		_trace(context, card, "uses_exhausted")
 		_leave_trigger_budget(budget)
 		return
 	var single_context := context.duplicate()
@@ -85,6 +101,8 @@ static func trigger_single_skill(card: CardData, skill_index: int, context: Dict
 	if _passes_skill_roll(skill_dict, card, single_context):
 		_execute_skill(skill_dict, card, single_context)
 		_mark_skill_used(card, skill_index)
+	else:
+		_trace(single_context, card, "probability_failed")
 	_leave_trigger_budget(budget)
 
 
@@ -98,14 +116,182 @@ static func trigger_external_skill(skill: Dictionary, source_card: CardData, con
 		_leave_trigger_budget(budget)
 		return
 	var external_context := context.duplicate()
+	external_context["trace_skill_index"] = source_card.skills.find(skill)
+	_trace(external_context, source_card, "trigger", {"trigger": skill.get("trigger", "")})
 	external_context["trigger"] = skill.get("trigger", "")
 	if _passes_skill_roll(skill, source_card, external_context):
 		_execute_skill(skill, source_card, external_context)
+	else:
+		_trace(external_context, source_card, "probability_failed")
 	_leave_trigger_budget(budget)
+
+
+# Pure, conservative combat preview used by the targeting UI. It reports a
+# lethal target only when the currently visible outcome is guaranteed: chance
+# rolls and random target/value branches never produce a false red marker.
+# No live card, RNG or battle collection is mutated by this calculation.
+static func predicts_target_lethal(skill: Dictionary, source_card: CardData, target_card: CardData, context: Dictionary) -> bool:
+	if skill.is_empty() or source_card == null or target_card == null:
+		return false
+	if int(skill.get("probability", 100)) - source_card.get_misfortune() < 100:
+		return false
+	var simulation := target_card.duplicate_card()
+	var state := {
+		"card": simulation,
+		"parasite_hp": [],
+	}
+	for parasite in target_card.parasite_cards:
+		if parasite is CardData and parasite.parasite_absorbs_host_damage():
+			state.parasite_hp.append(int(parasite.hp))
+	var preview_context := context.duplicate()
+	preview_context["source_card"] = source_card
+	return _predict_effect_block(legacy_skill_effects(skill), source_card, target_card, state, preview_context, 1) == 1
+
+
+# Return codes: 0 = continue/non-lethal, 1 = lethal, 2 = stop this block.
+static func _predict_effect_block(effects: Array, source_card: CardData, live_target: CardData, state: Dictionary, context: Dictionary, depth: int) -> int:
+	if depth > _UgcSafety.MAX_EFFECT_NESTING_DEPTH:
+		return 0
+	for effect_value in effects:
+		if not effect_value is Dictionary:
+			continue
+		var eff: Dictionary = effect_value
+		var effect_id := str(eff.get("effect", ""))
+		if effect_id in [EFFECT_IF_ELSE, EFFECT_IF]:
+			var branch_condition := _condition_dict(eff)
+			if _prediction_contains_random(branch_condition):
+				continue
+			var branch: Array = eff.get("then_effects", []) if _passes_effect_condition(branch_condition, source_card, state.card, context) else eff.get("else_effects", [])
+			if _predict_effect_block(branch, source_card, live_target, state, context, depth + 1) == 1:
+				return 1
+			continue
+		if effect_id == EFFECT_REPEAT:
+			if _operand_contains_random(eff.get("repeat_expr", {})):
+				continue
+			var repeat_count := mini(_repeat_count(eff, source_card, context), _UgcSafety.MAX_REPEAT_COUNT)
+			for _i in range(repeat_count):
+				if _predict_effect_block(eff.get("then_effects", []), source_card, live_target, state, context, depth + 1) == 1:
+					return 1
+			continue
+		if effect_id == EFFECT_STOP:
+			return 2
+		if int(eff.get("probability", 100)) - source_card.get_misfortune() < 100:
+			continue
+
+		var target_id := str(eff.get("target", TARGET_SINGLE))
+		var target_side := str(eff.get("target_side", _TargetResolver.default_target_side(target_id)))
+		var resolved := _TargetResolver.resolve_targets(target_id, source_card, context, target_side)
+		if live_target not in resolved:
+			continue
+		var random_count := int(eff.get("random_count", 0))
+		if random_count > 0 and resolved.size() > random_count:
+			continue
+		if _prediction_contains_random(_condition_dict(eff)) or not _passes_effect_condition(eff, source_card, state.card, context):
+			continue
+		var value := _prediction_min_value(eff, source_card, state.card, context)
+		if value < 0:
+			continue
+		if _predict_apply_to_target(effect_id, value, target_id, eff, state):
+			return 1
+	return 0
+
+
+static func _prediction_min_value(eff: Dictionary, source_card: CardData, target_card: CardData, context: Dictionary) -> int:
+	if eff.has("value_expr") and _operand_contains_random(eff.get("value_expr", {})):
+		return -1
+	if eff.has("value_min") and eff.has("value_max"):
+		var vmin := mini(int(eff.get("value_min", 1)), int(eff.get("value_max", 1)))
+		return _sanitize_effect_value(str(eff.get("effect", "")), vmin)
+	return _resolve_value(eff, source_card, target_card, context)
+
+
+static func _operand_contains_random(value: Variant) -> bool:
+	if not value is Dictionary:
+		return false
+	var operand: Dictionary = value
+	if str(operand.get("kind", "")) != "expr":
+		return false
+	if str(operand.get("op", "")) == "rand":
+		return true
+	return _operand_contains_random(operand.get("a", {})) or _operand_contains_random(operand.get("b", {}))
+
+
+static func _prediction_contains_random(value: Variant) -> bool:
+	if value is Array:
+		for child in value:
+			if _prediction_contains_random(child):
+				return true
+		return false
+	if not value is Dictionary:
+		return false
+	var data: Dictionary = value
+	if str(data.get("kind", "")) == "expr" and str(data.get("op", "")) == "rand":
+		return true
+	for child in data.values():
+		if _prediction_contains_random(child):
+			return true
+	return false
+
+
+static func _predict_apply_to_target(effect_id: String, value: int, target_id: String, eff: Dictionary, state: Dictionary) -> bool:
+	var card: CardData = state.card
+	match effect_id:
+		EFFECT_DAMAGE, EFFECT_LIFESTEAL_DAMAGE:
+			var damage := maxi(0, int(floor(float(value) * (1.0 - float(card.get_damage_reduction()) / 100.0))))
+			var directed := target_id in [TARGET_SINGLE, TARGET_SIDES]
+			var parasite_hp: Array = state.parasite_hp
+			if directed and not parasite_hp.is_empty():
+				var last := parasite_hp.size() - 1
+				parasite_hp[last] = int(parasite_hp[last]) - damage
+				if int(parasite_hp[last]) <= 0:
+					parasite_hp.remove_at(last)
+				return false
+			var through_shield := maxi(0, damage - card.temp_hp)
+			card.temp_hp = maxi(0, card.temp_hp - damage)
+			card.hp = maxi(0, card.hp - through_shield)
+			if card.hp <= 0 and card.immune_lethal:
+				card.hp = 1
+				card.immune_lethal = false
+			return card.hp <= 0
+		EFFECT_EXECUTE:
+			if value > 0 and card.hp <= value:
+				if card.immune_lethal:
+					card.hp = 1
+					card.immune_lethal = false
+				else:
+					card.hp = 0
+			return card.hp <= 0
+		EFFECT_HEAL:
+			card.hp = mini(card.max_hp, card.hp + maxi(0, value))
+		EFFECT_SHIELD:
+			card.temp_hp += maxi(0, value)
+		EFFECT_GAIN_MAX_HP:
+			var old_max := card.max_hp
+			card.max_hp = maxi(1, card.max_hp + value)
+			var applied := card.max_hp - old_max
+			card.hp = mini(card.max_hp, card.hp + maxi(0, applied))
+		EFFECT_ADD_BUFF:
+			var buff_id := str(eff.get("buff_id", ""))
+			if buff_id == BUFF_DAMAGE_REDUCTION and value > 0:
+				card.status_effects.append({"buff_id": buff_id, "value": value, "duration": int(eff.get("duration", 1)), "owner": 0})
+			elif buff_id == BUFF_IMMUNE_LETHAL and value > 0:
+				card.immune_lethal = true
+	return false
+
+
+static func _trace(context: Dictionary, source: CardData, event: String, detail: Dictionary = {}) -> void:
+	var sink: Callable = context.get("trace_callable", Callable())
+	if not sink.is_valid():
+		return
+	var row := detail.duplicate(true)
+	row.merge({"event": event, "source": source.card_name if source != null else "", "card_id": source.card_id if source != null else "", "skill_index": int(context.get("trace_skill_index", -1)), "path": (context.get("trace_path", []) as Array).duplicate(), "turn": int(context.get("turn_number", 0))})
+	sink.call(row)
 
 
 static func _execute_skill(skill: Dictionary, source_card: CardData, context: Dictionary) -> void:
 	var skill_name: String = skill.get("skill_name", "???")
+	context = context.duplicate()
+	context["trace_path"] = []
 	_execute_effects(legacy_skill_effects(skill), source_card, context, skill_name, 1)
 
 
@@ -113,8 +299,13 @@ static func _execute_effects(effects: Array, source_card: CardData, context: Dic
 	if depth > _UgcSafety.MAX_EFFECT_NESTING_DEPTH:
 		_abort_budget(_ensure_budget(context), source_card, "effect_depth")
 		return
-	for eff in effects:
+	var parent_context := context
+	for effect_index in range(effects.size()):
+		var eff: Dictionary = effects[effect_index]
+		context = parent_context.duplicate()
+		context["trace_path"] = (parent_context.get("trace_path", []) as Array) + [effect_index]
 		if not _consume_effect_budget(_ensure_budget(context), source_card):
+			_trace(context, source_card, "budget_exhausted")
 			return
 		var eff_dict: Dictionary = eff
 		if str(eff_dict.get("effect", "")) in [EFFECT_IF_ELSE, EFFECT_IF]:
@@ -129,25 +320,17 @@ static func _execute_effects(effects: Array, source_card: CardData, context: Dic
 			print("[SkillEngine] %s: stop — halting current block" % skill_name)
 			return
 		if not _passes_effect_roll(eff_dict, source_card, context):
+			_trace(context, source_card, "probability_failed")
 			continue
 
 		var target_str: String = eff_dict.get("target", TARGET_SINGLE)
 		var target_side: String = eff_dict.get("target_side", _TargetResolver.default_target_side(target_str))
 		var effect_str: String = eff_dict.get("effect", EFFECT_DAMAGE)
-		var value: int = _resolve_value(eff_dict, source_card, context)
-		if bool(_ensure_budget(context).get("aborted", false)):
-			return
 		var targets: Array = _TargetResolver.resolve_targets(target_str, source_card, context, target_side)
 		targets = _limit_random_targets(targets, int(eff_dict.get("random_count", 0)), context)
 
-		# Effects that don't need a live battlefield target (draw, mana, zero_cost, etc.)
-		# operate on the hand/deck — skip the turn-1 enemy filter for them.
-		var needs_live_target: bool = not SkillRegistry.is_hand_effect(effect_str)
-		if needs_live_target and _is_enemy_effect_blocked_on_turn_one(targets, source_card, context):
-			print("[SkillEngine] Turn 1: '%s' enemy-targeting effect skipped" % skill_name)
-			continue
+		var needs_live_target: bool = SkillRegistry.requires_live_target(effect_str)
 
-		print("[SkillEngine] %s: %s -> %s x%d on %d target(s)" % [skill_name, effect_str, target_str, value, targets.size()])
 		var effect_context := context.duplicate()
 		effect_context["source_card"] = source_card
 		effect_context["effect_target"] = target_str
@@ -156,16 +339,63 @@ static func _execute_effects(effects: Array, source_card: CardData, context: Dic
 			# Hand/deck effects still honor conditions, evaluated against the source
 			# card as the pseudo-target (e.g. "if hand count >= N").
 			if not _passes_effect_condition(eff_dict, source_card, source_card, context):
+				_trace(context, source_card, "condition_false")
 				continue
+			var value: int = _resolve_value(eff_dict, source_card, source_card, context)
+			if bool(_ensure_budget(context).get("aborted", false)):
+				return
+			print("[SkillEngine] %s: %s -> %s x%d (no battlefield target)" % [skill_name, effect_str, target_str, value])
+			_trace(context, source_card, "resolved", {"effect": effect_str, "target": source_card.card_name, "value": value})
 			_EffectApplier.apply_effect(effect_str, source_card, value, eff_dict, effect_context)
+			EventBus.skill_effect_resolved.emit(source_card, effect_str, source_card, depth)
 			continue
-		for target_card in targets:
+		# Keep the established "one roll per effect" behavior for fixed,
+		# range, random-expression and global/source values. Only expressions
+		# that actually read target stats are recomputed per target.
+		var value_uses_target := _effect_value_uses_target(eff_dict)
+		var shared_value := 0
+		var applied_any := false
+		if not value_uses_target:
+			shared_value = _resolve_value(eff_dict, source_card, source_card, context)
+			if bool(_ensure_budget(context).get("aborted", false)):
+				return
+		if targets.is_empty():
+			_trace(context, source_card, "no_target", {"effect": effect_str})
+		for target_value in targets:
+			var target_card: Variant = target_value
 			var allow_dead_source: bool = target_card == source_card and context.get("trigger", "") == TRIGGER_ON_DEATH
-			if target_card == null or (not target_card.is_alive() and not allow_dead_source):
+			var target_alive: bool = target_card is BattleField and target_card.player_hp > 0 \
+					or target_card is CardData and target_card.is_alive()
+			if target_card == null or (not target_alive and not allow_dead_source):
+				continue
+			if _blocked_enemy_effect_on_first_turn(effect_str, eff_dict, target_card, source_card, context):
+				_trace(context, source_card, "first_turn_blocked", {"effect": effect_str})
+				EventBus.first_turn_effect_blocked.emit(source_card, effect_str)
 				continue
 			if not _passes_effect_condition(eff_dict, source_card, target_card, context):
+				_trace(context, source_card, "condition_false")
 				continue
+			# Dynamic target reporters are deliberately evaluated for each actual
+			# target.  Resolving once against the source made an AoE such as
+			# "damage all by target HP% / 3" use the caster's HP for every unit.
+			var value: int = _resolve_value(eff_dict, source_card, target_card, context) if value_uses_target else shared_value
+			if bool(_ensure_budget(context).get("aborted", false)):
+				return
+			var target_name: String = target_card.owner_name if target_card is BattleField else target_card.card_name
+			print("[SkillEngine] %s: %s -> %s x%d on %s" % [skill_name, effect_str, target_str, value, target_name])
+			_trace(context, source_card, "resolved", {"effect": effect_str, "target": target_name, "value": value})
 			_EffectApplier.apply_effect(effect_str, target_card, value, eff_dict, effect_context)
+			applied_any = true
+		if applied_any:
+			EventBus.skill_effect_resolved.emit(source_card, effect_str, source_card, depth)
+
+
+static func _blocked_enemy_effect_on_first_turn(effect_id: String, effect: Dictionary, target: Variant, source_card: CardData, context: Dictionary) -> bool:
+	if int(context.get("turn_number", 0)) > 1:
+		return false
+	if not SkillRegistry.changes_enemy_hp_or_presence(effect_id, effect):
+		return false
+	return _TargetResolver.targets_include_enemy([target], source_card, context)
 
 
 # Control block: evaluates its condition against the source card and runs the
@@ -175,6 +405,9 @@ static func _execute_if_else(eff: Dictionary, source_card: CardData, context: Di
 	var cond := _condition_dict(eff)
 	var take_then: bool = _passes_effect_condition(cond, source_card, source_card, context)
 	print("[SkillEngine] %s: if -> %s" % [skill_name, "then" if take_then else "else"])
+	_trace(context, source_card, "condition", {"passed": take_then})
+	context = context.duplicate()
+	context["trace_path"] = (context.get("trace_path", []) as Array) + ["then_effects" if take_then else "else_effects"]
 	if take_then:
 		_execute_effects(eff.get("then_effects", []), source_card, context, skill_name, depth + 1)
 	else:
@@ -188,6 +421,9 @@ static func _execute_if_else(eff: Dictionary, source_card: CardData, context: Di
 static func _execute_repeat(eff: Dictionary, source_card: CardData, context: Dictionary, skill_name: String, depth: int) -> void:
 	var times: int = mini(_repeat_count(eff, source_card, context), _UgcSafety.MAX_REPEAT_COUNT)
 	print("[SkillEngine] %s: repeat x%d" % [skill_name, times])
+	_trace(context, source_card, "repeat", {"count": times})
+	context = context.duplicate()
+	context["trace_path"] = (context.get("trace_path", []) as Array) + ["then_effects"]
 	for _i in range(times):
 		_execute_effects(eff.get("then_effects", []), source_card, context, skill_name, depth + 1)
 		if bool(_ensure_budget(context).get("aborted", false)):
@@ -198,7 +434,7 @@ static func _ensure_budget(context: Dictionary) -> Dictionary:
 	var budget = context.get("_ugc_budget", null)
 	if budget is Dictionary:
 		return budget
-	budget = {"effect_nodes": 0, "trigger_depth": 0, "aborted": false, "notified": false}
+	budget = {"effect_nodes": 0, "trigger_depth": 0, "aborted": false, "notified": false, "trace_callable": context.get("trace_callable", Callable())}
 	context["_ugc_budget"] = budget
 	return budget
 
@@ -235,6 +471,7 @@ static func _abort_budget(budget: Dictionary, source_card: CardData, reason: Str
 	budget["notified"] = true
 	var source_name := source_card.card_name if source_card != null else "?"
 	push_warning("[SkillEngine] UGC safety limit hit: %s (%s)" % [source_name, reason])
+	_trace(budget, source_card, "budget_exhausted", {"reason": reason})
 	EventBus.skill_safety_limit_hit.emit(source_name, reason)
 
 
@@ -305,7 +542,7 @@ static func _passes_effect_roll(eff: Dictionary, source_card: CardData, context:
 	return true
 
 
-static func _passes_effect_condition(eff: Dictionary, source_card: CardData, target_card: CardData, context: Dictionary) -> bool:
+static func _passes_effect_condition(eff: Dictionary, source_card: CardData, target_card: Variant, context: Dictionary) -> bool:
 	# Scratch-style boolean block, stored either in a nested "condition" dict
 	# (same shape as if blocks, e.g. {op, lhs, rhs} or {logic, lhs, rhs}) or
 	# directly on the effect dict for legacy data.
@@ -315,15 +552,15 @@ static func _passes_effect_condition(eff: Dictionary, source_card: CardData, tar
 		cond = nested
 	if cond.has("lhs") or cond.has("logic"):
 		return _eval_boolean(cond, source_card, target_card, context)
-	var condition_type: String = eff.get("condition_type", CONDITION_NONE)
+	var condition_type: String = cond.get("condition_type", CONDITION_NONE)
 	if condition_type == "" or condition_type == CONDITION_NONE:
 		return true
-	var op: String = eff.get("condition_op", CONDITION_OP_GTE)
+	var op: String = cond.get("condition_op", CONDITION_OP_GTE)
 	if condition_type == CONDITION_TARGET_HAS_BUFF:
-		var buff_id: String = eff.get("condition_buff_id", "")
+		var buff_id: String = cond.get("condition_buff_id", "")
 		return buff_id != "" and _card_has_buff(target_card, buff_id)
 	var actual: int = _condition_value(condition_type, source_card, target_card, context)
-	var expected: int = int(eff.get("condition_value", 0))
+	var expected: int = int(cond.get("condition_value", 0))
 	return _compare_condition(actual, expected, op)
 
 
@@ -331,7 +568,7 @@ static func _passes_effect_condition(eff: Dictionary, source_card: CardData, tar
 # "[operand] [op] [operand]" where each operand is a number, a variable oval
 # or a math expression; the special "has" form is "[target] has [buff]";
 # and "and"/"or"/"not" combine sub-reports (each a full boolean block).
-static func _eval_boolean(cond: Dictionary, source_card: CardData, target_card: CardData, context: Dictionary, depth: int = 1) -> bool:
+static func _eval_boolean(cond: Dictionary, source_card: CardData, target_card: Variant, context: Dictionary, depth: int = 1) -> bool:
 	if depth > _UgcSafety.MAX_EXPRESSION_NESTING_DEPTH:
 		_abort_budget(_ensure_budget(context), source_card, "expression_depth")
 		return false
@@ -356,7 +593,7 @@ static func _eval_boolean(cond: Dictionary, source_card: CardData, target_card: 
 
 # Resolves one side of a comparison (or a value expression): a fixed number,
 # a variable reporter, or a nested math expression like "(hand+2)*3".
-static func _eval_operand(opd: Dictionary, source_card: CardData, target_card: CardData, context: Dictionary, depth: int = 1) -> int:
+static func _eval_operand(opd: Dictionary, source_card: CardData, target_card: Variant, context: Dictionary, depth: int = 1) -> int:
 	if depth > _UgcSafety.MAX_EXPRESSION_NESTING_DEPTH:
 		_abort_budget(_ensure_budget(context), source_card, "expression_depth")
 		return 0
@@ -374,7 +611,7 @@ static func _eval_operand(opd: Dictionary, source_card: CardData, target_card: C
 				"*":
 					return a * b
 				"/":
-					return int(floor(float(a) / float(b))) if b != 0 else 0
+					return round_expression_result(float(a) / float(b), str(opd.get("rounding", "round"))) if b != 0 else 0
 				"rand":
 					if b < a:
 						var t: int = a
@@ -386,7 +623,14 @@ static func _eval_operand(opd: Dictionary, source_card: CardData, target_card: C
 	return int(opd.get("value", 0))
 
 
-static func _condition_value(condition_type: String, source_card: CardData, target_card: CardData, context: Dictionary) -> int:
+static func round_expression_result(value: float, mode: String = "round") -> int:
+	match mode:
+		"ceil": return ceili(value)
+		"floor": return floori(value)
+		_: return roundi(value)
+
+
+static func _condition_value(condition_type: String, source_card: CardData, target_card: Variant, context: Dictionary) -> int:
 	match condition_type:
 		CONDITION_SOURCE_HP_PCT:
 			return _hp_percent(source_card)
@@ -417,14 +661,18 @@ static func _condition_value(condition_type: String, source_card: CardData, targ
 	return 0
 
 
-static func _hp_percent(card: CardData) -> int:
-	if card == null or card.max_hp <= 0:
+static func _hp_percent(target: Variant) -> int:
+	if target == null:
 		return 0
-	return int(round(float(card.hp) * 100.0 / float(card.max_hp)))
+	if target is BattleField:
+		return int(round(float(target.player_hp) * 100.0 / float(target.max_player_hp))) if target.max_player_hp > 0 else 0
+	if not target is CardData or target.max_hp <= 0:
+		return 0
+	return int(round(float(target.hp) * 100.0 / float(target.max_hp)))
 
 
-static func _card_has_buff(card: CardData, buff_id: String) -> bool:
-	if card == null:
+static func _card_has_buff(card: Variant, buff_id: String) -> bool:
+	if not card is CardData:
 		return false
 	for eff in card.status_effects:
 		if eff.get("buff_id", "") == buff_id and eff.get("value", 0) > 0:
@@ -448,11 +696,6 @@ static func _limit_random_targets(targets: Array, random_count: int, context: Di
 	return targets.slice(0, random_count)
 
 
-static func _is_enemy_effect_blocked_on_turn_one(targets: Array, source_card: CardData, context: Dictionary) -> bool:
-	var turn_no: int = int(context.get("turn_number", 99))
-	return turn_no <= 1 and _TargetResolver.targets_include_enemy(targets, source_card, context)
-
-
 static func _roll_percent(context: Dictionary) -> float:
 	return _GameplayRng.from_context(context).randf() * 100.0
 
@@ -465,16 +708,23 @@ static func _shuffle_targets(targets: Array, context: Dictionary) -> void:
 # Dynamic values
 # ============================================
 
-static func _resolve_value(eff: Dictionary, source_card: CardData, context: Dictionary) -> int:
+static func _resolve_value(eff: Dictionary, source_card: CardData, target_or_context: Variant, maybe_context: Variant = null) -> int:
+	# Three-argument compatibility is kept for older tests/callers. New runtime
+	# code always supplies the concrete target as the third argument.
+	var target_card: Variant = source_card
+	var context: Dictionary = {}
+	if maybe_context is Dictionary:
+		target_card = target_or_context
+		context = maybe_context
+	elif target_or_context is Dictionary:
+		context = target_or_context
 	# A dropped math-expression reporter (e.g. (hand+2)*3) drives the value.
 	if eff.has("value_expr"):
-		return _eval_operand(eff.get("value_expr", {}), source_card, source_card, context)
+		return _sanitize_effect_value(str(eff.get("effect", "")), _eval_operand(eff.get("value_expr", {}), source_card, target_card, context))
 	var var_id: String = eff.get("value_var", "")
 	if var_id != "":
 		var offset: int = int(eff.get("value_offset", 0))
-		# Value reporters never depend on a single target (battlefield / hand /
-		# mana stats); target-relative reporters fall back to the source card.
-		return _var_value(var_id, source_card, source_card, context) + offset
+		return _sanitize_effect_value(str(eff.get("effect", "")), _var_value(var_id, source_card, target_card, context) + offset)
 	if eff.has("value_min") and eff.has("value_max"):
 		var vmin: int = int(eff.get("value_min", 1))
 		var vmax: int = int(eff.get("value_max", 1))
@@ -482,11 +732,34 @@ static func _resolve_value(eff: Dictionary, source_card: CardData, context: Dict
 			var t: int = vmin
 			vmin = vmax
 			vmax = t
-		return _GameplayRng.from_context(context).randi_range(vmin, vmax)
-	return int(eff.get("value", 1))
+		return _sanitize_effect_value(str(eff.get("effect", "")), _GameplayRng.from_context(context).randi_range(vmin, vmax))
+	return _sanitize_effect_value(str(eff.get("effect", "")), int(eff.get("value", 1)))
 
 
-static func _var_value(var_id: String, source_card: CardData, target_card: CardData, context: Dictionary) -> int:
+static func _sanitize_effect_value(effect_id: String, value: int) -> int:
+	# Expressions can evaluate below zero even when the editor's numeric field
+	# cannot. Never let damage/healing/count effects reverse their meaning.
+	return value if SkillRegistry.allows_negative(effect_id) else maxi(0, value)
+
+
+static func _effect_value_uses_target(eff: Dictionary) -> bool:
+	if SkillRegistry.is_target_relative_var(str(eff.get("value_var", ""))):
+		return true
+	return _operand_uses_target(eff.get("value_expr", {}))
+
+
+static func _operand_uses_target(value: Variant) -> bool:
+	if not value is Dictionary:
+		return false
+	var operand: Dictionary = value
+	if str(operand.get("kind", "")) == "var":
+		return SkillRegistry.is_target_relative_var(str(operand.get("var_id", "")))
+	if str(operand.get("kind", "")) == "expr":
+		return _operand_uses_target(operand.get("a", {})) or _operand_uses_target(operand.get("b", {}))
+	return false
+
+
+static func _var_value(var_id: String, source_card: CardData, target_card: Variant, context: Dictionary) -> int:
 	var pf: BattleField = context.get("player_field")
 	var ef: BattleField = context.get("enemy_field")
 	var hand: Array = context.get("active_hand", [])
@@ -520,9 +793,9 @@ static func _var_value(var_id: String, source_card: CardData, target_card: CardD
 		VAR_TARGET_HP_PCT:
 			return _hp_percent(target_card)
 		VAR_TARGET_ATK:
-			return target_card.effective_atk() if target_card != null else 0
+			return target_card.effective_atk() if target_card is CardData else 0
 		VAR_TARGET_COST:
-			return target_card.cost if target_card != null else 0
+			return target_card.cost if target_card is CardData else 0
 	return 0
 
 
@@ -564,7 +837,7 @@ static func _enemy_field_of_source(source_card: CardData, context: Dictionary) -
 	return _TargetResolver.enemy_field_of_source(source_card, context)
 
 
-static func _apply_effect(effect_str: String, target: CardData, value: int, skill: Dictionary, context: Dictionary) -> void:
+static func _apply_effect(effect_str: String, target: Variant, value: int, skill: Dictionary, context: Dictionary) -> void:
 	_EffectApplier.apply_effect(effect_str, target, value, skill, context)
 
 

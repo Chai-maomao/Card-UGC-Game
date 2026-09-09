@@ -309,16 +309,18 @@ func _refresh_focus() -> void:
 			focus_frames[i].visible = false
 			continue
 		var frame_rect := control.get_global_rect().grow(6.0)
+		# Keep the guide geometrically attached to the real block. Clamping the
+		# frame to the scroll viewport made its edge appear pinned while the block
+		# continued moving underneath it.
+		focus_frames[i].position = frame_rect.position
+		focus_frames[i].size = frame_rect.size
 		var palette_scroll := _palette_scroll()
 		if palette_scroll != null and palette_scroll.is_ancestor_of(control):
 			var clip_rect := palette_scroll.get_global_rect()
-			if not frame_rect.intersects(clip_rect):
+			if not clip_rect.encloses(frame_rect):
 				focus_frames[i].visible = false
 				continue
-			frame_rect = frame_rect.intersection(clip_rect)
 		focus_frames[i].visible = frame_rect.size.x > 1.0 and frame_rect.size.y > 1.0
-		focus_frames[i].position = frame_rect.position
-		focus_frames[i].size = frame_rect.size
 
 
 func _palette_scroll() -> ScrollContainer:
@@ -326,7 +328,6 @@ func _palette_scroll() -> ScrollContainer:
 
 
 func _refresh_focus_deferred() -> void:
-	await get_tree().process_frame
 	var palette_target: Control = null
 	if phase == Phase.TRIGGER:
 		palette_target = _trigger_button()
@@ -336,6 +337,14 @@ func _refresh_focus_deferred() -> void:
 		var palette_scroll := _palette_scroll()
 		if palette_scroll != null:
 			palette_scroll.ensure_control_visible(palette_target)
+			await get_tree().process_frame
+			# ensure_control_visible() can over-scroll controls nested inside the
+			# palette's category containers. Centre the real global rect in the
+			# viewport so the guide frame starts visible and continues to track it.
+			var target_rect := palette_target.get_global_rect()
+			var clip_rect := palette_scroll.get_global_rect()
+			var correction := target_rect.get_center().y - clip_rect.get_center().y
+			palette_scroll.scroll_vertical = maxi(0, palette_scroll.scroll_vertical + roundi(correction))
 			await get_tree().process_frame
 	_refresh_focus()
 

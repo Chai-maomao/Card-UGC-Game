@@ -41,6 +41,11 @@ layout_mode = 2
 custom_minimum_size = Vector2(260, 42)
 layout_mode = 2
 
+[node name="AnimationAcceleration" type="CheckButton" parent="CenterContainer/VBoxContainer"]
+custom_minimum_size = Vector2(260, 42)
+layout_mode = 2
+text = "动画加速"
+
 [node name="BackButton" type="Button" parent="CenterContainer/VBoxContainer"]
 custom_minimum_size = Vector2(260, 44)
 layout_mode = 2

@@ -11,6 +11,8 @@ signal card_drawn(amount: int)
 signal card_died(card: CardData, slot: int, side: String)
 @warning_ignore("unused_signal")
 signal card_summoned(card: CardData, slot: int, side: String)
+@warning_ignore("unused_signal")
+signal hand_entry_resolved(card: CardData, player: int, destination: String, source: String, source_meta: Dictionary)
 
 # Combat events
 @warning_ignore("unused_signal")
@@ -27,6 +29,10 @@ signal skill_roll_failed(source: CardData, skill_name: String, misfortune: int, 
 signal skill_triggered(skill_name: String, source: CardData)
 @warning_ignore("unused_signal")
 signal skill_safety_limit_hit(source_name: String, reason: String)
+@warning_ignore("unused_signal")
+signal skill_effect_resolved(source: CardData, effect_id: String, target: Variant, chain_depth: int)
+@warning_ignore("unused_signal")
+signal first_turn_effect_blocked(source: CardData, effect_id: String)
 
 # Turn events
 @warning_ignore("unused_signal")
@@ -50,7 +56,7 @@ signal view_discard_select(count: int, draw_count: int, current_player: int, han
 @warning_ignore("unused_signal")
 signal view_deck_select(count: int, draw_count: int, current_player: int, hand: Array)
 @warning_ignore("unused_signal")
-signal make_zero_cost_select(count: int, current_player: int, hand: Array, target: String, random_count: int)
+signal make_zero_cost_select(reduction: int, cost_mode: String, current_player: int, hand: Array, target: String, random_count: int)
 @warning_ignore("unused_signal")
 signal shuffle_discard_into_deck()
 

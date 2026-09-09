@@ -21,6 +21,7 @@ var preview_text: String = ""
 
 
 func setup(p_block: Node, p_cond: Dictionary, p_payload: Dictionary) -> void:
+	tooltip_text = SkillHelp.description("logic", str(p_cond.get("logic"))) if p_cond.has("logic") else SkillHelp.description("boolean", "has_buff" if p_cond.get("op", "") == "has" else "compare")
 	block = p_block
 	payload = p_payload
 	preview_text = Locale.t("skill_editor.logic_and") if p_cond.has("logic") else Locale.t("skill_editor.boolean_compare")

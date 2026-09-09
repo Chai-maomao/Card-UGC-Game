@@ -21,6 +21,8 @@ func _ready() -> void:
 	_test_registry_buff_meta_complete()
 	_test_registry_trigger_meta_complete()
 	_test_registry_queries()
+	_test_change_cost_effect()
+	_test_board_change_trigger_sides()
 	_test_registry_locale_complete()
 	_test_engine_reexport_parity()
 	_test_b1_lifesteal_lethal_does_not_trigger_damaged()
@@ -86,9 +88,10 @@ func _test_registry_effect_meta_complete() -> void:
 		SkillEngine.EFFECT_DISPEL, SkillEngine.EFFECT_GAIN_MANA, SkillEngine.EFFECT_GAIN_ATTACK,
 		SkillEngine.EFFECT_GAIN_MAX_HP, SkillEngine.EFFECT_VIEW_DISCARD, SkillEngine.EFFECT_VIEW_DECK,
 		SkillEngine.EFFECT_ZERO_COST, SkillEngine.EFFECT_MANA_DRAIN, SkillEngine.EFFECT_SWAP_ATTACK,
-		SkillEngine.EFFECT_DISCARD_HAND, SkillEngine.EFFECT_COPY_HAND,
+		SkillEngine.EFFECT_DISCARD_HAND, SkillEngine.EFFECT_COPY_HAND, SkillEngine.EFFECT_CLONE_ENEMY,
+		SkillEngine.EFFECT_MATCH_MAX_HP, SkillEngine.EFFECT_DAMAGE_CAP, SkillEngine.EFFECT_CHANGE_COST,
 	]
-	_assert(expected.size() == 20, "expected 20 skill effects, got %d" % expected.size())
+	_assert(expected.size() == 24, "expected 24 skill effects, got %d" % expected.size())
 	_assert(SkillRegistry.EFFECT_IDS.size() == expected.size(), "EFFECT_IDS size mismatch")
 	for effect_id: String in SkillRegistry.EFFECT_IDS:
 		var meta: Dictionary = SkillRegistry.effect_meta(effect_id)
@@ -109,6 +112,7 @@ func _test_registry_effect_meta_complete() -> void:
 	_assert(SkillRegistry.EFFECT_IDS[5] == SkillEngine.EFFECT_ADD_BUFF, "EFFECT_IDS order changed at index 5")
 	_assert(SkillRegistry.EFFECT_IDS[15] == SkillEngine.EFFECT_ZERO_COST, "EFFECT_IDS order changed at index 15")
 	_assert(SkillRegistry.EFFECT_IDS[19] == SkillEngine.EFFECT_COPY_HAND, "EFFECT_IDS order changed at index 19")
+	_assert(SkillRegistry.EFFECT_IDS[20] == SkillEngine.EFFECT_CLONE_ENEMY, "EFFECT_IDS order changed at index 20")
 
 
 func _test_registry_effect_sentence_templates() -> void:
@@ -149,6 +153,7 @@ func _test_registry_trigger_meta_complete() -> void:
 	var triggers: Array = [
 		SkillEngine.TRIGGER_ON_ATTACK, SkillEngine.TRIGGER_ON_ACTIVATE, SkillEngine.TRIGGER_ON_SUMMON,
 		SkillEngine.TRIGGER_ON_DEATH, SkillEngine.TRIGGER_ON_DAMAGED, SkillEngine.TRIGGER_ON_CAST,
+		SkillEngine.TRIGGER_ON_ADDED, SkillEngine.TRIGGER_ON_DISCARDED, SkillEngine.TRIGGER_ON_BOARD_CHANGED, SkillEngine.TRIGGER_ALWAYS,
 	]
 	for trigger_id: String in triggers:
 		_assert(SkillRegistry.trigger_is_passive(trigger_id) == (trigger_id != SkillEngine.TRIGGER_ON_ACTIVATE and trigger_id != SkillEngine.TRIGGER_ON_CAST),
@@ -156,6 +161,16 @@ func _test_registry_trigger_meta_complete() -> void:
 
 
 func _test_registry_queries() -> void:
+	_assert(SkillRegistry.talent_effects_for_trigger(SkillEngine.TRIGGER_ALWAYS) == [SkillEngine.EFFECT_DAMAGE_CAP],
+		"continuous talent palette must expose only damage cap")
+	_assert(SkillRegistry.talent_effects_for_trigger(SkillEngine.TRIGGER_ON_ADDED) == [SkillEngine.EFFECT_MATCH_MAX_HP, SkillEngine.EFFECT_CHANGE_COST],
+		"On Added talent palette must expose growth and match cost change")
+	_assert(SkillRegistry.talent_effects_for_trigger(SkillEngine.TRIGGER_ON_DISCARDED) == [SkillEngine.EFFECT_GAIN_MANA, SkillEngine.EFFECT_CHANGE_COST],
+		"On Discarded talent palette must expose mana recovery and match cost change")
+	_assert(SkillRegistry.talent_effects_for_trigger(SkillEngine.TRIGGER_ON_BOARD_CHANGED) == [SkillEngine.EFFECT_CHANGE_COST],
+		"Board Changed talent palette must expose match cost change")
+	_assert(not SkillRegistry.is_effect_allowed_for_talent_trigger(SkillEngine.EFFECT_DAMAGE, SkillEngine.TRIGGER_ON_ADDED),
+		"ordinary skill effects must not leak into the talent palette")
 	_assert(SkillRegistry.is_hand_effect(SkillEngine.EFFECT_DRAW_CARDS), "draw_cards not hand effect")
 	_assert(SkillRegistry.is_hand_effect(SkillEngine.EFFECT_ZERO_COST), "zero_cost not hand effect")
 	_assert(SkillRegistry.is_hand_effect(SkillEngine.EFFECT_GAIN_MANA), "gain_mana not hand effect")
@@ -166,12 +181,64 @@ func _test_registry_queries() -> void:
 	_assert(not SkillRegistry.uses_value(SkillEngine.EFFECT_CLEANSE), "cleanse should have no value")
 	_assert(not SkillRegistry.uses_value(SkillEngine.EFFECT_DISPEL), "dispel should have no value")
 	_assert(SkillRegistry.uses_value(SkillEngine.EFFECT_DAMAGE), "damage should use a value")
+	_assert(not SkillRegistry.uses_value(SkillEngine.EFFECT_CLONE_ENEMY), "clone should not expose a meaningless value")
+	_assert(SkillRegistry.forced_target_side(SkillEngine.EFFECT_CLONE_ENEMY) == SkillEngine.TARGET_SIDE_ENEMY, "clone must force enemy side")
+	_assert(SkillEngine.TARGET_SELF not in SkillRegistry.allowed_targets(SkillEngine.EFFECT_CLONE_ENEMY), "clone must not allow self target")
 	_assert(SkillRegistry.allows_negative(SkillEngine.EFFECT_GAIN_MANA), "gain_mana should allow negative")
 	_assert(SkillRegistry.allows_negative(SkillEngine.EFFECT_GAIN_MAX_HP), "gain_max_hp should allow negative")
 	_assert(not SkillRegistry.allows_negative(SkillEngine.EFFECT_DAMAGE), "damage should not allow negative")
+	_assert(SkillRegistry.allows_negative(SkillEngine.EFFECT_CHANGE_COST), "change_cost must allow positive and negative values")
 	_assert(not SkillRegistry.buff_uses_value(SkillEngine.BUFF_TAUNT), "taunt should have no value")
 	_assert(not SkillRegistry.buff_uses_value(SkillEngine.BUFF_SILENCE), "silence should have no value")
 	_assert(SkillRegistry.buff_uses_value(SkillEngine.BUFF_ATK_BOOST), "atk_boost should use a value")
+
+
+func _test_change_cost_effect() -> void:
+	var card := CardData.new("变费目标", 3, 4, 1)
+	SkillEffectApplier.apply_effect(SkillEngine.EFFECT_CHANGE_COST, card, -5, {}, {})
+	_assert(card.cost == 0 and card.match_cost_delta == -5, "negative change_cost must clamp display cost at zero and retain its signed delta")
+	card.reset_to_base()
+	_assert(card.cost == 0, "match cost change must survive discard/reset")
+	SkillEffectApplier.apply_effect(SkillEngine.EFFECT_CHANGE_COST, card, 7, {}, {})
+	_assert(card.cost == 5 and card.match_cost_delta == 2, "positive change_cost must raise the same match-persistent value")
+	var restored := PlayerData.deserialize_card(PlayerData.serialize_card(card))
+	_assert(restored.cost == 5 and restored.match_cost_delta == 2, "match cost change must survive battle serialization")
+
+
+func _test_board_change_trigger_sides() -> void:
+	var game := GameStateScript.new()
+	game.quiet = true
+	game.init_game(Callable(), 7)
+	game.shared_deck.clear()
+	var ally_watch := CardData.new("我方观察者", 1, 4, 1, [{
+		"skill_name": "我方变动", "trigger": SkillEngine.TRIGGER_ON_BOARD_CHANGED, "trigger_side": SkillEngine.TARGET_SIDE_ALLY,
+		"effects": [{"effect": SkillEngine.EFFECT_GAIN_ATTACK, "target": SkillEngine.TARGET_SELF, "value": 1}],
+	}])
+	var enemy_watch := CardData.new("敌方观察者", 1, 4, 1, [{
+		"skill_name": "敌方变动", "trigger": SkillEngine.TRIGGER_ON_BOARD_CHANGED, "trigger_side": SkillEngine.TARGET_SIDE_ENEMY,
+		"effects": [{"effect": SkillEngine.EFFECT_GAIN_ATTACK, "target": SkillEngine.TARGET_SELF, "value": 1}],
+	}])
+	var talent_watch := CardData.new("天赋观察者", 4, 4, 1, [{
+		"skill_name": "我方变费", "skill_type": SkillEngine.SKILL_TYPE_TALENT,
+		"trigger": SkillEngine.TRIGGER_ON_BOARD_CHANGED, "trigger_side": SkillEngine.TARGET_SIDE_ALLY,
+		"effects": [{"effect": SkillEngine.EFFECT_CHANGE_COST, "target": SkillEngine.TARGET_SELF, "value": -1}],
+	}])
+	game.player_field.slots[0] = ally_watch
+	game.player_field.slots[1] = enemy_watch
+	game.player_field.slots[3] = talent_watch
+	game.player_field.current_mana = 10
+	var entrant := CardData.new("入场者", 1, 2, 1)
+	game.player_hand = [entrant]
+	_assert(game.summon_card(entrant, 2), "board-change fixture summon must succeed")
+	_assert(ally_watch.field_atk_bonus == 1 and enemy_watch.field_atk_bonus == 0, "ally board-change trigger must not also fire for enemy-side selection")
+	_assert(talent_watch.cost == 3 and talent_watch.match_cost_delta == -1, "board-change talent must resolve its self-targeted cost change")
+	game.current_player = 2
+	game.player2_field.current_mana = 10
+	var enemy_entrant := CardData.new("敌方入场者", 1, 2, 1)
+	game.player2_hand = [enemy_entrant]
+	_assert(game.summon_card(enemy_entrant, 2), "enemy board-change fixture summon must succeed")
+	_assert(ally_watch.field_atk_bonus == 1 and enemy_watch.field_atk_bonus == 1, "enemy board-change trigger must fire when the opposing field changes")
+	_assert(talent_watch.cost == 3, "ally-only board-change talent must ignore opposing field changes")
 
 
 func _test_registry_locale_complete() -> void:
@@ -204,6 +271,7 @@ func _test_registry_locale_complete() -> void:
 func _test_engine_reexport_parity() -> void:
 	_assert(SkillEngine.EFFECT_DAMAGE == SkillRegistry.EFFECT_DAMAGE, "effect re-export mismatch")
 	_assert(SkillEngine.EFFECT_ZERO_COST == SkillRegistry.EFFECT_ZERO_COST, "zero_cost re-export mismatch")
+	_assert(SkillEngine.EFFECT_CLONE_ENEMY == SkillRegistry.EFFECT_CLONE_ENEMY, "clone_enemy re-export mismatch")
 	_assert(SkillEngine.BUFF_IMMUNE_LETHAL == SkillRegistry.BUFF_IMMUNE_LETHAL, "buff re-export mismatch")
 	_assert(SkillEngine.TRIGGER_ON_DAMAGED == SkillRegistry.TRIGGER_ON_DAMAGED, "trigger re-export mismatch")
 	_assert(SkillEngine.CONDITION_TARGET_HAS_BUFF == SkillRegistry.CONDITION_TARGET_HAS_BUFF, "condition re-export mismatch")
@@ -590,9 +658,9 @@ func _test_math_expr_operand() -> void:
 	}
 	var val: int = SkillEngine._eval_operand(expr, caster, caster, ctx)
 	_assert(val == 15, "nested math expr wrong: %d" % val)
-	# Division truncates: 7 / 2 = 3
+	# Expression division defaults to nearest: 7 / 2 = 4.
 	var div := {"kind": "expr", "op": "/", "a": {"kind": "num", "value": 7}, "b": {"kind": "num", "value": 2}}
-	_assert(SkillEngine._eval_operand(div, caster, caster, ctx) == 3, "int division wrong")
+	_assert(SkillEngine._eval_operand(div, caster, caster, ctx) == 4, "default nearest division wrong")
 	# Division by zero is safe.
 	var div0 := {"kind": "expr", "op": "/", "a": {"kind": "num", "value": 5}, "b": {"kind": "num", "value": 0}}
 	_assert(SkillEngine._eval_operand(div0, caster, caster, ctx) == 0, "division by zero should be 0")

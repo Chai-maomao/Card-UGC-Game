@@ -9,7 +9,10 @@ const ParasiteRules = preload("res://ParasiteRules.gd")
 # Skill effect application
 # ============================================
 
-static func apply_effect(effect_str: String, target: CardData, value: int, skill: Dictionary, context: Dictionary) -> void:
+static func apply_effect(effect_str: String, target: Variant, value: int, skill: Dictionary, context: Dictionary) -> void:
+	if target is BattleField and not SkillRegistry.allows_player_target(effect_str):
+		push_warning("[SkillEffectApplier] Effect '%s' cannot target a player body" % effect_str)
+		return
 	var handler_name: String = str(SkillRegistry.effect_meta(effect_str).get("handler", ""))
 	if handler_name == "":
 		push_error("[SkillEffectApplier] No handler registered for effect '%s'" % effect_str)
@@ -17,12 +20,22 @@ static func apply_effect(effect_str: String, target: CardData, value: int, skill
 	Callable(SkillEffectApplier, handler_name).call(target, value, skill, context)
 
 
-static func _apply_damage(target: CardData, value: int, _skill: Dictionary, context: Dictionary) -> void:
+static func _apply_damage(target: Variant, value: int, _skill: Dictionary, context: Dictionary) -> void:
+	if target == null or value <= 0:
+		return
+	if target is BattleField:
+		var before: int = target.player_hp
+		target.damage_player(value)
+		var actual: int = maxi(0, before - target.player_hp)
+		print("  -> %s player takes %d dmg (HP: %d)" % [target.owner_name, actual, target.player_hp])
+		return
+	if not target is CardData:
+		return
 	var source: CardData = context.get("source_card")
 	var declared := value
 	var reduction_pct: int = target.get_damage_reduction()
 	if reduction_pct > 0:
-		value = int(floor(float(value) * (1.0 - float(reduction_pct) / 100.0)))
+		value = maxi(0, int(floor(float(value) * (1.0 - float(reduction_pct) / 100.0))))
 	if _should_parasite_absorb(target, context):
 		var parasite_result := ParasiteRules.absorb_damage_detail(target, value, context.get("discard_pile", []))
 		value = int(parasite_result.get("remaining", value))
@@ -30,7 +43,7 @@ static func _apply_damage(target: CardData, value: int, _skill: Dictionary, cont
 		if parasite != null:
 			EventBus.parasite_damage_resolved.emit(target, parasite, declared, int(parasite_result.get("absorbed", 0)), bool(parasite_result.get("destroyed", false)))
 	var temp_hp_before: int = target.temp_hp
-	var actual := target.take_damage_without_reduction(value)
+	var actual: int = int(target.take_damage_without_reduction(value))
 	EventBus.damage_resolved.emit(source, target, declared, actual, reduction_pct, temp_hp_before, "skill")
 	EventBus.hp_changed.emit(target, -actual, target.hp)
 	_trigger_damaged_safe(target, context)
@@ -51,14 +64,28 @@ static func _trigger_healed_safe(target: CardData, context: Dictionary) -> void:
 	SkillEngine.trigger_skills(SkillEngine.TRIGGER_ON_HEALED, target, context)
 
 
-static func _apply_heal(target: CardData, value: int, _skill: Dictionary, context: Dictionary) -> void:
+static func _apply_heal(target: Variant, value: int, _skill: Dictionary, context: Dictionary) -> void:
+	if target == null or value <= 0:
+		return
+	if target is BattleField:
+		var before: int = target.player_hp
+		target.heal_player(value)
+		var actual: int = maxi(0, target.player_hp - before)
+		print("  -> %s player healed %d (HP: %d)" % [target.owner_name, actual, target.player_hp])
+		return
+	if not target is CardData:
+		return
+	var before: int = int(target.hp)
 	target.heal(value)
-	EventBus.hp_changed.emit(target, value, target.hp)
+	var actual: int = maxi(0, int(target.hp) - before)
+	EventBus.hp_changed.emit(target, actual, target.hp)
 	_trigger_healed_safe(target, context)
-	print("  -> %s healed %d (HP: %d)" % [target.card_name, value, target.hp])
+	print("  -> %s healed %d (HP: %d)" % [target.card_name, actual, target.hp])
 
 
 static func _apply_draw_cards(_target: CardData, value: int, _skill: Dictionary, context: Dictionary) -> void:
+	if value <= 0:
+		return
 	var cb: Callable = context.get("draw_callable", Callable())
 	if cb.is_valid():
 		cb.call(value)
@@ -66,6 +93,8 @@ static func _apply_draw_cards(_target: CardData, value: int, _skill: Dictionary,
 
 
 static func _apply_shield(target: CardData, value: int, _skill: Dictionary, _context: Dictionary) -> void:
+	if target == null or value <= 0:
+		return
 	target.temp_hp += value
 	print("  -> %s gains %d temp HP (total: %d)" % [target.card_name, value, target.temp_hp])
 
@@ -80,11 +109,13 @@ static func _apply_buff(target: CardData, value: int, skill: Dictionary, context
 
 
 static func _apply_lifesteal_damage(target: CardData, value: int, _skill: Dictionary, context: Dictionary) -> void:
+	if target == null or value <= 0:
+		return
 	var source: CardData = context.get("source_card")
 	var declared := value
 	var reduction_pct: int = target.get_damage_reduction()
 	if reduction_pct > 0:
-		value = int(floor(float(value) * (1.0 - float(reduction_pct) / 100.0)))
+		value = maxi(0, int(floor(float(value) * (1.0 - float(reduction_pct) / 100.0))))
 	if _should_parasite_absorb(target, context):
 		var parasite_result := ParasiteRules.absorb_damage_detail(target, value, context.get("discard_pile", []))
 		value = int(parasite_result.get("remaining", value))
@@ -97,15 +128,19 @@ static func _apply_lifesteal_damage(target: CardData, value: int, _skill: Dictio
 	EventBus.hp_changed.emit(target, -actual, target.hp)
 	_trigger_damaged_safe(target, context)
 	if source != null and actual > 0 and source.is_alive():
+		var source_before := source.hp
 		source.heal(actual)
-		EventBus.hp_changed.emit(source, actual, source.hp)
+		var healed := maxi(0, source.hp - source_before)
+		EventBus.hp_changed.emit(source, healed, source.hp)
 		_trigger_healed_safe(source, context)
-		print("  -> %s takes %d lifesteal dmg; %s heals %d (HP: %d)" % [target.card_name, actual, source.card_name, actual, source.hp])
+		print("  -> %s takes %d lifesteal dmg; %s heals %d (HP: %d)" % [target.card_name, actual, source.card_name, healed, source.hp])
 	else:
 		print("  -> %s takes %d lifesteal dmg" % [target.card_name, actual])
 
 
 static func _apply_execute(target: CardData, value: int, _skill: Dictionary, _context: Dictionary) -> void:
+	if target == null or value <= 0:
+		return
 	if target.hp <= value:
 		var actual := target.hp
 		if target.immune_lethal:
@@ -153,19 +188,45 @@ static func _apply_gain_mana(_target: CardData, value: int, _skill: Dictionary, 
 
 static func _apply_gain_attack(target: CardData, value: int, _skill: Dictionary, _context: Dictionary) -> void:
 	target.field_atk_bonus += value
-	print("  -> %s gains %d permanent attack (effective ATK: %d)" % [target.card_name, value, target.effective_atk()])
+	print("  -> %s changes battlefield attack by %d (effective ATK: %d)" % [target.card_name, value, target.effective_atk()])
 
 
 static func _apply_gain_max_hp(target: CardData, value: int, _skill: Dictionary, _context: Dictionary) -> void:
-	target.max_hp += value
-	target.base_max_hp += value
-	if value >= 0:
-		target.hp = min(target.max_hp, target.hp + value)
+	if target == null or value == 0:
+		return
+	var old_max := target.max_hp
+	var applied := maxi(1, old_max + value) - old_max
+	target.max_hp = old_max + applied
+	if applied >= 0:
+		target.hp = mini(target.max_hp, target.hp + applied)
 	else:
 		# Negative max HP: also clamp current HP to new max
-		target.hp = min(target.max_hp, target.hp)
+		target.hp = mini(target.max_hp, target.hp)
+	EventBus.hp_changed.emit(target, applied, target.hp)
+	print("  -> %s changes battlefield max HP by %d (HP: %d/%d)" % [target.card_name, applied, target.hp, target.max_hp])
+
+
+static func _apply_match_max_hp(target: CardData, value: int, _skill: Dictionary, _context: Dictionary) -> void:
+	if target == null or value <= 0:
+		return
+	target.base_max_hp += value
+	target.max_hp += value
+	target.hp += value
 	EventBus.hp_changed.emit(target, value, target.hp)
-	print("  -> %s gains %d max HP (HP: %d/%d)" % [target.card_name, value, target.hp, target.max_hp])
+	print("  -> %s gains %d max HP for this match (HP: %d/%d)" % [target.card_name, value, target.hp, target.max_hp])
+
+
+static func _apply_damage_cap(_target: CardData, _value: int, _skill: Dictionary, _context: Dictionary) -> void:
+	# Continuous talents are read directly by CardData at damage time.
+	pass
+
+
+static func _apply_change_cost(target: CardData, value: int, _skill: Dictionary, _context: Dictionary) -> void:
+	if target == null or value == 0:
+		return
+	var before := target.cost
+	target.apply_cost_change(value)
+	print("  -> %s changes match cost by %d (%d -> %d)" % [target.card_name, value, before, target.cost])
 
 
 static func _should_parasite_absorb(target: CardData, context: Dictionary) -> bool:
@@ -176,6 +237,9 @@ static func _should_parasite_absorb(target: CardData, context: Dictionary) -> bo
 
 
 static func _apply_charm(target: CardData, _value: int, _skill: Dictionary, context: Dictionary) -> void:
+	if target == context.get("source_card") and str(context.get("trigger", "")) == SkillEngine.TRIGGER_ON_DEATH:
+		push_warning("[SkillEffect] A dead card cannot charm itself")
+		return
 	var enemy_field: BattleField = context.get("enemy_field")
 	var player_field: BattleField = context.get("player_field")
 	var hand: Array = context.get("active_hand", [])
@@ -200,14 +264,20 @@ static func _apply_charm(target: CardData, _value: int, _skill: Dictionary, cont
 		return
 
 	var copy := target.duplicate_card()
-	copy.original_cost = target.original_cost if target.original_cost >= 0 else target.cost
-	copy.cost = 0
-	copy.charmed_slot = slot_idx
+	copy.apply_charm_cost(slot_idx)
+	var current_player: int = int(context.get("current_player", 0))
+	var source_player: int = current_player if target_field == player_field else (2 if current_player == 1 else 1)
 
 	target_field.slots[slot_idx] = null
-	print("  -> %s charmed! (slot %d) cost 0 this turn" % [copy.card_name, slot_idx])
-
-	hand.append(copy)
+	var board_change_cb: Callable = context.get("board_change_callable", Callable())
+	if board_change_cb.is_valid():
+		board_change_cb.call(source_player, "leave", target)
+	print("  -> %s charmed! (slot %d) cost 0 for this turn" % [copy.card_name, slot_idx])
+	_resolve_hand_entry(copy, "field", {
+		"source_player": source_player,
+		"source_slot": slot_idx,
+		"source_instance_id": target.instance_id,
+	}, context)
 
 
 # ============================================
@@ -215,17 +285,21 @@ static func _apply_charm(target: CardData, _value: int, _skill: Dictionary, cont
 # ============================================
 
 static func _apply_view_discard_select(_target: CardData, value: int, _skill: Dictionary, context: Dictionary) -> void:
+	if value <= 0:
+		return
 	var discard_pile: Array = context.get("discard_pile", [])
 	if discard_pile.is_empty():
 		print("[SkillEffect] View discard: discard pile is empty")
 		return
-	var count := value if value > 0 else 1
+	var count := value
 	var draw_count: int = int(context.get("random_count", 0))
 	EventBus.view_discard_select.emit(count, draw_count, context.get("current_player", 0), context.get("active_hand", []))
 	print("  -> View discard pile and select up to %d card(s) from %d drawn" % [count, draw_count])
 
 
 static func _apply_view_deck_select(_target: CardData, value: int, _skill: Dictionary, context: Dictionary) -> void:
+	if value <= 0:
+		return
 	var deck: Array = context.get("shared_deck", [])
 	if deck.is_empty():
 		var discard_pile: Array = context.get("discard_pile", [])
@@ -234,24 +308,33 @@ static func _apply_view_deck_select(_target: CardData, value: int, _skill: Dicti
 			return
 		# Shuffle discard into deck when needed
 		EventBus.shuffle_discard_into_deck.emit()
-	var count := value if value > 0 else 1
+	var count := value
 	var draw_count: int = int(context.get("random_count", 0))
 	EventBus.view_deck_select.emit(count, draw_count, context.get("current_player", 0), context.get("active_hand", []))
 	print("  -> View deck top cards and select up to %d card(s) from %d drawn" % [count, draw_count])
 
 
 static func _apply_make_zero_cost(_target: CardData, value: int, skill: Dictionary, context: Dictionary) -> void:
+	if value <= 0:
+		return
 	var hand: Array = context.get("active_hand", [])
 	if hand.is_empty():
-		print("[SkillEffect] Make zero cost: hand is empty")
+		print("[SkillEffect] Reduce cost: hand is empty")
 		return
-	var target_str: String = skill.get("target", SkillEngine.TARGET_SELF)
+	# Legacy editor data may omit the hand selector. Treat it as the documented
+	# default (choose one hand card) instead of emitting an empty selection mode.
+	var target_str: String = str(skill.get("target", SkillEngine.TARGET_SINGLE))
+	if target_str == "":
+		target_str = SkillEngine.TARGET_SINGLE
 	var random_count: int = int(skill.get("random_count", 0))
+	var cost_mode: String = str(skill.get("cost_reduction_mode", SkillRegistry.COST_REDUCTION_TURN))
+	var permanent: bool = cost_mode == SkillRegistry.COST_REDUCTION_PERMANENT
 
-	# Gather eligible candidates (cost > 0, not already zero-cost)
+	# Reductions stack and clamp at zero. Zero-cost cards are omitted because
+	# another reduction cannot change their current payable value.
 	var candidates: Array = []
 	for card in hand:
-		if card is CardData and card.cost > 0 and not card.zero_cost_until_deploy:
+		if card is CardData and card.cost > 0:
 			candidates.append(card)
 	if candidates.is_empty():
 		return
@@ -259,25 +342,53 @@ static func _apply_make_zero_cost(_target: CardData, value: int, skill: Dictiona
 	# TARGET_ALL: apply to all hand cards directly
 	if target_str == SkillEngine.TARGET_ALL:
 		for card in candidates:
-			card.cost = 0
-			card.zero_cost_until_deploy = true
-		print("  -> Make all %d hand card(s) cost 0 until deployed" % candidates.size())
+			card.apply_cost_reduction(value, permanent)
+		print("  -> Reduce all %d hand card(s) by %d (%s)" % [candidates.size(), value, cost_mode])
 		return
 
-	# TARGET_SINGLE with random_count > 0: randomly select
+	# TARGET_SINGLE with random_count > 0: random mode. random_count is the
+	# visible count in this variant; the ordinary value is used only by the
+	# interactive selection variant.
 	if target_str == SkillEngine.TARGET_SINGLE and random_count > 0:
 		_GameplayRng.shuffle(candidates, _GameplayRng.from_context(context))
 		var pick_count : int = min(random_count, candidates.size())
 		for i in range(pick_count):
-			candidates[i].cost = 0
-			candidates[i].zero_cost_until_deploy = true
-		print("  -> Make %d random card(s) cost 0 until deployed" % pick_count)
+			candidates[i].apply_cost_reduction(value, permanent)
+		print("  -> Reduce %d random card(s) by %d (%s)" % [pick_count, value, cost_mode])
 		return
 
-	# Otherwise: let player select (SELF, SINGLE, SIDES, SELF_SIDES)
-	var count: int = value if value > 0 else 1
-	EventBus.make_zero_cost_select.emit(count, context.get("current_player", 0), hand, target_str, random_count)
-	print("  -> Make up to %d card(s) cost 0 until deployed (target=%s)" % [count, target_str])
+	# Otherwise the player selects one anchor; SIDES also affects its neighbors.
+	EventBus.make_zero_cost_select.emit(value, cost_mode, context.get("current_player", 0), hand, target_str, random_count)
+	print("  -> Choose a hand card to reduce by %d (%s, target=%s)" % [value, cost_mode, target_str])
+
+
+static func _apply_clone_enemy(target: CardData, _value: int, _skill: Dictionary, context: Dictionary) -> void:
+	if target == null:
+		return
+	var enemy_field: BattleField = context.get("enemy_field")
+	var hand: Array = context.get("active_hand", [])
+	if enemy_field == null or hand == null or target not in enemy_field.slots:
+		return
+	var copy := target.duplicate_card()
+	var rng := _GameplayRng.from_context(context)
+	_reidentify_clone_tree(copy, rng)
+	# A clone carries the target's complete current card state; only its runtime
+	# identity changes so synchronization and replay can distinguish the copy.
+	var slot_idx: int = enemy_field.slots.find(target)
+	var current_player: int = int(context.get("current_player", 0))
+	_resolve_hand_entry(copy, "field", {
+		"source_player": 2 if current_player == 1 else 1,
+		"source_slot": slot_idx,
+		"source_instance_id": target.instance_id,
+	}, context)
+	print("  -> Clone enemy %s into hand" % target.card_name)
+
+
+static func _reidentify_clone_tree(card: CardData, rng: RandomNumberGenerator) -> void:
+	card.instance_id = "clone_%08x%08x" % [rng.randi(), rng.randi()]
+	for parasite in card.parasite_cards:
+		if parasite is CardData:
+			_reidentify_clone_tree(parasite, rng)
 
 
 # ============================================
@@ -285,6 +396,8 @@ static func _apply_make_zero_cost(_target: CardData, value: int, skill: Dictiona
 # ============================================
 
 static func _apply_mana_drain(_target: CardData, value: int, _skill: Dictionary, context: Dictionary) -> void:
+	if value <= 0:
+		return
 	var pf: BattleField = context.get("player_field")
 	var ef: BattleField = context.get("enemy_field")
 	# Only siphon what the enemy actually has: draining 5 from an enemy with
@@ -314,36 +427,72 @@ static func _apply_swap_attack(target: CardData, _value: int, _skill: Dictionary
 
 
 static func _apply_discard_hand(_target: CardData, value: int, _skill: Dictionary, context: Dictionary) -> void:
+	if value <= 0:
+		return
 	var enemy_hand: Array = context.get("enemy_hand", [])
 	if enemy_hand == null or enemy_hand.is_empty():
 		print("[SkillEffect] Discard hand: enemy hand is empty")
 		return
 	var rng := _GameplayRng.from_context(context)
 	var discard_pile: Array = context.get("discard_pile", [])
+	var discard_cb: Callable = context.get("discard_card_callable", Callable())
+	var current_player := int(context.get("current_player", 1))
+	var victim_player := 2 if current_player == 1 else 1
 	var count: int = min(value, enemy_hand.size())
 	for _i in range(count):
 		var idx: int = rng.randi_range(0, enemy_hand.size() - 1)
 		var card: CardData = enemy_hand[idx]
 		enemy_hand.remove_at(idx)
 		if card != null:
-			card.reset_to_base()
-			discard_pile.append(card)
+			if discard_cb.is_valid():
+				discard_cb.call(card, victim_player, "effect")
+			else:
+				card.reset_to_base()
+				discard_pile.append(card)
 	print("  -> Enemy discards %d card(s)" % count)
 
 
 static func _apply_copy_hand(_target: CardData, value: int, _skill: Dictionary, context: Dictionary) -> void:
+	if value <= 0:
+		return
 	var hand: Array = context.get("active_hand", [])
 	if hand == null or hand.is_empty():
 		print("[SkillEffect] Copy hand: hand is empty")
 		return
 	var rng := _GameplayRng.from_context(context)
-	var space: int = max(0, SkillEngine.MAX_HAND_SIZE - hand.size())
-	var count: int = min(value, space)
-	for _i in range(count):
-		var idx: int = rng.randi_range(0, hand.size() - 1)
-		var copy: CardData = hand[idx].duplicate_card()
+	# Pick from the hand as it existed before this effect. Newly-created copies
+	# must not become recursive candidates during the same multi-copy action.
+	var source_cards: Array = hand.duplicate()
+	for _i in range(value):
+		var idx: int = rng.randi_range(0, source_cards.size() - 1)
+		var source_card: CardData = source_cards[idx]
+		var copy: CardData = source_card.duplicate_card()
 		# Runtime identity is part of synchronized/replay state, so derive it
 		# from the battle RNG instead of wall-clock time.
 		copy.instance_id = "copy_%08x%08x" % [rng.randi(), rng.randi()]
-		hand.append(copy)
-	print("  -> Copy %d hand card(s)" % count)
+		_resolve_hand_entry(copy, "hand", {
+			"source_instance_id": source_card.instance_id,
+		}, context)
+	print("  -> Copy %d hand card(s)" % value)
+
+
+static func _resolve_hand_entry(card: CardData, source: String, source_meta: Dictionary, context: Dictionary) -> String:
+	var cb: Callable = context.get("hand_entry_callable", Callable())
+	if cb.is_valid():
+		return str(cb.call(card, source, source_meta))
+	# Standalone engine tests and tools may build a lightweight context without
+	# GameState. Keep the same rule in that fallback instead of silently growing
+	# past six or deleting the generated card.
+	var hand: Array = context.get("active_hand", [])
+	var player: int = int(context.get("current_player", 0))
+	var destination := "hand"
+	if hand.size() < SkillEngine.MAX_HAND_SIZE:
+		hand.append(card)
+	else:
+		destination = "discard"
+		var discard_pile: Array = context.get("discard_pile", [])
+		ParasiteRules.release_all_to_discard(card, discard_pile)
+		card.reset_to_base()
+		discard_pile.append(card)
+	EventBus.hand_entry_resolved.emit(card, player, destination, source, source_meta.duplicate(true))
+	return destination

@@ -36,6 +36,8 @@ var card_tutorial_controller
 @onready var atk_input = $Panel/MarginContainer/ScrollContainer/VBoxContainer/AtkInput
 @onready var gender_label = $Panel/MarginContainer/ScrollContainer/VBoxContainer/GenderLabel
 @onready var gender_select = $Panel/MarginContainer/ScrollContainer/VBoxContainer/GenderSelect
+@onready var parasite_damage_mode_label = $Panel/MarginContainer/ScrollContainer/VBoxContainer/ParasiteDamageModeLabel
+@onready var parasite_damage_mode_select = $Panel/MarginContainer/ScrollContainer/VBoxContainer/ParasiteDamageModeSelect
 @onready var balance_label = $Panel/MarginContainer/ScrollContainer/VBoxContainer/BalanceLabel
 @onready var balance_summary = $Panel/MarginContainer/ScrollContainer/VBoxContainer/BalanceSummary
 @onready var usability_summary = $Panel/MarginContainer/ScrollContainer/VBoxContainer/UsabilitySummary
@@ -51,7 +53,9 @@ var card_tutorial_controller
 @onready var skill2_summary = $Panel/MarginContainer/ScrollContainer/VBoxContainer/Skill2Summary
 @onready var skill3_label = $Panel/MarginContainer/ScrollContainer/VBoxContainer/Skill3Label
 @onready var skill3_summary = $Panel/MarginContainer/ScrollContainer/VBoxContainer/Skill3Summary
-@onready var edit_skill1_btn = $Panel/MarginContainer/ScrollContainer/VBoxContainer/EditSkill1Button
+@onready var edit_skill1_btn = $Panel/MarginContainer/ScrollContainer/VBoxContainer/Skill1TalentRow/EditSkill1Button
+@onready var edit_talent_btn = $Panel/MarginContainer/ScrollContainer/VBoxContainer/Skill1TalentRow/EditTalentButton
+@onready var talent_summary = $Panel/MarginContainer/ScrollContainer/VBoxContainer/TalentSummary
 @onready var edit_skill2_btn = $Panel/MarginContainer/ScrollContainer/VBoxContainer/EditSkill2Button
 @onready var edit_skill3_btn = $Panel/MarginContainer/ScrollContainer/VBoxContainer/EditSkill3Button
 @onready var save_button = $Panel/MarginContainer/ScrollContainer/VBoxContainer/SaveButton
@@ -76,6 +80,10 @@ func _apply_texts() -> void:
 	gender_label.text = Locale.t("editor.gender")
 	gender_label.visible = not is_spell
 	gender_select.visible = not is_spell
+	parasite_damage_mode_label.text = Locale.t("editor.parasite_damage_mode")
+	parasite_damage_mode_label.visible = is_parasite
+	parasite_damage_mode_select.visible = is_parasite
+	parasite_damage_mode_select.tooltip_text = Locale.t("editor.parasite_damage_mode_help")
 	hp_label.visible = not is_spell
 	hp_input.visible = not is_spell
 	atk_label.visible = not is_spell
@@ -100,6 +108,7 @@ func _apply_texts() -> void:
 	edit_skill2_btn.text = Locale.t("editor.edit_skill_2")
 	skill3_label.text = Locale.t("editor.skill_3")
 	edit_skill3_btn.text = Locale.t("editor.edit_skill_3")
+	edit_talent_btn.text = Locale.t("editor.edit_talent")
 	save_button.text = Locale.t("editor.update_card") if PlayerData.editing_index >= 0 else Locale.t("editor.save_card")
 	back_button.text = Locale.t("common.back")
 	art_dialog.title = Locale.t("editor.select_art")
@@ -167,11 +176,11 @@ func _apply_theme() -> void:
 	UITheme.apply_app_background($Panel)
 	UITheme.apply_panel($Panel, "dark")
 	UITheme.apply_title(title_label, max(18, int(22 * _ui_scale())))
-	for label in [art_label, name_label, cost_label, hp_label, atk_label, gender_label, balance_label, balance_summary, usability_summary, skill1_label, skill1_summary, skill2_label, skill2_summary, skill3_label, skill3_summary]:
-		UITheme.apply_label(label, label == balance_summary or label == usability_summary or label == skill1_summary or label == skill2_summary or label == skill3_summary)
-	for input in [name_input, cost_input, hp_input, atk_input, gender_select]:
+	for label in [art_label, name_label, cost_label, hp_label, atk_label, gender_label, parasite_damage_mode_label, balance_label, balance_summary, usability_summary, skill1_label, skill1_summary, skill2_label, skill2_summary, skill3_label, skill3_summary, talent_summary]:
+		UITheme.apply_label(label, label in [balance_summary, usability_summary, skill1_summary, skill2_summary, skill3_summary, talent_summary])
+	for input in [name_input, cost_input, hp_input, atk_input, gender_select, parasite_damage_mode_select]:
 		UITheme.apply_input(input)
-	for btn in [template_button, browse_button, clear_art_button, edit_skill1_btn, edit_skill2_btn, edit_skill3_btn, save_button, back_button]:
+	for btn in [template_button, browse_button, clear_art_button, edit_skill1_btn, edit_talent_btn, edit_skill2_btn, edit_skill3_btn, save_button, back_button]:
 		UITheme.apply_button(btn, "primary" if btn == save_button or btn == template_button else "secondary")
 	UITheme.apply_label(art_path_label, true)
 	UITheme.apply_panel(card_preview_panel, "gold")
@@ -184,6 +193,7 @@ func _ready():
 	_apply_theme()
 	_configure_skill_summaries()
 	_setup_gender_dropdown()
+	_setup_parasite_damage_mode_dropdown()
 	var is_fresh_entry: bool = PlayerData.card_draft.is_empty()
 
 	if is_fresh_entry:
@@ -225,6 +235,12 @@ func _setup_gender_dropdown():
 	gender_select.add_item(Locale.t("editor.gender_nonhuman"), 2)
 
 
+func _setup_parasite_damage_mode_dropdown() -> void:
+	parasite_damage_mode_select.clear()
+	parasite_damage_mode_select.add_item(Locale.t("editor.parasite_mode_absorb"), 0)
+	parasite_damage_mode_select.add_item(Locale.t("editor.parasite_mode_linked"), 1)
+
+
 # Apply read-only card-type restrictions from the draft.
 # For spell cards, ensure HP/ATK values are 0 (controls are hidden by _apply_texts).
 func _apply_card_type_restrictions() -> void:
@@ -244,6 +260,7 @@ func _restore_form_from_draft():
 	atk_input.value = PlayerData.card_draft.get("atk", 0)
 	var gmap: Dictionary = {"male": 0, "female": 1, "nonhuman": 2}
 	gender_select.selected = gmap.get(PlayerData.card_draft.get("gender", "female"), 1)
+	parasite_damage_mode_select.selected = 1 if PlayerData.card_draft.get("parasite_damage_mode", CardData.PARASITE_DAMAGE_ABSORB) == CardData.PARASITE_DAMAGE_LINKED else 0
 
 	var art: String = PlayerData.card_draft.get("art_path", "")
 	if art != "":
@@ -259,6 +276,8 @@ func _save_form_to_draft():
 	PlayerData.card_draft["atk"] = int(atk_input.value)
 	var genders: Array = ["male", "female", "nonhuman"]
 	PlayerData.card_draft["gender"] = genders[gender_select.selected]
+	if PlayerData.card_draft.get("card_type", "minion") == "parasite":
+		PlayerData.card_draft["parasite_damage_mode"] = CardData.PARASITE_DAMAGE_LINKED if parasite_damage_mode_select.selected == 1 else CardData.PARASITE_DAMAGE_ABSORB
 	PlayerData.queue_card_draft_recovery()
 
 
@@ -267,7 +286,7 @@ func _refresh_card_preview() -> void:
 		return
 	var preview_data: CardData = PlayerData.build_card_from_draft()
 	preview_card.set_card(preview_data)
-	preview_card.set_actions_visible(false)
+	preview_card.set_battle_layout_preview(true)
 
 
 func _connect_live_balance_updates() -> void:
@@ -276,6 +295,7 @@ func _connect_live_balance_updates() -> void:
 	hp_input.value_changed.connect(func(_value: float): _update_balance_from_form())
 	atk_input.value_changed.connect(func(_value: float): _update_balance_from_form())
 	gender_select.item_selected.connect(func(_idx: int): _update_balance_from_form())
+	parasite_damage_mode_select.item_selected.connect(func(_idx: int): _update_balance_from_form())
 
 
 func _update_balance_from_form() -> void:
@@ -309,7 +329,8 @@ func _update_balance_summary() -> void:
 	if balance_summary == null:
 		return
 	var skills: Array = []
-	for key in ["skill1", "skill2", "skill3"]:
+	var first_key := "talent" if not PlayerData.card_draft.get("talent", {}).is_empty() else "skill1"
+	for key in [first_key, "skill2", "skill3"]:
 		var skill: Dictionary = PlayerData.card_draft.get(key, {})
 		if not skill.is_empty():
 			skills.append(skill)
@@ -317,7 +338,8 @@ func _update_balance_summary() -> void:
 		int(PlayerData.card_draft.get("cost", 0)),
 		int(PlayerData.card_draft.get("atk", 0)),
 		int(PlayerData.card_draft.get("hp", 1)),
-		skills
+		skills,
+		str(PlayerData.card_draft.get("card_type", "minion"))
 	)
 	var level: String = result.get("level", "balanced")
 	var reasons: Array = result.get("reasons", [])
@@ -329,6 +351,8 @@ func _update_balance_summary() -> void:
 		reason_text,
 	]
 	balance_summary.text = summary
+	if bool(result.get("uncertain", false)):
+		balance_summary.text += ("\n情景估值 %.1f–%.1f；受战局影响，不代表强度上下限。" if Locale.language == "zh" else "\nScenario estimate %.1f–%.1f; depends on board state, not strength bounds.") % [result.get("scenario_min", 0.0), result.get("scenario_max", 0.0)]
 	balance_summary.add_theme_color_override("font_color", _balance_color(level))
 
 
@@ -397,7 +421,7 @@ func _on_clear_art_pressed():
 # ============================================
 
 func _configure_skill_summaries() -> void:
-	for summary in [skill1_summary, skill2_summary, skill3_summary]:
+	for summary in [skill1_summary, skill2_summary, skill3_summary, talent_summary]:
 		if summary == null:
 			continue
 		summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -414,9 +438,15 @@ func _update_skill_labels():
 	skill1_summary.text = _format_skill_short(PlayerData.card_draft.get("skill1", {}))
 	skill2_summary.text = _format_skill_short(PlayerData.card_draft.get("skill2", {}))
 	skill3_summary.text = _format_skill_short(PlayerData.card_draft.get("skill3", {}))
+	var talent: Dictionary = PlayerData.card_draft.get("talent", {})
+	var has_talent := not talent.is_empty()
+	if not is_spell and not is_parasite:
+		skill1_label.text = Locale.t("editor.talent") if has_talent else Locale.t("editor.skill_1")
+	talent_summary.text = "%s：%s" % [Locale.t("editor.talent"), _format_skill_short(talent)]
 	skill1_summary.tooltip_text = skill1_summary.text
 	skill2_summary.tooltip_text = skill2_summary.text
 	skill3_summary.tooltip_text = skill3_summary.text
+	talent_summary.tooltip_text = talent_summary.text
 	var has_skill2: bool = not PlayerData.card_draft.get("skill2", {}).is_empty()
 	var has_skill3: bool = not PlayerData.card_draft.get("skill3", {}).is_empty()
 	# Spell cards only have one skill; parasite cards currently expose one passive skill slot.
@@ -425,6 +455,11 @@ func _update_skill_labels():
 	skill3_label.visible = not is_spell and not is_parasite
 	skill3_summary.visible = not is_spell and not is_parasite
 	edit_skill1_btn.visible = true
+	edit_talent_btn.visible = not is_spell
+	# Skill 1 and Talent are two modes of the same first slot. Show only the
+	# active mode's summary so the editor never presents four simultaneous slots.
+	skill1_summary.visible = is_spell or is_parasite or not has_talent
+	talent_summary.visible = not is_spell and has_talent
 	edit_skill2_btn.visible = (not is_spell and not is_parasite) or has_skill2
 	edit_skill3_btn.visible = (not is_spell and not is_parasite) or has_skill3
 	_refresh_card_preview()
@@ -589,6 +624,15 @@ func _on_edit_skill1_pressed():
 	PlayerData.editing_skill_index = 0
 	if card_tutorial_controller:
 		card_tutorial_controller.notify_edit_skill(0)
+	UIMotion.change_scene("res://SkillEditor.tscn")
+
+
+func _on_edit_talent_pressed():
+	if card_tutorial_controller:
+		card_tutorial_controller.allows("edit_talent")
+		return
+	_save_form_to_draft()
+	PlayerData.editing_skill_index = 3
 	UIMotion.change_scene("res://SkillEditor.tscn")
 
 
@@ -1031,7 +1075,7 @@ func _make_conflict_summary(label_text: String, card: CardData) -> VBoxContainer
 	preview_holder.add_child(card_ui)
 	card_ui.set_card(card)
 	card_ui.apply_ui_scale(0.82)
-	card_ui.set_actions_visible(false)
+	card_ui.set_battle_layout_preview(true)
 	card_ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return box
 
@@ -1092,6 +1136,7 @@ func _show_after_save_popup(saved_card: CardData) -> void:
 	vbox.add_child(continue_btn)
 	var test_btn := Button.new()
 	test_btn.text = Locale.t("editor.after_save_test")
+	test_btn.tooltip_text = Locale.t("editor.playtest_help")
 	UITheme.apply_button(test_btn, "secondary")
 	test_btn.pressed.connect(func():
 		popup_layer.queue_free()
@@ -1112,11 +1157,7 @@ func _return_after_save() -> void:
 
 
 func _start_solo_test(saved_card: CardData) -> void:
-	PlayerData.begin_card_playtest(saved_card)
-	var opponent_cards: Array = []
-	for card in CardDatabase.starter_library():
-		opponent_cards.append(card.duplicate_card())
-	PlayerData.configure_practice_battle([saved_card.duplicate_card()], opponent_cards, "normal", true)
+	PlayerData.configure_card_playtest(saved_card)
 	UIMotion.change_scene("res://Main.tscn")
 
 

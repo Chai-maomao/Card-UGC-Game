@@ -75,27 +75,48 @@ static func _effects_target_enemy(effects: Array) -> bool:
 		if not value is Dictionary:
 			continue
 		var effect: Dictionary = value
+		var effect_id := str(effect.get("effect", ""))
+		for branch in ["then_effects", "else_effects"]:
+			var nested = effect.get(branch, [])
+			if nested is Array and _effects_target_enemy(nested):
+				return true
+		if SkillRegistry.is_control_effect(effect_id):
+			continue
+		# Hand, deck and resource effects have no battlefield target. Their
+		# retained target fields must not make a spell illegal on turn one.
+		if not SkillRegistry.requires_live_target(effect_id):
+			continue
 		var target := str(effect.get("target", ""))
 		var side := str(effect.get("target_side", ""))
 		if target == "all_enemies":
 			return true
 		var can_select_field := target in [
 			SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES, SkillEngine.TARGET_ALL,
+			SkillEngine.TARGET_PLAYER,
 			SkillEngine.TARGET_MALE, SkillEngine.TARGET_FEMALE, SkillEngine.TARGET_NONHUMAN,
 		]
 		if can_select_field and side in ["", SkillEngine.TARGET_SIDE_ENEMY, SkillEngine.TARGET_SIDE_ALL]:
 			return true
-		for branch in ["then_effects", "else_effects"]:
-			var nested = effect.get(branch, [])
-			if nested is Array and _effects_target_enemy(nested):
-				return true
 	return false
 
 
 static func needs_target(skill: Dictionary) -> bool:
-	for eff in _effects_for(skill):
-		var effect_name: String = eff.get("effect", "")
-		if effect_name in [SkillEngine.EFFECT_DRAW_CARDS, SkillEngine.EFFECT_GAIN_MANA]:
+	return _effects_need_target(_effects_for(skill))
+
+
+static func _effects_need_target(effects: Array) -> bool:
+	for value in effects:
+		if not value is Dictionary:
+			continue
+		var eff: Dictionary = value
+		var effect_id := str(eff.get("effect", ""))
+		for branch in ["then_effects", "else_effects"]:
+			var nested = eff.get(branch, [])
+			if nested is Array and _effects_need_target(nested):
+				return true
+		if SkillRegistry.is_control_effect(effect_id):
+			continue
+		if not SkillRegistry.requires_live_target(effect_id):
 			continue
 		var target_name: String = eff.get("target", "")
 		if target_name in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES]:

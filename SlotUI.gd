@@ -17,14 +17,23 @@ var ui_scale: float = 1.0
 var visual_variant: String = "player"
 var _highlighted: bool = false
 var _target_hint: String = "none"
+var _lethal_hint: bool = false
 var _action_glow: Panel = null
 var _action_tween: Tween = null
+var _arrival_glow: Panel = null
+var _arrival_tween: Tween = null
+var _card_arrival_tween: Tween = null
 
 
 func apply_ui_scale(scale_value: float) -> void:
 	ui_scale = scale_value
 	custom_minimum_size = Vector2(120, 160) * ui_scale
 	size = custom_minimum_size
+	if _arrival_glow:
+		_arrival_glow.offset_left = -4.0 * ui_scale
+		_arrival_glow.offset_top = -4.0 * ui_scale
+		_arrival_glow.offset_right = 4.0 * ui_scale
+		_arrival_glow.offset_bottom = 4.0 * ui_scale
 	if current_card_ui and is_instance_valid(current_card_ui):
 		if current_card_ui.has_method("apply_ui_scale"):
 			current_card_ui.call("apply_ui_scale", ui_scale)
@@ -35,6 +44,7 @@ func apply_ui_scale(scale_value: float) -> void:
 func _ready():
 	text = ""
 	_build_action_glow()
+	_build_arrival_glow()
 	_refresh_visual()
 	apply_ui_scale(ui_scale)
 
@@ -58,14 +68,41 @@ func _build_action_glow() -> void:
 	add_child(_action_glow)
 
 
+func _build_arrival_glow() -> void:
+	_arrival_glow = Panel.new()
+	_arrival_glow.name = "ArrivalGlow"
+	_arrival_glow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_arrival_glow.anchor_right = 1.0
+	_arrival_glow.anchor_bottom = 1.0
+	_arrival_glow.offset_left = -4.0
+	_arrival_glow.offset_top = -4.0
+	_arrival_glow.offset_right = 4.0
+	_arrival_glow.offset_bottom = 4.0
+	_arrival_glow.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	_arrival_glow.grow_vertical = Control.GROW_DIRECTION_BOTH
+	_arrival_glow.visible = false
+	add_child(_arrival_glow)
+
+
 func set_visual_variant(variant: String) -> void:
 	visual_variant = variant
+	if current_card_ui and is_instance_valid(current_card_ui):
+		current_card_ui.set_battle_drag_enabled(visual_variant == "player")
 	_refresh_visual()
 
 
 func _refresh_visual() -> void:
 	UITheme.apply_slot(self, visual_variant, current_card_data != null)
-	if _target_hint != "none" or _highlighted:
+	if _lethal_hint:
+		# Lethal affordance deliberately outranks the ordinary cyan/gold target
+		# frame. A transparent fill keeps the card readable while the red outer
+		# glow communicates "this action kills" at a glance.
+		var lethal_edge := Color(1.0, 0.20, 0.16)
+		var lethal_style := UITheme.panel_style(Color(0.10, 0.015, 0.02, 0.32), lethal_edge, 3, 8, Color(1.0, 0.08, 0.06, 0.72), 9)
+		add_theme_stylebox_override("normal", lethal_style)
+		add_theme_stylebox_override("hover", lethal_style)
+		add_theme_stylebox_override("pressed", lethal_style)
+	elif _target_hint != "none" or _highlighted:
 		var hovered := _target_hint == "hover" or _highlighted
 		var edge := Color(0.98, 0.78, 0.28) if hovered else Color(0.20, 0.78, 0.92)
 		var style := UITheme.panel_style(Color(0.035, 0.11, 0.16, 0.94), edge, 4 if hovered else 2, 8, Color(edge.r, edge.g, edge.b, 0.55), 8 if hovered else 4)
@@ -126,6 +163,13 @@ func set_target_hint(valid: bool, hovered: bool = false) -> void:
 	_refresh_visual()
 
 
+func set_lethal_hint(enabled: bool) -> void:
+	if _lethal_hint == enabled:
+		return
+	_lethal_hint = enabled
+	_refresh_visual()
+
+
 # Pulsing gold border shown on cards that can still act this turn.
 func set_action_glow(enabled: bool) -> void:
 	if _action_glow == null:
@@ -175,14 +219,99 @@ func set_card(card_data: CardData):
 		card_ui.skill3_requested.connect(func(): slot_skill3_requested.emit())
 
 	add_child(card_ui)
+	# The slot itself provides the frame/depth. A second card shadow makes the
+	# card look like it is hovering above the socket instead of seated in it.
+	card_ui.set_embedded_in_slot(true)
+	card_ui.set_battle_drag_enabled(visual_variant == "player")
 	card_ui.set_card(card_data)
 	current_card_ui = card_ui
+	# Both frames must sit above the card face; the arrival frame is last so its
+	# brief locking flash remains legible without becoming a persistent outline.
+	if _action_glow:
+		move_child(_action_glow, get_child_count() - 1)
+	if _arrival_glow:
+		move_child(_arrival_glow, get_child_count() - 1)
 	_refresh_visual()
 	apply_ui_scale(ui_scale)
 
 
+# Called after the authoritative state has rebuilt the slot. The motion is
+# deliberately short and shallow: the card seats into the socket instead of
+# appearing to leap far above the battlefield.
+func play_card_arrival(kind: String = "summon") -> void:
+	if current_card_ui == null or not is_instance_valid(current_card_ui):
+		return
+	if _card_arrival_tween and _card_arrival_tween.is_valid():
+		_card_arrival_tween.kill()
+	var card: Control = current_card_ui
+	var card_id := card.get_instance_id()
+	var base_pivot: Vector2 = card.pivot_offset
+	card.visible = true
+	card.pivot_offset = card.size * 0.5
+	card.position = Vector2(0, -9 if kind == "summon" else -4) * ui_scale
+	card.rotation = deg_to_rad(-1.4 if visual_variant == "player" else 1.4)
+	card.scale = Vector2.ONE * (0.90 if kind == "summon" else 0.95)
+	card.modulate = Color(1.0, 1.0, 1.0, 0.76 if kind == "summon" else 0.86)
+	_card_arrival_tween = create_tween()
+	_card_arrival_tween.set_parallel(true)
+	_card_arrival_tween.tween_property(card, "position", Vector2.ZERO, 0.16).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_card_arrival_tween.tween_property(card, "rotation", 0.0, 0.16).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_card_arrival_tween.tween_property(card, "scale", Vector2.ONE * 1.025, 0.16).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	_card_arrival_tween.tween_property(card, "modulate", Color.WHITE, 0.11).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_card_arrival_tween.chain().tween_property(card, "scale", Vector2.ONE, 0.09).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_card_arrival_tween.chain().tween_callback(_finish_card_arrival.bind(card_id, base_pivot))
+	_play_arrival_glow(kind)
+
+
+func _finish_card_arrival(card_id: int, base_pivot: Vector2) -> void:
+	var card = instance_from_id(card_id)
+	if card == null or not is_instance_valid(card):
+		return
+	card.position = Vector2.ZERO
+	card.rotation = 0.0
+	card.scale = Vector2.ONE
+	card.modulate = Color.WHITE
+	card.pivot_offset = base_pivot
+
+
+func _play_arrival_glow(kind: String) -> void:
+	if _arrival_glow == null:
+		return
+	if _arrival_tween and _arrival_tween.is_valid():
+		_arrival_tween.kill()
+	var accent := Color(0.98, 0.78, 0.28) if kind == "summon" else Color(0.30, 0.84, 1.0)
+	var style := StyleBoxFlat.new()
+	# Edge-only response: any filled background here sits above CardUI and reads
+	# as a coloured mask over the whole card.
+	style.bg_color = Color.TRANSPARENT
+	style.set_border_width_all(max(2, int(3 * ui_scale)))
+	style.border_color = Color(accent.r, accent.g, accent.b, 0.55)
+	style.set_corner_radius_all(max(5, int(9 * ui_scale)))
+	style.shadow_color = Color.TRANSPARENT
+	style.shadow_size = 0
+	_arrival_glow.add_theme_stylebox_override("panel", style)
+	_arrival_glow.visible = true
+	_arrival_glow.pivot_offset = _arrival_glow.size * 0.5
+	_arrival_glow.scale = Vector2(1.07, 1.05)
+	_arrival_glow.modulate.a = 0.0
+	_arrival_tween = create_tween()
+	_arrival_tween.set_parallel(true)
+	_arrival_tween.tween_property(_arrival_glow, "scale", Vector2.ONE, 0.13).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_arrival_tween.tween_property(_arrival_glow, "modulate:a", 1.0, 0.08)
+	_arrival_tween.chain().tween_property(_arrival_glow, "modulate:a", 0.0, 0.20).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	_arrival_tween.chain().tween_callback(func(): _arrival_glow.visible = false)
+
+
 func clear_card():
 	text = ""
+	if _card_arrival_tween and _card_arrival_tween.is_valid():
+		_card_arrival_tween.kill()
+	_card_arrival_tween = null
+	if _arrival_tween and _arrival_tween.is_valid():
+		_arrival_tween.kill()
+	_arrival_tween = null
+	if _arrival_glow:
+		_arrival_glow.visible = false
 	if current_card_ui and is_instance_valid(current_card_ui):
 		current_card_ui.queue_free()
 	current_card_ui = null

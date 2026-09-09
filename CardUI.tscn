@@ -13,6 +13,7 @@ mouse_filter = 1
 script = ExtResource("1_gf2xd")
 
 [node name="CardShadow" type="Panel" parent="."]
+visible = false
 layout_mode = 0
 offset_left = 6.0
 offset_top = 8.0
@@ -99,9 +100,9 @@ theme_override_font_sizes/font_size = 11
 [node name="ActionButtons" type="VBoxContainer" parent="." unique_id=40715393]
 layout_mode = 0
 offset_left = 6.0
-offset_top = 82.0
+offset_top = 90.0
 offset_right = 114.0
-offset_bottom = 158.0
+offset_bottom = 153.0
 theme_override_constants/separation = 1
 
 [node name="NormalAtkButton" type="Button" parent="ActionButtons" unique_id=2123122470]

@@ -22,21 +22,59 @@ func build() -> void:
 		_add_section(palette_vbox, Locale.t("skill_editor.palette_trigger"), true, func(box: VBoxContainer):
 			for trigger_key: String in editor.call("_trigger_keys"):
 				var name_text: String = Locale.term("trigger", trigger_key)
-				box.add_child(palette_button(Locale.t("skill_editor.block_trigger", [name_text]),
-						SkillBlock.trigger_color(), Callable(editor, "_select_trigger").bind(trigger_key)))
+				var button := palette_button(Locale.t("skill_editor.block_trigger", [name_text]),
+						SkillBlock.trigger_color(), Callable(editor, "_select_trigger").bind(trigger_key))
+				button.tooltip_text = SkillHelp.description("trigger", trigger_key)
+				box.add_child(button)
 		)
 
 	# Effect blocks grouped by category.
 	for category in ["attack", "defense", "utility"]:
+		var available_effects: Array[String] = []
+		for effect_id: String in SkillRegistry.EFFECT_IDS:
+			var meta: Dictionary = SkillRegistry.effect_meta(effect_id)
+			if str(meta.get("category", "")) != category:
+				continue
+			if editor.call("_is_talent_mode"):
+				if not SkillRegistry.is_effect_allowed_for_talent_trigger(effect_id, str(editor.get("current_trigger_key"))):
+					continue
+			elif SkillRegistry.is_talent_only_effect(effect_id):
+				continue
+			available_effects.append(effect_id)
+		if available_effects.is_empty():
+			continue
 		var section_key := "skill_editor.palette_%s" % category
 		_add_section(palette_vbox, Locale.t(section_key), true, func(box: VBoxContainer, cat: String = category):
-			for effect_id: String in SkillRegistry.EFFECT_IDS:
-				var meta: Dictionary = SkillRegistry.effect_meta(effect_id)
-				if str(meta.get("category", "")) != cat:
-					continue
+			for effect_id: String in available_effects:
 				box.add_child(palette_button(Locale.term("effect", effect_id),
 						SkillBlock.category_color(cat), Callable(editor, "_add_effect_block").bind(effect_id), effect_id))
 		)
+	# Talents keep their narrow lifecycle effect vocabulary, but numeric values
+	# may once again be built from variables and math reporters. Control flow,
+	# conditions and target overrides remain hidden because they duplicate
+	# ordinary skills or undermine the talent's fixed self/lifecycle semantics.
+	if editor.call("_is_talent_mode"):
+		_add_section(palette_vbox, Locale.t("skill_editor.palette_variable"), false, func(box: VBoxContainer):
+			# Talent effects always target their owning card. Target-relative
+			# reporters would merely duplicate source values while claiming that a
+			# separately selected target exists, so exclude those misleading blocks.
+			var talent_vars: Array = []
+			for candidate: String in SkillRegistry.VALUE_VAR_IDS:
+				if not SkillRegistry.is_target_relative_var(candidate):
+					talent_vars.append(candidate)
+			# A continuous damage cap has no owning GameState event context. Keep
+			# only live reporters that can be evaluated from the card itself; event
+			# talents retain the complete variable drawer.
+			if str(editor.get("current_trigger_key")) == SkillEngine.TRIGGER_ALWAYS:
+				talent_vars = [SkillEngine.VAR_SOURCE_HP_PCT]
+			for var_id: String in talent_vars:
+				box.add_child(variable_palette_button(Locale.term("value_var", var_id), var_id))
+		)
+		_add_section(palette_vbox, Locale.t("skill_editor.palette_math"), false, func(box: VBoxContainer):
+			for kind: String in ValueSlot.EXPR_OPS:
+				box.add_child(expr_palette_button(expr_palette_label(kind), kind))
+		)
+		return
 
 	# Control blocks (if / if-else / repeat / stop). Draggable like every other palette block.
 	_add_section(palette_vbox, Locale.t("skill_editor.palette_control"), true, func(box: VBoxContainer):
@@ -77,7 +115,7 @@ func build() -> void:
 	)
 
 	_add_section(palette_vbox, Locale.t("skill_editor.palette_target"), false, func(box: VBoxContainer):
-		for t_id in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES, SkillEngine.TARGET_ALL,
+		for t_id in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES, SkillEngine.TARGET_ALL, SkillEngine.TARGET_PLAYER,
 				SkillEngine.TARGET_SELF, SkillEngine.TARGET_SELF_SIDES]:
 			box.add_child(target_palette_button(Locale.term("target", t_id), t_id, true))
 		for s_id in [SkillEngine.TARGET_SIDE_ENEMY, SkillEngine.TARGET_SIDE_ALLY, SkillEngine.TARGET_SIDE_ALL]:

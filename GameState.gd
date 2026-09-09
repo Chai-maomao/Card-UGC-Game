@@ -20,7 +20,10 @@ var shared_discard: Array = []
 var game_rng := RandomNumberGenerator.new()
 var state_revision: int = 0
 var quiet: bool = false
+var trace_callable: Callable
 var allow_first_turn_attacks: bool = false
+var _lifecycle_trigger_depth: int = 0
+var _board_change_trigger_depth: int = 0
 # 每位玩家的战斗统计（召唤/施法/寄生/抽牌/卡牌伤害/本体伤害/击杀/消耗圣水），
 # 按玩家编号 1/2 记录，用于历史战绩详情
 var stats: Dictionary = {1: _new_stats(), 2: _new_stats()}
@@ -117,10 +120,32 @@ func init_game(draw_cb: Callable, requested_seed: Variant = null) -> void:
 	player_field.quiet = quiet
 	player2_field.quiet = quiet
 	_build_shared_deck()
-	draw_cards(cfg.get("draw_per_turn", 2) + 1, player_hand)  # +1 for initial hand
-	draw_cards(cfg.get("draw_per_turn", 2) + 1, player2_hand)
+	var opening_count: int = clampi(int(cfg.get("draw_per_turn", 2)) + 1, 1, SkillEngine.MAX_HAND_SIZE)
+	var test_card := PlayerData.card_playtest_opening_card()
+	if test_card != null:
+		# The dedicated test specimen is not shuffled into the shared deck: reserve
+		# one opening-hand slot for it, even when the normal opening already fills six.
+		player_hand.append(test_card)
+		_stats_add(1, "cards_drawn", 1)
+		_reserve_playtest_helpers(player_hand, 1)
+		_reserve_playtest_helpers(player2_hand, 2)
+		# Even custom zero-draw settings must leave room for the test instruments.
+		opening_count = maxi(opening_count, 3)
+	draw_cards(opening_count - player_hand.size(), player_hand)
+	draw_cards(opening_count - player2_hand.size(), player2_hand)
 	current_player = 1
 	EventBus.game_started.emit()
+
+
+func _reserve_playtest_helpers(hand: Array, player: int) -> void:
+	for support_id: String in CardDatabase.PLAYTEST_SUPPORT_IDS:
+		for index in range(shared_deck.size()):
+			var card: CardData = shared_deck[index]
+			if card.card_id == support_id:
+				shared_deck.remove_at(index)
+				hand.append(card)
+				_stats_add(player, "cards_drawn", 1)
+				break
 
 
 func export_initial_state() -> Dictionary:
@@ -144,7 +169,7 @@ func export_initial_state() -> Dictionary:
 	}
 
 
-func apply_initial_state(state: Dictionary) -> void:
+func apply_initial_state(state: Dictionary, sync_preferences: bool = true) -> void:
 	var envelope := {"schema": 1, "room_code": "STATE", "player": 1, "state": state}
 	var state_errors := Schema.validate(Schema.KIND_MATCH_SNAPSHOT, envelope)
 	if not state_errors.is_empty():
@@ -154,7 +179,8 @@ func apply_initial_state(state: Dictionary) -> void:
 	var config: Dictionary = state.get("battle_config", {})
 	if not config.is_empty():
 		battle_config = config.duplicate(true)
-		PlayerData.battle_config = battle_config.duplicate(true)
+		if sync_preferences:
+			PlayerData.battle_config = battle_config.duplicate(true)
 	if player_field == null:
 		player_field = BattleField.new("P1", 1, 1)
 	if player2_field == null:
@@ -288,6 +314,9 @@ func make_skill_context_for_player(player: int, source_slot: int = -1, target_sl
 		"target_slot": target_slot,
 		"target_player": target_player,
 		"draw_callable": Callable(self, "draw_cards_for_player").bind(player),
+		"hand_entry_callable": Callable(self, "resolve_hand_entry_for_player").bind(player),
+		"board_change_callable": Callable(self, "notify_board_units_changed"),
+		"discard_card_callable": Callable(self, "finalize_card_discard"),
 		"current_player": player,
 		"active_hand": active_hand_for_context,
 		"enemy_hand": enemy_hand_for_context,
@@ -296,6 +325,7 @@ func make_skill_context_for_player(player: int, source_slot: int = -1, target_sl
 		"rng": game_rng,
 		"turn_number": turn_number,
 		"quiet": quiet,
+		"trace_callable": trace_callable,
 	}
 
 
@@ -305,15 +335,17 @@ func make_skill_context_for_player(player: int, source_slot: int = -1, target_sl
 
 func draw_cards_for_player(amount: int, player: int) -> Array:
 	var hand = player_hand if player == 1 else player2_hand
-	return draw_cards(amount, hand)
+	return draw_cards(amount, hand, player)
 
 
-func draw_cards(amount: int, hand: Array = active_hand()) -> Array:
-	var drawn: Array = []
-	for _k in range(amount):
-		if hand.size() >= SkillEngine.MAX_HAND_SIZE:
-			_log("Hand full!")
-			break
+func draw_cards(amount: int, hand: Array = active_hand(), player: int = 0) -> Array:
+	if player not in [1, 2]:
+		player = 1 if is_same(hand, player_hand) else (2 if is_same(hand, player2_hand) else current_player)
+	# Collect the whole draw batch before resolving hand capacity. Otherwise a
+	# card that overflows into an empty discard pile could immediately be
+	# shuffled back and drawn again by the same multi-card draw.
+	var candidates: Array = []
+	for _k in range(maxi(0, amount)):
 		if shared_deck.is_empty() and not shared_discard.is_empty():
 			_log("Deck empty! Shuffling discard pile into deck...")
 			shared_deck = shared_discard.duplicate()
@@ -321,13 +353,98 @@ func draw_cards(amount: int, hand: Array = active_hand()) -> Array:
 			_shuffle_shared_deck()
 		if shared_deck.is_empty():
 			break
-		var card_data = shared_deck.pop_front()
-		hand.append(card_data)
-		drawn.append(card_data)
-		_log("Drew: %s" % card_data.card_name)
-	if not drawn.is_empty():
-		_stats_add(1 if hand == player_hand else 2, "cards_drawn", drawn.size())
+		candidates.append(shared_deck.pop_front())
+
+	var drawn: Array = []
+	for card_data: CardData in candidates:
+		var destination := resolve_hand_entry_for_player(card_data, "deck", {}, player)
+		if destination == "hand":
+			drawn.append(card_data)
+			_log("Drew: %s" % card_data.card_name)
+	if not candidates.is_empty():
+		_stats_add(player, "cards_drawn", candidates.size())
 	return drawn
+
+
+func resolve_hand_entry_for_player(card_data: CardData, source: String = "generated", source_meta: Dictionary = {}, player: int = 0) -> String:
+	if card_data == null or player not in [1, 2]:
+		return ""
+	_trigger_lifecycle(SkillEngine.TRIGGER_ON_ADDED, card_data, player)
+	var hand: Array = player_hand if player == 1 else player2_hand
+	var destination := "hand"
+	if hand.size() < SkillEngine.MAX_HAND_SIZE:
+		hand.append(card_data)
+	else:
+		destination = "discard"
+		move_card_to_shared_discard(card_data, player, "overflow")
+		_log("Hand overflow: %s moved to discard" % card_data.card_name)
+	EventBus.hand_entry_resolved.emit(card_data, player, destination, source, source_meta.duplicate(true))
+	return destination
+
+
+func move_card_to_shared_discard(card_data: CardData, player: int = 0, reason: String = "discard") -> void:
+	if card_data == null:
+		return
+	if player in [1, 2] and reason in ["discard", "manual", "overflow", "effect"]:
+		_trigger_lifecycle(SkillEngine.TRIGGER_ON_DISCARDED, card_data, player)
+	# Overflow is a real trip to the discard pile, not deletion. Apply the same
+	# lifecycle cleanup as defeat/manual discard before the card becomes visible
+	# there: release attachments and restore battle-only HP/ATK/cost state.
+	ParasiteRules.release_all_to_discard(card_data, shared_discard)
+	card_data.reset_to_base()
+	shared_discard.append(card_data)
+
+
+func finalize_card_discard(card_data: CardData, player: int, reason: String = "effect") -> void:
+	move_card_to_shared_discard(card_data, player, reason)
+
+
+func _trigger_lifecycle(trigger: String, card_data: CardData, player: int) -> void:
+	if _lifecycle_trigger_depth >= 16:
+		push_warning("[GameState] Card lifecycle trigger chain limit reached")
+		return
+	_lifecycle_trigger_depth += 1
+	SkillEngine.trigger_skills(trigger, card_data, make_skill_context_for_player(player))
+	_lifecycle_trigger_depth -= 1
+
+
+# Emits the board-composition trigger after a unit has entered or left a
+# battlefield. Slot swaps deliberately do not call this method: composition
+# is unchanged. Nested charm/death chains are bounded like lifecycle chains.
+func notify_board_units_changed(changed_player: int, change_kind: String = "change", changed_card: CardData = null) -> void:
+	if changed_player not in [1, 2]:
+		return
+	if _board_change_trigger_depth >= 16:
+		push_warning("[GameState] Board-change trigger chain limit reached")
+		return
+	_board_change_trigger_depth += 1
+	var sources: Array = []
+	for owner in [1, 2]:
+		var field: BattleField = player_field if owner == 1 else player2_field
+		for slot in range(field.slots.size()):
+			var card: CardData = field.slots[slot]
+			if card == null or not card.is_alive():
+				continue
+			for skill_index in range(card.skills.size()):
+				var skill: Dictionary = card.skills[skill_index]
+				if str(skill.get("trigger", "")) != SkillEngine.TRIGGER_ON_BOARD_CHANGED:
+					continue
+				var side := str(skill.get("trigger_side", SkillEngine.TARGET_SIDE_ALL))
+				if side == SkillEngine.TARGET_SIDE_ALL or (side == SkillEngine.TARGET_SIDE_ALLY and owner == changed_player) or (side == SkillEngine.TARGET_SIDE_ENEMY and owner != changed_player):
+					sources.append({"owner": owner, "slot": slot, "card": card, "skill_index": skill_index})
+	for entry in sources:
+		var owner := int(entry.owner)
+		var source: CardData = entry.card
+		var field: BattleField = player_field if owner == 1 else player2_field
+		var live_slot := field.slots.find(source)
+		if live_slot < 0 or not source.is_alive():
+			continue
+		var context := make_skill_context_for_player(owner, live_slot)
+		context["board_changed_player"] = changed_player
+		context["board_change_kind"] = change_kind
+		context["board_changed_card"] = changed_card
+		SkillEngine.trigger_single_skill(source, int(entry.skill_index), context)
+	_board_change_trigger_depth -= 1
 
 
 func discard_card(card_data: CardData) -> bool:
@@ -336,8 +453,7 @@ func discard_card(card_data: CardData) -> bool:
 	var idx: int = hand.find(card_data)
 	if idx >= 0:
 		hand.remove_at(idx)
-		card_data.reset_to_base()
-		shared_discard.append(card_data)
+		move_card_to_shared_discard(card_data, current_player, "manual")
 		active_field().add_mana(1)
 		_log("Discarded from hand: %s" % card_data.card_name)
 		return true
@@ -345,10 +461,9 @@ func discard_card(card_data: CardData) -> bool:
 	var field = active_field()
 	for i in range(5):
 		if field.slots[i] == card_data:
-			ParasiteRules.release_all_to_discard(card_data, shared_discard)
-			card_data.reset_to_base()
-			shared_discard.append(card_data)
 			field.slots[i] = null
+			move_card_to_shared_discard(card_data, current_player, "manual")
+			notify_board_units_changed(current_player, "leave", card_data)
 			active_field().add_mana(1)
 			_log("Discarded from field: %s" % card_data.card_name)
 			return true
@@ -367,10 +482,9 @@ func summon_card(card_data: CardData, slot_index: int) -> bool:
 		return false
 	_stats_add(summoner, "summons", 1)
 	_stats_add(summoner, "mana_spent", card_data.cost)
-	if card_data.zero_cost_until_deploy:
-		card_data.cost = card_data.base_cost
-		card_data.zero_cost_until_deploy = false
+	card_data.clear_cost_modifiers_after_play()
 	active_hand().erase(card_data)
+	notify_board_units_changed(summoner, "enter", card_data)
 	return true
 
 
@@ -390,6 +504,7 @@ func attach_parasite(hand_index: int, target_player: int, target_slot: int) -> b
 	ParasiteRules.attach(card, target)
 	_stats_add(attacher, "parasites", 1)
 	_stats_add(attacher, "mana_spent", card.cost)
+	card.clear_cost_modifiers_after_play()
 	return true
 
 
@@ -432,6 +547,8 @@ func trigger_summon_skills(source_slot: int, target_slot: int, skill_index: int,
 	# card's attack/action for the turn, unlike trigger_activate_skills.
 	var card: CardData = active_field().slots[source_slot]
 	if card != null:
+		if turn_number <= 1 and skill_index >= 0 and skill_index < card.skills.size() and SkillRegistry.skill_changes_enemy_hp_or_presence(card.skills[skill_index]):
+			return
 		var actor := current_player
 		_stats_listen(actor)
 		SkillEngine.trigger_single_skill(card, skill_index, make_skill_context(source_slot, target_slot, target_player))
@@ -441,6 +558,8 @@ func trigger_summon_skills(source_slot: int, target_slot: int, skill_index: int,
 func trigger_activate_skills(source_slot: int, target_slot: int, skill_index: int, target_player: int = 0) -> void:
 	var card: CardData = active_field().slots[source_slot]
 	if card != null:
+		if turn_number <= 1 and skill_index >= 0 and skill_index < card.skills.size() and SkillRegistry.skill_changes_enemy_hp_or_presence(card.skills[skill_index]):
+			return
 		var actor := current_player
 		_stats_listen(actor)
 		SkillEngine.trigger_single_skill(card, skill_index, make_skill_context(source_slot, target_slot, target_player))
@@ -457,6 +576,8 @@ func activate_skill(slot_index: int, skill_index: int) -> String:
 	if skill_index >= card.skills.size():
 		return ""
 	var skill: Dictionary = card.skills[skill_index]
+	if turn_number <= 1 and SkillRegistry.skill_changes_enemy_hp_or_presence(skill):
+		return ""
 	var trigger: String = skill.get("trigger", "")
 	if trigger == SkillEngine.TRIGGER_ON_ACTIVATE:
 		var actor := current_player
@@ -479,6 +600,11 @@ func execute_attack(atk_slot: int, def_slot: int) -> Dictionary:
 	var attacker: CardData = active_field().slots[atk_slot]
 	var victim: CardData = opponent_field().slots[def_slot]
 	if attacker == null or victim == null:
+		return {}
+	# Keep taunt as a game-state invariant. UI, network clients and AI may all
+	# propose targets, but none may bypass the rule at execution time.
+	if opponent_field().has_any_taunt() and not victim.has_taunt():
+		_log("A taunt minion must be attacked first!")
 		return {}
 	if attacker.has_acted:
 		_log("%s already acted this turn!" % attacker.card_name)
@@ -550,6 +676,7 @@ func cleanup_deaths() -> Dictionary:
 				dead_card.reset_to_base()
 				shared_discard.append(dead_card)
 				player_field.slots[i] = null
+				notify_board_units_changed(1, "leave", dead_card)
 			p1_dead.append(i)
 			if death_comp:
 				draw_cards_for_player(1, 1)
@@ -566,6 +693,7 @@ func cleanup_deaths() -> Dictionary:
 				dead_card.reset_to_base()
 				shared_discard.append(dead_card)
 				player2_field.slots[i] = null
+				notify_board_units_changed(2, "leave", dead_card)
 			p2_dead.append(i)
 			if death_comp:
 				draw_cards_for_player(1, 2)
@@ -581,12 +709,6 @@ func end_player_turn() -> Dictionary:
 	is_player_turn = false
 	# Clear current player's temp mana (vanishes at turn end)
 	active_field().clear_temp_mana()
-	# Reset charmed card costs
-	for card in player_hand:
-		if card != null: card.reset_charm_cost()
-	for card in player2_hand:
-		if card != null: card.reset_charm_cost()
-
 	var refund_owner: int = current_player
 	var refund_total: int = 0
 	for slot in player_field.slots:
@@ -607,6 +729,11 @@ func end_player_turn() -> Dictionary:
 		if card != null and card.is_alive():
 			SkillEngine.trigger_skills(SkillEngine.TRIGGER_ON_TURN_END, card, make_skill_context_for_player(current_player, i, -1))
 	_stats_unlisten()
+
+	# Current-turn reductions—including Charm's zero-cost override—expire only
+	# after turn-end passives have resolved. Permanent reductions remain.
+	for card: CardData in active_hand():
+		card.clear_turn_cost_reduction()
 
 	# Tick buffs owned by the next player, then clear that player's old shields.
 	# Shields gained this turn stay through the opponent's turn and expire when

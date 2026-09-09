@@ -13,7 +13,7 @@ static func analyze(draft: Dictionary) -> Dictionary:
 	if cost < 0:
 		issues.append({"severity": "error", "key": "usability.negative_cost"})
 	var skills: Array = []
-	for key in ["skill1", "skill2", "skill3"]:
+	for key in ["skill1", "skill2", "skill3", "talent"]:
 		var skill = draft.get(key, {})
 		if skill is Dictionary and not skill.is_empty():
 			skills.append(skill)

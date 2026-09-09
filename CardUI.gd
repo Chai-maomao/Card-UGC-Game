@@ -31,8 +31,17 @@ var _is_layout_applying: bool = false
 # Intent behind action_buttons visibility (true = show in battle): silence
 # temporarily overrides it, and set_card restores it once the silence expires.
 var _actions_visible: bool = true
-# Hand cards (children of the hand container) grow on hover; field cards don't.
-var is_hand_card: bool = false
+var _preview_only: bool = false
+var _embedded_in_slot: bool = false
+var _battle_drag_enabled: bool = false
+# A card face embedded in a deck grid, editor preview, picker, or battlefield
+# slot is already visually grounded by its parent surface. Only loose cards in
+# the player's hand need the dedicated depth shadow and hover lift.
+var is_hand_card: bool = false:
+	set(value):
+		is_hand_card = value
+		_battle_drag_enabled = value
+		_sync_card_shadow_visibility()
 var _hover_tween: Tween = null
 var _pointer_inside := false
 var _pointer_pressed := false
@@ -52,6 +61,10 @@ var _last_status_signature: String = ""
 # on every refresh; skip it when the color is unchanged (invalid marker forces
 # a re-apply after set_card resets the label color).
 var _last_cost_color: Color = Color(-1.0, -1.0, -1.0, -1.0)
+
+const DRAG_PREVIEW_SCALE := 1.035
+const DRAG_SHADOW_OFFSET := Vector2(-4.0, -4.0)
+const DRAG_SHADOW_INSET := Vector2(6.0, 6.0)
 
 
 func _scaled_rect(left: float, top: float, right: float, bottom: float) -> void:
@@ -84,8 +97,7 @@ func apply_ui_scale(scale_value: float) -> void:
 	size = custom_minimum_size
 	_scaled_rect(0, 0, 120, 160)
 	if background_panel:
-		background_panel.custom_minimum_size = custom_minimum_size
-		background_panel.size = custom_minimum_size
+		background_panel.custom_minimum_size = Vector2.ZERO
 	# Leave a narrow physical rim around the card. This gives the surface shadow
 	# a clean silhouette while its dedicated layer sits behind and below it.
 	_scale_child_rect(card_shadow, 6, 8, 114, 164)
@@ -102,14 +114,14 @@ func apply_ui_scale(scale_value: float) -> void:
 		_scale_child_rect(gender_label, 72, 24, 114, 40)
 		_scale_child_rect(hp_label, 6, 42, 94, 72)
 		_scale_child_rect(atk_label, 6, 58, 94, 72)
-		_scale_child_rect(action_buttons, 6, 88, 114, 158)
+		_scale_child_rect(action_buttons, 6, 90, 114, 153)
 	else:
 		_scale_child_rect(name_label, 6, 4, 114, 22)
 		_scale_child_rect(cost_label, 6, 26, 58, 40)
 		_scale_child_rect(gender_label, 72, 24, 114, 40)
 		_scale_child_rect(hp_label, 6, 42, 94, 56)
 		_scale_child_rect(atk_label, 6, 58, 94, 72)
-		_scale_child_rect(action_buttons, 6, 88, 114, 158)
+		_scale_child_rect(action_buttons, 6, 90, 114, 153)
 	if name_label:
 		name_label.add_theme_font_size_override("font_size", max(10, int(13 * ui_scale)))
 	if gender_label:
@@ -123,7 +135,7 @@ func apply_ui_scale(scale_value: float) -> void:
 	# buttons (basic attack + 3 skills) inside the ~76px action column.
 	for button in [normal_atk_btn, skill1_btn, skill2_btn, skill3_btn]:
 		if button:
-			button.add_theme_font_size_override("font_size", max(9, int(10 * ui_scale)))
+			button.add_theme_font_size_override("font_size", max(7, int(10 * ui_scale)))
 	if action_buttons:
 		action_buttons.add_theme_constant_override("separation", max(1, int(2 * ui_scale)))
 	if status_icons:
@@ -173,10 +185,10 @@ func _apply_card_visual_style() -> void:
 	for button in [skill1_btn, skill2_btn, skill3_btn]:
 		if button:
 			UITheme.apply_button(button)
-	# Action buttons are compact chips stacked in a fixed-height column. Shrink
-	# their vertical padding so up to 4 buttons (basic attack + 3 skills) fit
-	# the ~76px action area without pushing any button past the card bounds.
-	var chip_margin: int = max(1, int(1 * ui_scale))
+	# Card action chips deliberately have no vertical content padding. Their
+	# text remains centred while the last skill and its hover shadow stay inside
+	# the face instead of forcing the VBox past its requested lower edge.
+	var chip_margin := 0
 	for button in [normal_atk_btn, skill1_btn, skill2_btn, skill3_btn]:
 		if button == null:
 			continue
@@ -188,6 +200,8 @@ func _apply_card_visual_style() -> void:
 
 
 func _ready():
+	# Calls made before entering the tree cannot lay out @onready children.
+	_last_layout_scale = -1.0
 	# Compact status strip sits below the stat lines; actions start at y=88, so
 	# the font-backed badges have a measured 2px gap from the buttons below.
 	status_icons = HBoxContainer.new()
@@ -215,6 +229,7 @@ func _ready():
 		set_card(current_card_data)
 	else:
 		apply_ui_scale(ui_scale)
+	_sync_card_shadow_visibility()
 
 
 # Hand cards pop up (scale from bottom-center + raise) while hovered so the
@@ -294,6 +309,7 @@ func set_card(card_data: CardData):
 	current_card_data = card_data
 
 	if card_data == null:
+		tooltip_text = ""
 		if name_label: name_label.text = ""
 		if cost_label: cost_label.text = ""
 		if gender_label: gender_label.text = ""
@@ -312,14 +328,7 @@ func set_card(card_data: CardData):
 		gender_label.text = ""
 	if type_label:
 		type_label.text = _card_type_text(card_data)
-	if card_data.is_charmed():
-		if cost_label:
-			cost_label.text = Locale.t("card.cost_charmed")
-			cost_label.add_theme_color_override("font_color", Color(0.2, 0.9, 0.2))  # green for charmed
-	else:
-		if cost_label:
-			cost_label.text = Locale.t("card.cost", [card_data.cost])
-			cost_label.add_theme_color_override("font_color", Color.WHITE)
+	refresh_cost_display()
 	# set_card resets the label color, so the castability tint cache is stale.
 	_last_cost_color = Color(-1.0, -1.0, -1.0, -1.0)
 
@@ -339,7 +348,7 @@ func set_card(card_data: CardData):
 			atk_label.text = ""
 	elif card_data.is_parasite():
 		if hp_label:
-			hp_label.text = Locale.t("card.parasite_hp", [card_data.hp, card_data.max_hp])
+			hp_label.text = Locale.t("card.parasite_hp", [card_data.hp, card_data.max_hp]) if card_data.parasite_absorbs_host_damage() else Locale.t("card.parasite_linked")
 		if atk_label:
 			atk_label.text = Locale.t("card.parasite_atk", [card_data.atk])
 	else:
@@ -359,13 +368,28 @@ func set_card(card_data: CardData):
 	if card_data.is_spell() and card_data.skills.size() > 0:
 		tooltip_text = _TextFormatter.format_skill_tooltip(SpellRules.spell_skill(card_data))
 	elif card_data.is_parasite():
-		tooltip_text = Locale.t("card.parasite_tooltip", [card_data.hp, card_data.atk])
+		tooltip_text = ""
 	else:
 		tooltip_text = _parasite_tooltip(card_data)
 	if action_buttons:
 		action_buttons.visible = _actions_visible and not card_data.is_silenced()
 	self.modulate = Color(0.5, 0.5, 0.5) if card_data.is_silenced() else Color.WHITE
 	_auto_hide_if_enemy()
+
+
+func refresh_cost_display() -> void:
+	if cost_label == null or current_card_data == null:
+		return
+	var value: String = Locale.t("card.cost", [current_card_data.cost])
+	if cost_label.text != value:
+		cost_label.text = value
+		cost_label.add_theme_color_override("font_color", Color.WHITE)
+		_last_cost_color = Color(-1, -1, -1, -1)
+	if current_card_data.is_cost_reduced():
+		# Match the battle castability palette exactly; otherwise a reused hand
+		# node can restore a different green while its tint cache still says the
+		# correct color is already applied.
+		cost_label.add_theme_color_override("font_color", Color(0.35, 1.0, 0.48))
 
 
 func _update_card_layout_for_type() -> void:
@@ -441,8 +465,6 @@ func _update_status_icons() -> void:
 		if not parasite is CardData:
 			continue
 		var p: CardData = parasite
-		if p.skills.is_empty():
-			continue
 		parasite_tooltips.append(_format_parasite_passive_tooltip(p))
 	if not parasite_tooltips.is_empty():
 		var parasite_symbol := "⛓"
@@ -538,7 +560,11 @@ func _make_status_badge(symbol: String, color: Color, tooltip: String) -> PanelC
 
 
 func _format_parasite_passive_tooltip(parasite: CardData) -> String:
-	var lines: Array = [Locale.t("card.parasite_passive_marker", [parasite.card_name])]
+	var mode_text := Locale.t("card.parasite_mode_absorb") if parasite.parasite_absorbs_host_damage() else Locale.t("card.parasite_mode_linked")
+	var lines: Array = [
+		Locale.t("card.parasite_passive_marker", [parasite.card_name]),
+		Locale.t("card.parasite_mode_detail", [mode_text]),
+	]
 	for skill in parasite.skills:
 		if skill is Dictionary:
 			lines.append(_TextFormatter.format_skill_tooltip(skill))
@@ -560,7 +586,10 @@ func _parasite_tooltip(card_data: CardData) -> String:
 	var parts: Array = []
 	for parasite in card_data.parasite_cards:
 		if parasite is CardData:
-			parts.append(Locale.t("card.parasite_attached_item", [parasite.card_name, parasite.hp, parasite.max_hp, parasite.atk]))
+			if parasite.parasite_absorbs_host_damage():
+				parts.append(Locale.t("card.parasite_attached_absorb_item", [parasite.card_name, parasite.hp, parasite.max_hp, parasite.atk]))
+			else:
+				parts.append(Locale.t("card.parasite_attached_linked_item", [parasite.card_name, parasite.atk]))
 	return Locale.t("card.parasite_attached", ["\n".join(parts)])
 
 
@@ -579,7 +608,7 @@ func _update_skill_buttons():
 	var silenced: bool = current_card_data.is_silenced()
 	if current_card_data != null and current_card_data.is_parasite():
 		if skill1_btn:
-			if current_card_data.skills.size() >= 1:
+			if _is_action_skill_index(0):
 				var s: Dictionary = current_card_data.skills[0]
 				var sname: String = s.get("skill_name", "")
 				skill1_btn.text = sname if sname != "" else Locale.t("mycards.skill_fallback", [1])
@@ -595,7 +624,7 @@ func _update_skill_buttons():
 			skill3_btn.visible = false
 		return
 	if skill1_btn:
-		if current_card_data.skills.size() >= 1:
+		if current_card_data.is_spell() and current_card_data.skills.size() >= 1 or _is_action_skill_index(0):
 			var s: Dictionary = SpellRules.spell_skill(current_card_data) if current_card_data.is_spell() else current_card_data.skills[0]
 			var sname: String = s.get("skill_name", "")
 			# Spell cards show a generic "Cast" button instead of the skill name.
@@ -610,7 +639,7 @@ func _update_skill_buttons():
 			skill1_btn.visible = false
 
 	if skill2_btn:
-		if current_card_data.skills.size() >= 2:
+		if _is_action_skill_index(1):
 			var s: Dictionary = current_card_data.skills[1]
 			var sname: String = s.get("skill_name", "")
 			if current_card_data.is_spell():
@@ -626,7 +655,7 @@ func _update_skill_buttons():
 			skill2_btn.visible = false
 
 	if skill3_btn:
-		if current_card_data.skills.size() >= 3 and not current_card_data.is_spell():
+		if _is_action_skill_index(2) and not current_card_data.is_spell():
 			var s: Dictionary = current_card_data.skills[2]
 			var sname: String = s.get("skill_name", "")
 			skill3_btn.text = sname if sname != "" else Locale.t("mycards.skill_fallback", [3])
@@ -650,13 +679,20 @@ func _update_skill_buttons():
 		if normal_atk_btn:
 			normal_atk_btn.disabled = false
 			normal_atk_btn.modulate = Color.WHITE
-		if skill1_btn and skill1_btn.visible and current_card_data.skills.size() >= 1:
+		if skill1_btn and skill1_btn.visible and (current_card_data.is_spell() or _is_action_skill_index(0)):
 			var s1: Dictionary = SpellRules.spell_skill(current_card_data) if current_card_data.is_spell() else current_card_data.skills[0]
 			_apply_skill_button_state(skill1_btn, s1, 0)
-		if skill2_btn and skill2_btn.visible and current_card_data.skills.size() >= 2:
+		if skill2_btn and skill2_btn.visible and _is_action_skill_index(1):
 			_apply_skill_button_state(skill2_btn, current_card_data.skills[1], 1)
-		if skill3_btn and skill3_btn.visible and current_card_data.skills.size() >= 3:
+		if skill3_btn and skill3_btn.visible and _is_action_skill_index(2):
 			_apply_skill_button_state(skill3_btn, current_card_data.skills[2], 2)
+
+
+func _is_action_skill_index(index: int) -> bool:
+	if current_card_data == null or index < 0 or index >= current_card_data.skills.size():
+		return false
+	var skill: Dictionary = current_card_data.skills[index]
+	return str(skill.get("skill_type", SkillEngine.SKILL_TYPE_NORMAL)) != SkillEngine.SKILL_TYPE_TALENT
 
 
 # Grey out + disable a skill button when its skill can't be activated now:
@@ -666,12 +702,15 @@ func _apply_skill_button_state(btn: Button, skill: Dictionary, skill_index: int)
 	var unavailable := false
 	var unavailable_reason := ""
 	var trig: String = skill.get("trigger", "")
-	if current_card_data.skills_used.has(skill_index):
+	if not SkillEngine.has_uses_remaining(current_card_data, skill, skill_index):
+		unavailable = true
+		unavailable_reason = Locale.t("card.skill_limit_reached")
+	elif current_card_data.skills_used.has(skill_index):
 		unavailable = true
 		unavailable_reason = Locale.t("card.skill_used")
-	elif trig == SkillEngine.TRIGGER_ON_SUMMON and not current_card_data.summoned_this_turn:
+	elif _embedded_in_slot and trig != SkillEngine.TRIGGER_ON_ACTIVATE:
 		unavailable = true
-		unavailable_reason = Locale.t("card.skill_summon_window")
+		unavailable_reason = Locale.t("card.skill_automatic")
 	elif trig == SkillEngine.TRIGGER_ON_ACTIVATE and current_card_data.has_attacked:
 		unavailable = true
 		unavailable_reason = Locale.t("card.skill_action_spent")
@@ -691,12 +730,34 @@ func set_actions_visible(visible: bool):
 		action_buttons.visible = visible
 
 
-func set_skill_preview_visible(visible: bool):
+func set_embedded_in_slot(embedded: bool) -> void:
+	_embedded_in_slot = embedded
+	_sync_card_shadow_visibility()
+
+
+func set_battle_drag_enabled(enabled: bool) -> void:
+	_battle_drag_enabled = enabled
+
+
+func _sync_card_shadow_visibility() -> void:
+	if card_shadow:
+		card_shadow.visible = is_hand_card and not _embedded_in_slot
+
+
+func set_battle_layout_preview(visible: bool) -> void:
+	# Static card displays use the same action composition as battlefield cards:
+	# minions keep ATK beside their skills, while spells keep their Cast button.
+	# Preview-only blocks dragging; unconnected action signals are inert but the
+	# live buttons retain hover tooltips and the normal battle visual treatment.
+	_preview_only = true
 	_actions_visible = visible
 	if action_buttons:
 		action_buttons.visible = visible
 	if normal_atk_btn:
-		normal_atk_btn.visible = false
+		normal_atk_btn.visible = visible and current_card_data != null \
+			and not current_card_data.is_spell() and not current_card_data.is_parasite()
+		normal_atk_btn.disabled = false
+		normal_atk_btn.modulate = Color.WHITE
 	if skill1_btn:
 		skill1_btn.disabled = false
 		skill1_btn.modulate = Color.WHITE
@@ -708,8 +769,16 @@ func set_skill_preview_visible(visible: bool):
 		skill3_btn.modulate = Color.WHITE
 
 
-func _get_drag_data(_position: Vector2):
-	if current_card_data == null:
+# Compatibility for older callers; display cards now deliberately mirror the
+# complete battle action layout instead of stretching skills into the ATK slot.
+func set_skill_preview_visible(visible: bool) -> void:
+	set_battle_layout_preview(visible)
+
+
+func _get_drag_data(position: Vector2):
+	# Deck grids, library entries, editor previews and picker cards all reuse
+	# CardUI, but they are displays rather than loose battle objects.
+	if current_card_data == null or _preview_only or not _battle_drag_enabled:
 		return null
 
 	_drag_source = true
@@ -719,37 +788,68 @@ func _get_drag_data(_position: Vector2):
 	scale = Vector2(0.97, 0.97)
 	modulate = Color(1.0, 1.0, 1.0, 0.38)
 
-	var preview_holder := Control.new()
-	preview_holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	preview_holder.custom_minimum_size = Vector2.ONE
-	var preview_shadow := Panel.new()
-	preview_shadow.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	preview_shadow.position = -size * 0.5 + Vector2(7, 10) * ui_scale
-	preview_shadow.size = size
-	preview_shadow.add_theme_stylebox_override("panel", UITheme.panel_style(
-		Color(0.0, 0.0, 0.0, 0.34), Color(0, 0, 0, 0), 0,
-		max(4, int(8 * ui_scale)), Color(0, 0, 0, 0.34), max(4, int(8 * ui_scale))
-	))
-	preview_holder.add_child(preview_shadow)
-	var preview_card = duplicate()
-	preview_card.modulate = Color(1.03, 1.03, 1.03, 0.94)
-	preview_card.anchor_right = 0.0
-	preview_card.anchor_bottom = 0.0
-	preview_card.scale = Vector2(1.055, 1.055)
-	if preview_card.has_method("apply_ui_scale"):
-		preview_card.call("apply_ui_scale", ui_scale)
-	else:
-		preview_card.offset_right = 120.0 * ui_scale
-		preview_card.offset_bottom = 160.0 * ui_scale
-	preview_card.position = -preview_card.size * 0.5
-	preview_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	preview_holder.add_child(preview_card)
+	var preview_holder := _build_drag_preview(position)
 	set_drag_preview(preview_holder)
 
 	return {
 		"card_ui": self,
 		"card_data": current_card_data
 	}
+
+
+# Keep the same point of the card under the pointer that the player grabbed.
+# The shadow is intentionally smaller than the visible card and peeks out only
+# on the upper-left side, which reads as contact instead of a tall floating slab.
+func _build_drag_preview(grab_position: Vector2) -> Control:
+	var preview_holder := Control.new()
+	preview_holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	preview_holder.custom_minimum_size = Vector2.ONE
+	var preview_card = duplicate()
+	preview_card.name = "PreviewCard"
+	# The drag preview owns a purpose-built compact shadow below; prevent the
+	# duplicated hand card from restoring its normal shadow during _ready().
+	preview_card.is_hand_card = false
+	preview_card.set_battle_drag_enabled(false)
+	preview_card.modulate = Color(1.02, 1.02, 1.02, 0.97)
+	preview_card.anchor_right = 0.0
+	preview_card.anchor_bottom = 0.0
+	preview_card.pivot_offset = Vector2.ZERO
+	preview_card.scale = Vector2.ONE * DRAG_PREVIEW_SCALE
+	var built_in_shadow := preview_card.get_node_or_null("CardShadow") as Control
+	if built_in_shadow:
+		built_in_shadow.hide()
+	if preview_card.has_method("apply_ui_scale"):
+		preview_card.call("apply_ui_scale", ui_scale)
+	else:
+		preview_card.offset_right = 120.0 * ui_scale
+		preview_card.offset_bottom = 160.0 * ui_scale
+	var preview_size: Vector2 = preview_card.size * DRAG_PREVIEW_SCALE
+	var preview_origin := -grab_position * DRAG_PREVIEW_SCALE
+	preview_card.position = preview_origin
+	preview_card.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	# CardUI._ready() reapplies its root rect and therefore resets position.
+	# Restore the grab transform after that initialization has completed.
+	preview_card.ready.connect(func():
+		preview_card.pivot_offset = Vector2.ZERO
+		preview_card.scale = Vector2.ONE * DRAG_PREVIEW_SCALE
+		preview_card.position = preview_origin
+	, CONNECT_ONE_SHOT)
+
+	var preview_shadow := Panel.new()
+	preview_shadow.name = "PreviewShadow"
+	preview_shadow.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	preview_shadow.position = preview_origin + DRAG_SHADOW_OFFSET * ui_scale
+	preview_shadow.size = (preview_size - DRAG_SHADOW_INSET * 2.0 * ui_scale).max(Vector2.ONE)
+	var shadow_style := StyleBoxFlat.new()
+	shadow_style.bg_color = Color(0.0, 0.0, 0.0, 0.30)
+	shadow_style.set_corner_radius_all(max(3, int(7 * ui_scale)))
+	shadow_style.shadow_color = Color(0.0, 0.0, 0.0, 0.16)
+	shadow_style.shadow_size = max(1, int(2 * ui_scale))
+	shadow_style.shadow_offset = Vector2(-1, -1) * ui_scale
+	preview_shadow.add_theme_stylebox_override("panel", shadow_style)
+	preview_holder.add_child(preview_shadow)
+	preview_holder.add_child(preview_card)
+	return preview_holder
 
 
 func _notification(what: int) -> void:

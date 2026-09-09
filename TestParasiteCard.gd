@@ -12,11 +12,14 @@ func _ready() -> void:
 	_test_attach_to_ally_is_allowed()
 	_test_parasite_attack_grants_host_attack()
 	_test_attack_damage_hits_parasite_hp_first()
+	_test_linked_parasite_does_not_absorb_damage()
+	_test_mixed_parasites_use_the_absorbing_one()
 	_test_parasite_uses_host_damage_reduction()
 	_test_directed_skill_damage_hits_parasite_hp_first()
 	_test_aoe_skill_bypasses_parasite()
 	_test_parasite_breaks_to_discard()
 	_test_host_death_discards_attached_parasite()
+	_test_host_death_discards_linked_parasite()
 	_test_host_discard_discards_attached_parasite()
 	_test_serialization_keeps_attached_parasites()
 	_test_parasite_draft_keeps_passive_skills_only()
@@ -64,8 +67,10 @@ func _card(name: String, cost: int = 1, hp: int = 5, atk: int = 0, skills: Array
 	return card
 
 
-func _parasite(name: String = "Parasite", cost: int = 1, hp: int = 3, atk: int = 2, skills: Array = []) -> CardData:
-	return _card(name, cost, hp, atk, skills, "parasite")
+func _parasite(name: String = "Parasite", cost: int = 1, hp: int = 3, atk: int = 2, skills: Array = [], damage_mode: String = CardData.PARASITE_DAMAGE_ABSORB) -> CardData:
+	var card := _card(name, cost, hp, atk, skills, "parasite")
+	card.parasite_damage_mode = damage_mode
+	return card
 
 
 func _damage_skill(name: String, target: String, value: int, trigger: String = SkillEngine.TRIGGER_ON_ACTIVATE, target_side: String = SkillEngine.TARGET_SIDE_ENEMY) -> Dictionary:
@@ -137,6 +142,44 @@ func _test_attack_damage_hits_parasite_hp_first() -> void:
 		_fail("broken parasite was not moved to discard after attack")
 	if not victim.parasite_cards.is_empty():
 		_fail("broken parasite stayed attached after attack")
+
+
+func _test_linked_parasite_does_not_absorb_damage() -> void:
+	var game = _new_game()
+	var attacker := _card("Attacker", 1, 5, 4)
+	var victim := _card("Victim", 1, 5, 0)
+	var parasite := _parasite("Linked Bug", 1, 3, 2, [], CardData.PARASITE_DAMAGE_LINKED)
+	ParasiteRules.attach(parasite, victim)
+	game.player_field.slots[0] = attacker
+	game.player2_field.slots[0] = victim
+	game.execute_attack(0, 0)
+	if victim.hp != 1:
+		_fail("linked parasite incorrectly blocked host damage (host hp=%d)" % victim.hp)
+	if parasite.hp != 3 or not victim.parasite_cards.has(parasite) or game.shared_discard.has(parasite):
+		_fail("linked parasite took damage or detached before its host left play")
+
+	game = _new_game()
+	var caster := _card("Caster", 1, 5, 0, [_damage_skill("Bolt", SkillEngine.TARGET_SINGLE, 2)])
+	victim = _card("Victim", 1, 5, 0)
+	parasite = _parasite("Linked Skill Bug", 1, 3, 0, [], CardData.PARASITE_DAMAGE_LINKED)
+	ParasiteRules.attach(parasite, victim)
+	game.player_field.slots[0] = caster
+	game.player2_field.slots[0] = victim
+	game.trigger_activate_skills(0, 0, 0)
+	if victim.hp != 3 or parasite.hp != 3:
+		_fail("linked parasite incorrectly absorbed directed skill damage")
+
+
+func _test_mixed_parasites_use_the_absorbing_one() -> void:
+	var host := _card("Host", 1, 5, 0)
+	var absorber := _parasite("Shield", 1, 2, 0)
+	var linked := _parasite("Linked", 1, 3, 0, [], CardData.PARASITE_DAMAGE_LINKED)
+	ParasiteRules.attach(absorber, host)
+	ParasiteRules.attach(linked, host)
+	var discard: Array = []
+	var remaining := ParasiteRules.absorb_damage(host, 2, discard)
+	if remaining != 0 or not discard.has(absorber) or discard.has(linked) or linked.hp != 3:
+		_fail("linked parasite prevented the absorbing parasite from intercepting damage")
 
 
 func _test_parasite_uses_host_damage_reduction() -> void:
@@ -214,6 +257,17 @@ func _test_host_death_discards_attached_parasite() -> void:
 		_fail("dead host stayed on field")
 
 
+func _test_host_death_discards_linked_parasite() -> void:
+	var game = _new_game()
+	var host := _card("Doomed Host", 1, 0, 0)
+	var parasite := _parasite("Linked", 1, 2, 1, [], CardData.PARASITE_DAMAGE_LINKED)
+	ParasiteRules.attach(parasite, host)
+	game.player2_field.slots[0] = host
+	game.cleanup_deaths()
+	if not game.shared_discard.has(parasite) or not host.parasite_cards.is_empty():
+		_fail("linked parasite did not follow its dead host to the discard pile")
+
+
 func _test_host_discard_discards_attached_parasite() -> void:
 	var game = _new_game()
 	var host := _card("Discarded Host", 1, 5, 0)
@@ -231,7 +285,7 @@ func _test_host_discard_discards_attached_parasite() -> void:
 
 func _test_serialization_keeps_attached_parasites() -> void:
 	var host := _card("Host", 1, 5, 2)
-	var parasite := _parasite("Serialized Bug", 1, 3, 4)
+	var parasite := _parasite("Serialized Bug", 1, 3, 4, [], CardData.PARASITE_DAMAGE_LINKED)
 	ParasiteRules.attach(parasite, host)
 	var data := PlayerData.serialize_card(host)
 	var copy := PlayerData.deserialize_card(data)
@@ -241,6 +295,8 @@ func _test_serialization_keeps_attached_parasites() -> void:
 	var restored: CardData = copy.parasite_cards[0]
 	if restored.card_name != "Serialized Bug" or restored.atk != 4 or restored.hp != 3:
 		_fail("serialized parasite values changed")
+	if restored.parasite_damage_mode != CardData.PARASITE_DAMAGE_LINKED:
+		_fail("serialized parasite damage mode changed")
 	if copy.effective_atk() != 6:
 		_fail("deserialized parasite attack was not granted to host")
 
@@ -248,6 +304,7 @@ func _test_serialization_keeps_attached_parasites() -> void:
 func _test_parasite_draft_keeps_passive_skills_only() -> void:
 	PlayerData.init_parasite_draft()
 	PlayerData.card_draft["name"] = "Draft Parasite"
+	PlayerData.card_draft["parasite_damage_mode"] = CardData.PARASITE_DAMAGE_LINKED
 	PlayerData.card_draft["skill1"] = _damage_skill("Passive", SkillEngine.TARGET_SINGLE, 1, SkillEngine.TRIGGER_ON_ATTACK)
 	PlayerData.card_draft["skill2"] = _damage_skill("Should Remove", SkillEngine.TARGET_SINGLE, 1, SkillEngine.TRIGGER_ON_ACTIVATE)
 	var card := PlayerData.build_card_from_draft()
@@ -257,6 +314,8 @@ func _test_parasite_draft_keeps_passive_skills_only() -> void:
 		_fail("parasite draft did not keep exactly one passive skill")
 	elif card.skills[0].get("trigger", "") != SkillEngine.TRIGGER_ON_ATTACK:
 		_fail("parasite draft kept wrong trigger")
+	if card.parasite_damage_mode != CardData.PARASITE_DAMAGE_LINKED:
+		_fail("parasite draft did not keep the selected damage mode")
 
 
 func _test_parasite_on_attack_passive_uses_host_context() -> void:

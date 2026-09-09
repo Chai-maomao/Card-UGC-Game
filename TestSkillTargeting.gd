@@ -17,6 +17,7 @@ func _ready() -> void:
 	_test_activate_target_single_requires_manual_target()
 	_test_target_single_all_side_uses_selected_player()
 	_test_target_single_ally_side_uses_ally_field()
+	_test_player_targets_and_unit_areas_are_disjoint()
 	_test_on_attack_target_matrix()
 	_test_on_damaged_target_matrix()
 	_test_death_self_sides_and_filter_targets()
@@ -200,6 +201,43 @@ func _test_target_single_ally_side_uses_ally_field() -> void:
 		_fail("target_single ally-side resolved selected allied slot on enemy field")
 
 
+func _test_player_targets_and_unit_areas_are_disjoint() -> void:
+	var game = _new_game()
+	var caster := _card("Hero Target Caster")
+	var ally_unit := _card("Ally Unit")
+	var enemy_unit := _card("Enemy Unit")
+	game.player_field.slots[0] = caster
+	game.player_field.slots[1] = ally_unit
+	game.player2_field.slots[0] = enemy_unit
+	game.player_field.player_hp = 20
+	game.player2_field.player_hp = 20
+	caster.skills = [{"skill_name": "Hero Matrix", "trigger": SkillEngine.TRIGGER_ON_ACTIVATE, "effects": [
+		{"target": SkillEngine.TARGET_PLAYER, "target_side": SkillEngine.TARGET_SIDE_ENEMY, "effect": SkillEngine.EFFECT_DAMAGE, "value": 4},
+		{"target": SkillEngine.TARGET_PLAYER, "target_side": SkillEngine.TARGET_SIDE_ALLY, "effect": SkillEngine.EFFECT_HEAL, "value": 3},
+		{"target": SkillEngine.TARGET_ALL, "target_side": SkillEngine.TARGET_SIDE_ENEMY, "effect": SkillEngine.EFFECT_DAMAGE, "value": 1},
+	]}]
+	SkillEngine.trigger_single_skill(caster, 0, game.make_skill_context(0, -1))
+	if game.player2_field.player_hp != 16:
+		_fail("enemy player target did not damage the enemy player body")
+	if game.player_field.player_hp != 23:
+		_fail("ally player target did not heal the allied player body")
+	if enemy_unit.hp != 4 or ally_unit.hp != 5:
+		_fail("enemy/ally area semantics did not remain unit-only")
+	var all_units := _TargetResolver.resolve_targets(SkillEngine.TARGET_ALL, caster, game.make_skill_context(0, -1), SkillEngine.TARGET_SIDE_ALL)
+	if game.player_field in all_units or game.player2_field in all_units:
+		_fail("TARGET_ALL unexpectedly includes a player body")
+	if not SpellRules.targets_enemy({"effects": [{"target": SkillEngine.TARGET_PLAYER, "target_side": SkillEngine.TARGET_SIDE_ENEMY, "effect": SkillEngine.EFFECT_DAMAGE, "value": 1}]}):
+		_fail("enemy player spell target was not recognized by first-turn protection")
+	var invalid := SkillErrorChecker.collect_semantic_issues([
+		{"target": SkillEngine.TARGET_PLAYER, "target_side": SkillEngine.TARGET_SIDE_ALLY, "effect": SkillEngine.EFFECT_SHIELD, "value": 1},
+	], SkillEngine.TRIGGER_ON_ACTIVATE)
+	if invalid.is_empty():
+		_fail("unit-only effects must reject player targets")
+	var sentence := _TextFormatter.format_effect_sentence({"target": SkillEngine.TARGET_PLAYER, "target_side": SkillEngine.TARGET_SIDE_ENEMY, "effect": SkillEngine.EFFECT_DAMAGE, "value": 4})
+	if not sentence.contains("敌方玩家"):
+		_fail("player target text must read as enemy player")
+
+
 func _test_on_attack_target_matrix() -> void:
 	var game = _new_game()
 	var attacker := _card("Attacker", 8, 0, [
@@ -349,8 +387,8 @@ func _test_new_effect_pack() -> void:
 		_fail("gain mana should increase current player's mana up to max")
 	if caster.atk != 1 or caster.base_atk != 1 or caster.field_atk_bonus != 2 or caster.effective_atk() != 3:
 		_fail("gain attack should add a field-only permanent bonus without changing base attack")
-	if caster.max_hp != 13 or caster.base_max_hp != 13:
-		_fail("gain max HP should permanently increase current and base max HP")
+	if caster.max_hp != 13 or caster.base_max_hp != 10:
+		_fail("gain max HP should increase battlefield max HP while preserving the base for discard reset")
 	var high_hp_enemy := _card("High HP Enemy", 10, 0)
 	game.player2_field.slots[2] = high_hp_enemy
 	caster.skills = [{"skill_name": "Execute Check", "trigger": SkillEngine.TRIGGER_ON_ACTIVATE, "effects": [

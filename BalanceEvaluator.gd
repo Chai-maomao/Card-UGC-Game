@@ -37,15 +37,15 @@ const TARGET_WEIGHTS := {
 static func evaluate_card(card: CardData) -> Dictionary:
 	if card == null:
 		return _result(0.0, 0, 0.0, "balanced", [])
-	return evaluate_values(card.cost, card.atk, card.max_hp, card.skills)
+	return evaluate_values(card.cost, card.atk, card.max_hp, card.skills, card.card_type)
 
 
-static func evaluate_values(cost: int, atk: int, hp: int, skills: Array) -> Dictionary:
-	var body_score: float = _body_score(atk, hp)
+static func evaluate_values(cost: int, atk: int, hp: int, skills: Array, card_type: String = "minion", scenario: int = 1) -> Dictionary:
+	var body_score: float = 0.0 if card_type == "spell" else _body_score(atk, hp)
 	var skill_score: float = 0.0
 	for skill in skills:
 		if skill is Dictionary and not skill.is_empty():
-			skill_score += _skill_score(skill, atk)
+			skill_score += _skill_score(skill, atk, scenario)
 	var total_score: float = max(0.0, body_score + skill_score)
 	var recommended_cost: int = max(0, int(ceil(total_score / POINTS_PER_COST)))
 	var gap: float = total_score - float(cost) * POINTS_PER_COST
@@ -57,7 +57,15 @@ static func evaluate_values(cost: int, atk: int, hp: int, skills: Array) -> Dict
 	elif gap <= WEAK_MARGIN:
 		level = "weak"
 	var reasons: Array = _balance_reasons(level, cost, body_score, skill_score)
-	return _result(total_score, recommended_cost, gap, level, reasons)
+	var result := _result(total_score, recommended_cost, gap, level, reasons)
+	result["uncertain"] = SkillEstimate.uncertain(skills)
+	result["estimate_kind"] = "heuristic"
+	if scenario == 1:
+		var low := float(evaluate_values(cost, atk, hp, skills, card_type, 0)["score"])
+		var high := float(evaluate_values(cost, atk, hp, skills, card_type, 2)["score"])
+		result["scenario_min"] = minf(total_score, minf(low, high))
+		result["scenario_max"] = maxf(total_score, maxf(low, high))
+	return result
 
 
 static func _body_score(atk: int, hp: int) -> float:
@@ -79,21 +87,53 @@ static func _balance_reasons(level: String, cost: int, body_score: float, skill_
 	return reasons
 
 
-static func _skill_score(skill: Dictionary, atk: int) -> float:
+static func _skill_score(skill: Dictionary, atk: int, scenario: int = 1) -> float:
 	var probability: float = clamp(float(skill.get("probability", 100)) / 100.0, 0.0, 1.0)
 	var trigger: String = skill.get("trigger", "")
 	var trigger_weight: float = float(TRIGGER_WEIGHTS.get(trigger, 0.8))
 	var effects: Array = skill.get("effects", [])
 	if effects.is_empty() and not skill.get("effect", "").is_empty():
 		effects = [skill]
-	var score: float = 0.0
-	for eff in effects:
-		if eff is Dictionary:
-			score += _effect_score(eff)
+	var score: float = _block_score(effects, scenario)
 	score *= probability
+	# Repeating passive/active triggers are valued over three opportunities.
+	# A one-use restriction reduces that opportunity; one-shot triggers do not.
+	var max_uses := int(skill.get("max_uses", 0))
+	if max_uses > 0 and trigger not in ["on_cast", "on_summon", "on_death"]:
+		score *= minf(1.0, float(max_uses) / 3.0)
+	if str(skill.get("skill_type", "normal")) == "talent":
+		score *= 1.1
 	if trigger == SkillEngine.TRIGGER_ON_ACTIVATE and score > 0.0:
 		score = max(0.0, score - float(max(0, atk)) * ACTIVATE_ATTACK_OPPORTUNITY_COST)
 	return score * trigger_weight
+
+
+static func _block_score(effects: Array, scenario: int, depth: int = 0) -> float:
+	if depth >= UgcSafety.MAX_EFFECT_NESTING_DEPTH:
+		return 0.0
+	var score := 0.0
+	for item in effects:
+		if not item is Dictionary:
+			continue
+		var effect: Dictionary = item
+		match str(effect.get("effect", "")):
+			SkillRegistry.EFFECT_STOP:
+				break
+			SkillRegistry.EFFECT_REPEAT:
+				score += SkillEstimate.value(effect, scenario, "repeat") * _block_score(effect.get("then_effects", []), scenario, depth + 1)
+			SkillRegistry.EFFECT_IF, SkillRegistry.EFFECT_IF_ELSE:
+				var weight := SkillEstimate.condition_weight(effect)
+				score += weight * _block_score(effect.get("then_effects", []), scenario, depth + 1)
+				score += (1.0 - weight) * _block_score(effect.get("else_effects", []), scenario, depth + 1)
+			_:
+				var resolved := effect.duplicate(true)
+				resolved.erase("value_expr")
+				resolved.erase("value_var")
+				resolved.erase("value_min")
+				resolved.erase("value_max")
+				resolved["value"] = SkillEstimate.value(effect, scenario)
+				score += _effect_score(resolved)
+	return score
 
 
 static func _polarity_multiplier(polarity: String, eff: Dictionary) -> float:
@@ -138,12 +178,7 @@ static func _target_weight(eff: Dictionary) -> float:
 
 
 static func _condition_weight(eff: Dictionary) -> float:
-	var condition_type: String = eff.get("condition_type", SkillEngine.CONDITION_NONE)
-	if condition_type == "" or condition_type == SkillEngine.CONDITION_NONE:
-		return 1.0
-	if condition_type == SkillEngine.CONDITION_TARGET_HAS_BUFF:
-		return 0.7
-	return 0.65
+	return SkillEstimate.condition_weight(eff)
 
 
 static func _harmful_target_multiplier(eff: Dictionary) -> float:

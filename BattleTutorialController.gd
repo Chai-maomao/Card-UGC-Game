@@ -88,8 +88,6 @@ func allows(action: String, context: Dictionary = {}) -> bool:
 	match phase:
 		Phase.SUMMON:
 			allowed = action == "summon" and int(context.get("slot", -1)) == 2
-		Phase.SKILL:
-			allowed = action == "skill" and int(context.get("slot", -1)) == 2 and int(context.get("skill", -1)) == 0
 		Phase.ATTACK_SOURCE:
 			allowed = action == "attack_source" and int(context.get("slot", -1)) == 2
 		Phase.ATTACK_TARGET:
@@ -107,8 +105,6 @@ func notify_action(action: String, _context: Dictionary = {}) -> void:
 	match phase:
 		Phase.SUMMON when action == "summon":
 			set_phase(Phase.SKILL)
-		Phase.SKILL when action == "skill":
-			set_phase(Phase.ATTACK_SOURCE)
 		Phase.ATTACK_SOURCE when action == "attack_source":
 			set_phase(Phase.ATTACK_TARGET)
 		Phase.ATTACK_TARGET when action == "attack_target":
@@ -132,7 +128,7 @@ func set_phase(next_phase: int) -> void:
 			_set_copy(3, "tutorial.summon_title", "tutorial.summon_body")
 			_focus_controls(_summon_focus_controls())
 		Phase.SKILL:
-			_set_copy(4, "tutorial.skill_title", "tutorial.skill_body")
+			_set_copy(4, "tutorial.skill_title", "tutorial.skill_body", true)
 			_focus_controls([battle._my_slots_ui()[2]])
 		Phase.ATTACK_SOURCE:
 			_set_copy(5, "tutorial.attack_title", "tutorial.attack_body")
@@ -240,6 +236,8 @@ func _on_next() -> void:
 		set_phase(Phase.HUD)
 	elif phase == Phase.HUD:
 		set_phase(Phase.SUMMON)
+	elif phase == Phase.SKILL:
+		set_phase(Phase.ATTACK_SOURCE)
 	elif phase == Phase.COMPLETE:
 		_continue_battle()
 

@@ -60,7 +60,9 @@ static func format_effect_sentence(eff: Dictionary) -> String:
 		sentence = _render_sentence(template, normalized, target, vstr, buff_name, buff_value_text)
 
 	var rcount: int = int(eff.get("random_count", 0))
-	if rcount > 0:
+	var random_zero_cost: bool = effect_id == SkillEngine.EFFECT_ZERO_COST \
+			and eff.get("target", SkillEngine.TARGET_SELF) == SkillEngine.TARGET_SINGLE
+	if rcount > 0 and SkillRegistry.supports_random_count(effect_id) and not random_zero_cost:
 		sentence += "，%s" % Locale.t("skill.max_targets", [rcount]) if is_zh else ", %s" % Locale.t("skill.max_targets", [rcount])
 	var condition_text := format_condition_sentence(normalized)
 	if condition_text != "":
@@ -97,6 +99,8 @@ static func _format_sub_effects(list: Array) -> String:
 
 
 static func describe_repeat_count(eff: Dictionary) -> String:
+	if eff.has("repeat_expr"):
+		return _format_operand(eff.get("repeat_expr", {}))
 	var var_id: String = eff.get("repeat_var", "")
 	if var_id != "":
 		return "(%s)" % Locale.term("value_var", var_id)
@@ -133,6 +137,7 @@ static func _render_sentence(template: String, eff: Dictionary, target: String, 
 	s = s.replace("{buff}", buff_name)
 	s = s.replace("{buff_value}", buff_value_text)
 	s = s.replace("{duration}", str(int(eff.get("duration", 1))))
+	s = s.replace("{cost_mode}", Locale.term("cost_reduction_mode", str(eff.get("cost_reduction_mode", SkillRegistry.COST_REDUCTION_TURN))))
 	return s
 
 
@@ -196,6 +201,8 @@ static func _placeholder_token(key: String, eff: Dictionary, effect_id: String) 
 			return {"type": "buff"}
 		"duration":
 			return {"type": "duration"}
+		"cost_mode":
+			return {"type": "cost_mode"}
 	return null
 
 
@@ -211,7 +218,9 @@ static func _value_token(eff: Dictionary) -> Dictionary:
 static func _append_sentence_suffix(tokens: Array, eff: Dictionary) -> void:
 	var is_zh := Locale.language == "zh"
 	var rcount: int = int(eff.get("random_count", 0))
-	if rcount > 0:
+	var random_zero_cost: bool = str(eff.get("effect", "")) == SkillEngine.EFFECT_ZERO_COST \
+			and eff.get("target", SkillEngine.TARGET_SELF) == SkillEngine.TARGET_SINGLE
+	if rcount > 0 and SkillRegistry.supports_random_count(str(eff.get("effect", ""))) and not random_zero_cost:
 		tokens.append({"type": "text", "text": ("，%s" if is_zh else ", %s") % Locale.t("skill.max_targets", [rcount])})
 	var condition_text := format_condition_sentence(eff)
 	if condition_text != "":
@@ -227,16 +236,16 @@ static func format_condition_sentence(eff: Dictionary) -> String:
 	# or a logic combination (and/or/not).
 	if cond.has("lhs") or cond.has("logic"):
 		return _format_boolean_sentence(cond)
-	var condition_type: String = eff.get("condition_type", SkillEngine.CONDITION_NONE)
+	var condition_type: String = cond.get("condition_type", SkillEngine.CONDITION_NONE)
 	if condition_type == "" or condition_type == SkillEngine.CONDITION_NONE:
 		return ""
 	var is_zh := Locale.language == "zh"
 	if condition_type == SkillEngine.CONDITION_TARGET_HAS_BUFF:
-		var buff_name := Locale.term("buff", eff.get("condition_buff_id", ""))
+		var buff_name := Locale.term("buff", cond.get("condition_buff_id", ""))
 		return "若目标拥有%s" % buff_name if is_zh else "if the target has %s" % buff_name
 	var cname := Locale.term("condition", condition_type)
-	var opname := Locale.term("condition_op", eff.get("condition_op", SkillEngine.CONDITION_OP_GTE))
-	var value_text := str(int(eff.get("condition_value", 0)))
+	var opname := Locale.term("condition_op", cond.get("condition_op", SkillEngine.CONDITION_OP_GTE))
+	var value_text := str(int(cond.get("condition_value", 0)))
 	if condition_type in [SkillEngine.CONDITION_SOURCE_HP_PCT, SkillEngine.CONDITION_TARGET_HP_PCT]:
 		value_text += "%"
 	return "若%s %s %s" % [cname, opname, value_text] if is_zh else "if %s %s %s" % [cname, opname, value_text]
@@ -277,7 +286,11 @@ static func _format_operand(opd: Dictionary) -> String:
 			var b := _format_operand(opd.get("b", {}))
 			if op == "rand":
 				return "%s(%s~%s)" % [Locale.t("skill_editor.op_random"), a, b]
-			return "(%s %s %s)" % [a, _op_symbol(op), b]
+			var expression := "%s %s %s" % [a, _op_symbol(op), b]
+			match str(opd.get("rounding", "round")):
+				"ceil": return "⌈%s⌉" % expression
+				"floor": return "⌊%s⌋" % expression
+			return "(%s)" % expression
 	return str(int(opd.get("value", 0)))
 
 
@@ -323,8 +336,6 @@ static func _format_target_name(eff: Dictionary) -> String:
 	if target_id == "":
 		return Locale.t("skill_editor.target_unset")
 	var side_id: String = normalized.get("target_side", _TargetResolver.default_target_side(target_id))
-	if _TargetResolver.is_directed_target(target_id):
-		return Locale.term("target", target_id)
 	var target_name := Locale.term("target", target_id)
 	var side_name := Locale.term("target_side", side_id)
 	if side_id == SkillEngine.TARGET_SIDE_ALL:

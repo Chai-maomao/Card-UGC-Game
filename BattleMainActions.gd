@@ -66,10 +66,6 @@ func _manual_target_side(skill: Dictionary) -> String:
 	return SkillEngine.TARGET_SIDE_ENEMY
 
 
-func _manual_target_is_enemy(skill: Dictionary) -> bool:
-	return _manual_target_side(skill) != SkillEngine.TARGET_SIDE_ALLY
-
-
 func _manual_target_card_for_skill(skill: Dictionary, target_slot: int) -> CardData:
 	var field := _my_field() if _manual_target_side(skill) == SkillEngine.TARGET_SIDE_ALLY else _their_field()
 	return field.slots[target_slot] if target_slot >= 0 and target_slot < field.slots.size() else null
@@ -116,6 +112,101 @@ func _show_splash(card: CardData) -> void:
 # ============================================
 # Summon
 # ============================================
+
+func _summon_skill_is_pending(card: CardData, skill_index: int) -> bool:
+	if card == null or not card.is_alive() or not card.summoned_this_turn:
+		return false
+	if skill_index < 0 or skill_index >= card.skills.size() or card.skills_used.has(skill_index):
+		return false
+	var skill: Dictionary = card.skills[skill_index]
+	if str(skill.get("trigger", "")) != SkillEngine.TRIGGER_ON_SUMMON:
+		return false
+	if card.is_silenced() and str(skill.get("skill_type", SkillEngine.SKILL_TYPE_NORMAL)) != SkillEngine.SKILL_TYPE_TALENT:
+		return false
+	if not SkillEngine.has_uses_remaining(card, skill, skill_index):
+		return false
+	return game.turn_number > 1 or not SkillRegistry.skill_changes_enemy_hp_or_presence(skill)
+
+
+func _summon_skill_has_live_manual_target(skill: Dictionary, player: int) -> bool:
+	if not _skill_needs_targeting(skill):
+		return false
+	var target_player := player if _manual_target_side(skill) == SkillEngine.TARGET_SIDE_ALLY else 3 - player
+	var target_field := _field_for_player(target_player)
+	for candidate in target_field.slots:
+		if candidate != null and candidate.is_alive():
+			return true
+	return false
+
+
+func _resolve_local_summon_skill(slot_index: int, skill_index: int, target_slot: int = -1, target_player: int = 0) -> void:
+	var source_card: CardData = _my_field().slots[slot_index] if slot_index >= 0 and slot_index < _my_field().slots.size() else null
+	if not _summon_skill_is_pending(source_card, skill_index):
+		return
+	var skill: Dictionary = source_card.skills[skill_index]
+	var resolved_target_player := target_player if target_player in [1, 2] else _opponent_player()
+	var target_field := _field_for_player(resolved_target_player)
+	var target_card: CardData = target_field.slots[target_slot] if target_slot >= 0 and target_slot < target_field.slots.size() else null
+	source_card.skills_used.append(skill_index)
+	_begin_action_broadcast("summon_skill", game.current_player, source_card.card_name, target_card.card_name if target_card != null else "", {"skill": skill.get("skill_name", Locale.t("battle.log.skill_word"))})
+	game.trigger_summon_skills(slot_index, target_slot, skill_index, resolved_target_player)
+	_finish_action_broadcast()
+	_play_skill_cast_feedback(game.current_player, slot_index)
+	_show_splash(source_card)
+	_apply_deaths()
+	_check_charm_overflow()
+	_refresh_hand_ui()
+	update_entire_screen()
+
+
+func _auto_resolve_local_summon_skills(slot_index: int) -> void:
+	var card: CardData = _my_field().slots[slot_index] if slot_index >= 0 and slot_index < _my_field().slots.size() else null
+	if card == null:
+		return
+	for skill_index in range(card.skills.size()):
+		if not _summon_skill_is_pending(card, skill_index):
+			continue
+		var skill: Dictionary = card.skills[skill_index]
+		# Choice-requiring battlecries open targeting immediately. If there is no
+		# legal target, the trigger still resolves (and harmlessly fizzles).
+		if _skill_needs_targeting(skill) and _summon_skill_has_live_manual_target(skill, game.current_player):
+			continue
+		_resolve_local_summon_skill(slot_index, skill_index)
+		card = _my_field().slots[slot_index]
+		if card == null:
+			break
+	_resume_auto_summon_targeting.call_deferred(slot_index)
+
+
+func _resume_auto_summon_targeting(preferred_slot: int = -1) -> void:
+	if not game.is_player_turn or not is_my_turn() or current_attacker_idx != -1 \
+			or summon_targeting or activate_targeting or cast_targeting or parasite_targeting:
+		return
+	var slots: Array = []
+	if preferred_slot >= 0:
+		slots.append(preferred_slot)
+	for slot in range(_my_field().slots.size()):
+		if slot != preferred_slot:
+			slots.append(slot)
+	for slot_value in slots:
+		var slot_index := int(slot_value)
+		var card: CardData = _my_field().slots[slot_index]
+		if card == null:
+			continue
+		for skill_index in range(card.skills.size()):
+			if not _summon_skill_is_pending(card, skill_index):
+				continue
+			var skill: Dictionary = card.skills[skill_index]
+			if not _skill_needs_targeting(skill) or not _summon_skill_has_live_manual_target(skill, game.current_player):
+				continue
+			summon_targeting = true
+			summon_source_slot = slot_index
+			summon_skill_idx = skill_index
+			if attack_arrow:
+				attack_arrow.visible = true
+			_sync_targeting_state()
+			update_entire_screen()
+			return
 
 func _on_card_drag_summoned(card_data, origin_ui, slot_index: int):
 	card_data = card_data as CardData
@@ -173,14 +264,10 @@ func _on_card_drag_summoned(card_data, origin_ui, slot_index: int):
 	if origin_ui and is_instance_valid(origin_ui):
 		origin_ui.queue_free()
 
-	# on_summon skills are no longer auto-triggered; the player activates them
-	# manually this turn via the skill buttons (see _on_skill_activated).
 	_refresh_hand_ui()
-	_check_charm_overflow()
-	_apply_deaths()
-	_check_charm_overflow()
 	update_entire_screen()
 	_play_summon_feedback(_slot_ui_for_player(_view_player(), slot_index))
+	_auto_resolve_local_summon_skills(slot_index)
 	_tutorial_notify("summon", {"slot": slot_index})
 
 # ============================================
@@ -368,11 +455,20 @@ func _on_skill_activated(slot_index: int, skill_index: int):
 	if skill_index >= card.skills.size():
 		return
 	var skill: Dictionary = card.skills[skill_index]
+	if not SkillEngine.has_uses_remaining(card, skill, skill_index):
+		return
+	if game.turn_number <= 1 and SkillRegistry.skill_changes_enemy_hp_or_presence(skill):
+		_show_toast("tip.no_enemy_hp_effect_turn1")
+		return
 	if card.is_silenced() and skill.get("skill_type", SkillEngine.SKILL_TYPE_NORMAL) != SkillEngine.SKILL_TYPE_TALENT:
 		return
 	var trig: String = skill.get("trigger", "")
 	var is_summon: bool = trig == SkillEngine.TRIGGER_ON_SUMMON
 	var is_activate: bool = trig == SkillEngine.TRIGGER_ON_ACTIVATE
+	# Summon triggers are battlecries now: deployment resolves them or opens
+	# their target picker. The card button remains informational only.
+	if is_summon:
+		return
 	if not is_summon and not is_activate:
 		return
 	# on_summon abilities can only be used on the turn the card was summoned,
@@ -383,10 +479,6 @@ func _on_skill_activated(slot_index: int, skill_index: int):
 		return
 	cancel_attack()
 	if _skill_needs_targeting(skill):
-		if game.turn_number <= 1 and PlayerData.battle_mode != "tutorial" and _manual_target_is_enemy(skill):
-			print("Turn 1: enemy-targeting skills are not allowed!")
-			_show_toast("tip.no_enemy_skill_turn1")
-			return
 		if is_summon:
 			summon_targeting = true
 			summon_source_slot = slot_index
@@ -506,9 +598,9 @@ func _apply_summon_skill_target(target_player: int, target_slot: int) -> void:
 	var summon_skill: Dictionary = source_card.skills[summon_skill_idx] if source_card != null and summon_skill_idx < source_card.skills.size() else {}
 	if NetworkManager.is_online:
 		if NetworkManager.is_authority():
-			_host_apply_summon_skill(summon_source_slot, summon_skill_idx, target_slot, game.current_player)
+			_host_apply_summon_skill(summon_source_slot, summon_skill_idx, target_slot, game.current_player, target_player)
 		else:
-			_send_remote_intent("summon_skill", {"slot_index": summon_source_slot, "skill_index": summon_skill_idx, "target_slot": target_slot})
+			_send_remote_intent("summon_skill", {"slot_index": summon_source_slot, "skill_index": summon_skill_idx, "target_slot": target_slot, "target_player": target_player})
 		cancel_attack()
 		return
 	# The source card may have left the field while the aim was active
@@ -619,9 +711,9 @@ func _on_opponent_slot_clicked(index: int):
 				return
 		if NetworkManager.is_online:
 			if NetworkManager.is_authority():
-				_host_apply_summon_skill(summon_source_slot, summon_skill_idx, index, game.current_player)
+				_host_apply_summon_skill(summon_source_slot, summon_skill_idx, index, game.current_player, _opponent_player())
 			else:
-				_send_remote_intent("summon_skill", {"slot_index": summon_source_slot, "skill_index": summon_skill_idx, "target_slot": index})
+				_send_remote_intent("summon_skill", {"slot_index": summon_source_slot, "skill_index": summon_skill_idx, "target_slot": index, "target_player": _opponent_player()})
 			cancel_attack()
 			return
 		var summon_card: CardData = _my_field().slots[summon_source_slot]
@@ -754,10 +846,13 @@ func _on_opponent_slot_clicked(index: int):
 
 
 func cancel_attack():
+	var resume_auto_summon := summon_targeting
 	if NetworkManager.is_online and (current_attacker_idx != -1 or summon_targeting or activate_targeting or cast_targeting or parasite_targeting):
 		NetworkManager.rpc_targeting_arrow.rpc(-1, -1, game.current_player)
 	current_attacker_idx = -1
 	summon_targeting = false
+	summon_source_slot = -1
+	summon_skill_idx = -1
 	activate_targeting = false
 	cast_targeting = false
 	parasite_targeting = false
@@ -767,6 +862,8 @@ func cancel_attack():
 	last_hovered_target = -1
 	if attack_arrow:
 		attack_arrow.visible = false
+	if resume_auto_summon:
+		_resume_auto_summon_targeting.call_deferred()
 
 
 # ============================================

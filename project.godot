@@ -12,8 +12,8 @@ config_version=5
 
 config/name="CardUGCGame"
 run/main_scene="res://Bootstrap.tscn"
-config/icon="res://res/ui/icons/cardex_app_icon.png"
 config/features=PackedStringArray("4.6", "Forward Plus")
+config/icon="res://res/ui/icons/cardex_app_icon.png"
 
 [autoload]
 
@@ -31,6 +31,10 @@ AppVersion="*res://AppVersion.gd"
 window/size/window_width_override=1280
 window/size/window_height_override=720
 window/stretch/mode="canvas_items"
+
+[gui]
+
+timers/tooltip_delay_sec=86400.0
 
 [rendering]
 

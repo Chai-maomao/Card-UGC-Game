@@ -40,8 +40,8 @@ func _ready() -> void:
 	_assert(battle.game.player_field.slots[2] == trainee, "guided summon must use the real summon path")
 	_assert(tutorial.phase == TutorialController.Phase.SKILL, "summon must advance to skill step")
 
-	battle._on_skill_activated(2, 0)
-	_assert(trainee.skills_used.has(0), "guided skill must be applied by real battle logic")
+	_assert(trainee.skills_used.has(0), "summon skill must resolve automatically through real battle logic")
+	tutorial._on_next()
 	_assert(tutorial.phase == TutorialController.Phase.ATTACK_SOURCE, "skill must advance to attack step")
 	battle._on_attack_requested(2)
 	_assert(tutorial.phase == TutorialController.Phase.ATTACK_TARGET, "attack button must advance to target step")

@@ -48,6 +48,17 @@ func _on_scene_changed() -> void:
 	_hit_targets.clear()
 
 
+func _exit_tree() -> void:
+	# Pooled controls are detached from the tree, so normal scene teardown does
+	# not own them. Explicitly release them when the effects service shuts down.
+	for pool: Array in _pool.values():
+		for node in pool:
+			if is_instance_valid(node):
+				node.free()
+	_pool.clear()
+	_hit_targets.clear()
+
+
 func _make_glow_texture(size: int) -> Texture2D:
 	var img := Image.create(size, size, false, Image.FORMAT_RGBA8)
 	var center := Vector2(size, size) * 0.5
@@ -214,6 +225,86 @@ func heal_particles(layer: CanvasLayer, center: Vector2, amount: int, ui_scale: 
 	twn.tween_callback(particles.queue_free)
 
 
+# Compact HUD feedback shared by hero HP and elixir bars. It overlays the
+# existing bar rather than restyling the whole status panel, preserving the
+# battle UI's restrained red/cyan/gold language.
+func status_bar_feedback(layer: CanvasLayer, bar: ProgressBar, delta: int, kind: String, ui_scale: float = 1.0) -> void:
+	if layer == null or bar == null or delta == 0:
+		return
+	_ensure_textures()
+	var tint := Color(1.0, 0.31, 0.28) if kind == "damage" else (Color(0.36, 1.0, 0.64) if kind == "heal" else Color(0.30, 0.84, 1.0))
+	var padding := 3.0 * ui_scale
+	var overlay := Panel.new()
+	overlay.name = "StatusFx_%s" % kind.capitalize()
+	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	overlay.position = bar.global_position - Vector2(padding, padding)
+	overlay.size = bar.size + Vector2(padding * 2.0, padding * 2.0)
+	overlay.pivot_offset = overlay.size * 0.5
+	overlay.scale = Vector2(0.985, 0.72)
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(tint.r, tint.g, tint.b, 0.10)
+	style.border_color = Color(tint.r, tint.g, tint.b, 0.90)
+	style.set_border_width_all(maxi(1, int(round(ui_scale))))
+	style.set_corner_radius_all(maxi(5, int(round(7.0 * ui_scale))))
+	style.shadow_color = Color(tint.r, tint.g, tint.b, 0.22)
+	style.shadow_size = maxi(1, int(round(3.0 * ui_scale)))
+	overlay.add_theme_stylebox_override("panel", style)
+	layer.add_child(overlay)
+	layer.move_child(overlay, layer.get_child_count() - 1)
+
+	var value_label := Label.new()
+	value_label.name = "StatusFxValue"
+	value_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	value_label.text = "%+d" % delta
+	value_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	value_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	value_label.add_theme_font_size_override("font_size", maxi(10, int(round(12.0 * ui_scale))))
+	value_label.add_theme_color_override("font_color", tint.lightened(0.18))
+	value_label.add_theme_color_override("font_outline_color", Color(0.015, 0.025, 0.045, 0.95))
+	value_label.add_theme_constant_override("outline_size", maxi(2, int(round(3.0 * ui_scale))))
+	value_label.size = Vector2(58, 22) * ui_scale
+	value_label.position = bar.global_position + Vector2((bar.size.x - value_label.size.x) * 0.5, -4.0 * ui_scale)
+	value_label.modulate.a = 0.0
+	layer.add_child(value_label)
+	layer.move_child(value_label, layer.get_child_count() - 1)
+
+	var particles := GPUParticles2D.new()
+	particles.name = "StatusFxParticles_%s" % kind.capitalize()
+	particles.texture = _glow_dot
+	particles.amount = 7 if kind != "damage" else 5
+	particles.lifetime = 0.46
+	particles.one_shot = true
+	particles.explosiveness = 0.92
+	particles.position = bar.global_position + Vector2(bar.size.x * (0.62 if delta > 0 else 0.42), bar.size.y * 0.5)
+	particles.modulate = tint
+	particles.scale = Vector2(ui_scale, ui_scale)
+	var mat := ParticleProcessMaterial.new()
+	mat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	mat.emission_box_extents = Vector3(minf(28.0 * ui_scale, bar.size.x * 0.22), 1.5 * ui_scale, 1.0)
+	mat.direction = Vector3(0, -1, 0)
+	mat.spread = 48.0
+	mat.gravity = Vector3(0, -38, 0)
+	mat.initial_velocity_min = 18.0 * ui_scale
+	mat.initial_velocity_max = 44.0 * ui_scale
+	mat.scale_min = 0.08
+	mat.scale_max = 0.18
+	particles.process_material = mat
+	layer.add_child(particles)
+	layer.move_child(particles, layer.get_child_count() - 1)
+
+	var twn := create_tween().set_parallel(true)
+	twn.tween_property(overlay, "scale", Vector2.ONE, 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	twn.tween_property(overlay, "modulate:a", 0.0, 0.26).set_delay(0.20)
+	twn.tween_property(value_label, "modulate:a", 1.0, 0.07)
+	twn.tween_property(value_label, "position:y", value_label.position.y - 13.0 * ui_scale, 0.52).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	twn.tween_property(value_label, "modulate:a", 0.0, 0.18).set_delay(0.32)
+	twn.chain().tween_callback(overlay.queue_free)
+	twn.chain().tween_callback(value_label.queue_free)
+	var particle_cleanup := create_tween()
+	particle_cleanup.tween_interval(particles.lifetime + 0.12)
+	particle_cleanup.tween_callback(particles.queue_free)
+
+
 func combat_text(layer: CanvasLayer, pos: Vector2, delta: int, strong: bool = false, ui_scale: float = 1.0) -> void:
 	if layer == null or delta == 0:
 		return
@@ -277,8 +368,12 @@ func spawn_draw_fly_card(layer: CanvasLayer, start: Vector2, target: Vector2, in
 		var c := TextureRect.new()
 		c.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		c.texture = _card_back_tex
+		c.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		c.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 		return c)
 	card_back.texture = _card_back_tex
+	card_back.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	card_back.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	card_back.size = size
 	card_back.pivot_offset = size / 2
 	card_back.position = start - size / 2 + Vector2(index * 7, -index * 5)
@@ -297,6 +392,30 @@ func spawn_draw_fly_card(layer: CanvasLayer, start: Vector2, target: Vector2, in
 	twn.parallel().tween_property(card_back, "scale", Vector2(0.82, 0.82), duration * 0.55)
 	twn.parallel().tween_property(card_back, "modulate:a", 0.0, 0.16).set_delay(duration * 0.35)
 	twn.chain().tween_callback(_release.bind("card_back", card_back))
+
+
+# Move a face-up card preview between two UI locations. The caller owns the
+# visual construction so this stays reusable for pile selection, charm and
+# generated-card effects without coupling BattleFx to CardUI.
+func travel_card_control(layer: CanvasLayer, card_ghost: Control, start: Vector2, target: Vector2, index: int = 0, ui_scale: float = 1.0) -> void:
+	if layer == null or card_ghost == null or not is_instance_valid(card_ghost):
+		return
+	layer.add_child(card_ghost)
+	layer.move_child(card_ghost, layer.get_child_count() - 1)
+	card_ghost.pivot_offset = card_ghost.size / 2
+	card_ghost.position = start - card_ghost.size / 2 + Vector2(index * 6, -index * 4)
+	card_ghost.modulate.a = 0.0
+	var lift: float = -62.0 * ui_scale - index * 6.0
+	var mid: Vector2 = (start + target) * 0.5 + Vector2(0, lift)
+	var duration: float = 0.52 + index * 0.06
+	var twn := create_tween()
+	twn.tween_property(card_ghost, "modulate:a", 1.0, 0.07)
+	twn.parallel().tween_property(card_ghost, "scale", card_ghost.scale * 1.05, 0.10).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	twn.tween_property(card_ghost, "position", mid - card_ghost.size / 2, duration * 0.45).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	twn.tween_property(card_ghost, "position", target - card_ghost.size / 2 + Vector2(index * 4, 0), duration * 0.55).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	twn.parallel().tween_property(card_ghost, "scale", card_ghost.scale * 0.78, duration * 0.55)
+	twn.parallel().tween_property(card_ghost, "modulate:a", 0.0, 0.14).set_delay(duration * 0.36)
+	twn.tween_callback(card_ghost.queue_free)
 
 
 func spell_cast_projectile(layer: CanvasLayer, start: Vector2, end: Vector2, ui_scale: float = 1.0) -> void:
@@ -442,6 +561,57 @@ func sparkle_burst(layer, center: Vector2, tint: Color, count: int = 10, ui_scal
 	layer.move_child(particles, layer.get_child_count() - 1)
 	var twn := create_tween()
 	twn.tween_interval(particles.lifetime + 0.25)
+	twn.tween_callback(particles.queue_free)
+
+
+# Small, crisp white motes emitted outwards from all four socket edges. Four
+# narrow emitters keep every particle outside the card face instead of making
+# dots appear behind the card and travel through its text/buttons.
+func card_drop_particles(layer: CanvasLayer, center: Vector2, count: int = 12, ui_scale: float = 1.0) -> void:
+	if layer == null:
+		return
+	_ensure_textures()
+	var edge_specs := [
+		{"offset": Vector2(0, -83), "extents": Vector3(52, 1.5, 1), "direction": Vector3(0, -1, 0)},
+		{"offset": Vector2(0, 83), "extents": Vector3(52, 1.5, 1), "direction": Vector3(0, 1, 0)},
+		{"offset": Vector2(-63, 0), "extents": Vector3(1.5, 70, 1), "direction": Vector3(-1, 0, 0)},
+		{"offset": Vector2(63, 0), "extents": Vector3(1.5, 70, 1), "direction": Vector3(1, 0, 0)},
+	]
+	var base_amount := count / edge_specs.size()
+	var remainder := count % edge_specs.size()
+	for edge_index in range(edge_specs.size()):
+		var amount := base_amount + (1 if edge_index < remainder else 0)
+		if amount <= 0:
+			continue
+		_spawn_card_edge_particles(layer, center, edge_specs[edge_index], amount, ui_scale)
+
+
+func _spawn_card_edge_particles(layer: CanvasLayer, center: Vector2, edge: Dictionary, amount: int, ui_scale: float) -> void:
+	var particles := GPUParticles2D.new()
+	particles.texture = _glow_dot
+	particles.amount = amount
+	particles.lifetime = 0.42
+	particles.one_shot = true
+	particles.explosiveness = 1.0
+	particles.position = center + (edge.get("offset", Vector2.ZERO) as Vector2) * ui_scale
+	particles.modulate = Color(1.0, 1.0, 1.0, 0.96)
+	particles.scale = Vector2(ui_scale, ui_scale)
+	var mat := ParticleProcessMaterial.new()
+	mat.emission_shape = ParticleProcessMaterial.EMISSION_SHAPE_BOX
+	var extents: Vector3 = edge.get("extents", Vector3.ONE)
+	mat.emission_box_extents = Vector3(extents.x * ui_scale, extents.y * ui_scale, extents.z)
+	mat.direction = edge.get("direction", Vector3.UP)
+	mat.spread = 34.0
+	mat.gravity = Vector3.ZERO
+	mat.initial_velocity_min = 34.0 * ui_scale
+	mat.initial_velocity_max = 66.0 * ui_scale
+	mat.scale_min = 0.06
+	mat.scale_max = 0.15
+	particles.process_material = mat
+	layer.add_child(particles)
+	layer.move_child(particles, layer.get_child_count() - 1)
+	var twn := create_tween()
+	twn.tween_interval(particles.lifetime + 0.18)
 	twn.tween_callback(particles.queue_free)
 
 
@@ -623,31 +793,21 @@ func _attack_hit(layer, ghost, base_position: Vector2, delta: Vector2, ui_scale:
 	twn.chain().tween_callback(ghost.queue_free)
 
 
-# Pop-in landing effect for a freshly summoned card in a slot: scale spring
-# from small to full + a golden landing ring. Restores the card's original
-# pivot when done so later hit-flash/drag effects keep their own pivot basis.
-func summon_landing(layer: CanvasLayer, card_ui, center: Vector2, ui_scale: float = 1.0) -> void:
-	if layer == null or card_ui == null or not is_instance_valid(card_ui):
+# Short socket-lock effect for a freshly summoned card. SlotUI owns the tactile
+# seating motion; this service adds effects that must live above the battlefield.
+func summon_landing(layer: CanvasLayer, slot_ui, ui_scale: float = 1.0) -> void:
+	if layer == null or slot_ui == null or not is_instance_valid(slot_ui):
 		return
-	var base_pivot: Vector2 = card_ui.pivot_offset
-	var card_id: int = card_ui.get_instance_id()
-	var base_scale: Vector2 = card_ui.scale
-	card_ui.pivot_offset = card_ui.size / 2
-	card_ui.scale = base_scale * 0.5
+	var center: Vector2 = slot_ui.global_position + slot_ui.size / 2
+	if slot_ui.has_method("play_card_arrival"):
+		slot_ui.call("play_card_arrival", "summon")
 	var twn := create_tween()
-	twn.set_parallel(true)
-	twn.tween_property(card_ui, "scale", base_scale, 0.28).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	twn.chain().tween_callback(_summon_landing_finish.bind(card_id, base_pivot, layer, center, ui_scale))
+	twn.tween_interval(0.15)
+	twn.tween_callback(_summon_landing_finish.bind(layer, center, ui_scale))
 
 
-func _summon_landing_finish(card_id: int, base_pivot: Vector2, layer: CanvasLayer, center: Vector2, ui_scale: float) -> void:
-	# Restore the card's original pivot only if it still exists (the field UI
-	# may have been rebuilt while the landing animation was running).
-	var card := instance_from_id(card_id)
-	if card != null and is_instance_valid(card):
-		card.pivot_offset = base_pivot
-	impact_ring(layer, center, false, Color(0.95, 0.78, 0.32, 0.42), ui_scale)
-	sparkle_burst(layer, center, Color(1.0, 0.85, 0.4, 0.95), 10, ui_scale)
+func _summon_landing_finish(layer: CanvasLayer, center: Vector2, ui_scale: float) -> void:
+	card_drop_particles(layer, center, 12, ui_scale)
 
 
 # Swap transition for a move: each entry is [card_ui, position_delta] with an
@@ -663,18 +823,27 @@ func move_swap(layer: CanvasLayer, entries: Array, ui_scale: float = 1.0) -> voi
 			continue
 		var delta: Vector2 = entry[1]
 		var start_pos: Vector2 = entry[2] if entry.size() > 2 else Vector2.INF
-		_single_move_ghost(layer, card_ui, delta, ui_scale, start_pos)
+		var target_slot = entry[3] if entry.size() > 3 else null
+		_single_move_ghost(layer, card_ui, delta, ui_scale, start_pos, target_slot)
 
 
-func _single_move_ghost(layer: CanvasLayer, card_ui, delta: Vector2, ui_scale: float, start_pos: Vector2 = Vector2.INF) -> void:
+func _single_move_ghost(layer: CanvasLayer, card_ui, delta: Vector2, ui_scale: float, start_pos: Vector2 = Vector2.INF, target_slot = null) -> void:
 	var ghost := spawn_card_ghost(layer, card_ui, ui_scale)
 	if ghost == null:
 		return
+	# Remove the stationary original immediately. After the deferred battlefield
+	# refresh creates the destination card, hide that copy too until the flying
+	# ghost reaches it; otherwise the player sees two copies of the same card.
+	card_ui.modulate.a = 0.0
+	_hide_move_destination_when_ready(target_slot)
 	if start_pos != Vector2.INF:
 		ghost.position = start_pos
 	var base_position: Vector2 = ghost.position
 	var end_position: Vector2 = base_position + delta
-	var mid: Vector2 = (base_position + end_position) / 2 + Vector2(0, -12) * ui_scale
+	var direction_sign := signf(delta.x) if absf(delta.x) > 0.5 else 1.0
+	var mid: Vector2 = (base_position + end_position) / 2 + Vector2(0, -18) * ui_scale
+	var base_scale: Vector2 = ghost.scale
+	ghost.pivot_offset = ghost.size * 0.5
 	var twn := create_tween()
 	twn.set_parallel(true)
 	twn.tween_method(func(t: float):
@@ -683,9 +852,38 @@ func _single_move_ghost(layer: CanvasLayer, card_ui, delta: Vector2, ui_scale: f
 		var a := base_position.lerp(mid, t)
 		var b := mid.lerp(end_position, t)
 		ghost.position = a.lerp(b, t)
-	, 0.0, 1.0, 0.30).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	twn.tween_property(ghost, "modulate:a", 0.0, 0.18).set_delay(0.14)
-	twn.chain().tween_callback(ghost.queue_free)
+	, 0.0, 1.0, 0.27).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	twn.tween_property(ghost, "rotation", deg_to_rad(2.2) * direction_sign, 0.13).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	twn.tween_property(ghost, "rotation", 0.0, 0.14).set_delay(0.13).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	twn.tween_property(ghost, "scale", base_scale * 1.045, 0.13).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	twn.tween_property(ghost, "scale", base_scale, 0.14).set_delay(0.13).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	twn.tween_property(ghost, "modulate:a", 0.82, 0.09).set_delay(0.18)
+	twn.chain().tween_callback(_finish_move_ghost.bind(ghost, target_slot, layer, end_position, ui_scale))
+
+
+func _hide_move_destination_when_ready(target_slot) -> void:
+	if target_slot == null or not is_instance_valid(target_slot):
+		return
+	# update_entire_screen is deferred and may run on the next frame. Allow a
+	# small bounded window for the replacement CardUI to appear.
+	for _attempt in range(3):
+		await get_tree().process_frame
+		if target_slot == null or not is_instance_valid(target_slot):
+			return
+		var destination_card = target_slot.get("current_card_ui")
+		if destination_card != null and is_instance_valid(destination_card):
+			destination_card.visible = false
+			return
+
+
+func _finish_move_ghost(ghost, target_slot, layer: CanvasLayer, end_position: Vector2, ui_scale: float) -> void:
+	if target_slot != null and is_instance_valid(target_slot) and target_slot.has_method("play_card_arrival"):
+		target_slot.call("play_card_arrival", "swap")
+		var center: Vector2 = target_slot.global_position + target_slot.size / 2
+		card_drop_particles(layer, center, 7, ui_scale)
+	if ghost != null and is_instance_valid(ghost):
+		ghost.position = end_position
+		ghost.queue_free()
 
 
 # Card death: a ghost copy sinks and fades while the real card is removed,

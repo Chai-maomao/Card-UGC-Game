@@ -117,6 +117,13 @@ text = "Gender:"
 [node name="GenderSelect" type="OptionButton" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9500002]
 layout_mode = 2
 
+[node name="ParasiteDamageModeLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
+layout_mode = 2
+text = "Parasite Damage Mode:"
+
+[node name="ParasiteDamageModeSelect" type="OptionButton" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
+layout_mode = 2
+
 [node name="BalanceLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
 layout_mode = 2
 text = "Balance Check:"
@@ -146,9 +153,27 @@ autowrap_mode = 3
 max_lines_visible = 3
 text_overrun_behavior = 3
 
-[node name="EditSkill1Button" type="Button" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9360013]
+[node name="Skill1TalentRow" type="HBoxContainer" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
 layout_mode = 2
+theme_override_constants/separation = 2
+
+[node name="EditSkill1Button" type="Button" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/Skill1TalentRow" unique_id=9360013]
+layout_mode = 2
+size_flags_horizontal = 3
 text = "Edit Skill 1"
+
+[node name="EditTalentButton" type="Button" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/Skill1TalentRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Edit Talent"
+
+[node name="TalentSummary" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Talent: (empty)"
+autowrap_mode = 3
+max_lines_visible = 2
+text_overrun_behavior = 3
 
 [node name="Separator2" type="HSeparator" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9360020]
 layout_mode = 2
@@ -231,7 +256,8 @@ file_mode = 0
 access = 2
 filters = PackedStringArray("*.png ; PNG Image", "*.jpg ; JPEG Image", "*.jpeg ; JPEG Image", "*.bmp ; BMP Image", "*.webp ; WebP Image")
 
-[connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/EditSkill1Button" to="." method="_on_edit_skill1_pressed"]
+[connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/Skill1TalentRow/EditSkill1Button" to="." method="_on_edit_skill1_pressed"]
+[connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/Skill1TalentRow/EditTalentButton" to="." method="_on_edit_talent_pressed"]
 [connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/EditSkill2Button" to="." method="_on_edit_skill2_pressed"]
 [connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/EditSkill3Button" to="." method="_on_edit_skill3_pressed"]
 [connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/TemplateButton" to="." method="_on_template_pressed"]

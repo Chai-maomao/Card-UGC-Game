@@ -143,7 +143,10 @@ static func apply_action(game: RefCounted, action: Dictionary) -> Dictionary:
 		"summon":
 			var hand_index := int(action.get("hand_index", -1))
 			var hand: Array = game.active_hand()
-			ok = hand_index >= 0 and hand_index < hand.size() and game.summon_card(hand[hand_index], int(action.get("slot", -1)))
+			var summon_slot := int(action.get("slot", -1))
+			ok = hand_index >= 0 and hand_index < hand.size() and game.summon_card(hand[hand_index], summon_slot)
+			if ok:
+				_auto_resolve_summon_skills(game, summon_slot)
 		"discard":
 			var hand_index := int(action.get("hand_index", -1))
 			var hand: Array = game.active_hand()
@@ -159,8 +162,10 @@ static func apply_action(game: RefCounted, action: Dictionary) -> Dictionary:
 			var skill_index := int(action.get("skill_index", 0))
 			var source: CardData = game.active_field().slots[source_slot] if source_slot >= 0 and source_slot < game.active_field().slots.size() else null
 			if source != null and not source.has_acted and skill_index >= 0 and skill_index < source.skills.size():
-				var trigger := str(source.skills[skill_index].get("trigger", ""))
-				if trigger == SkillEngine.TRIGGER_ON_ACTIVATE:
+				var active_skill: Dictionary = source.skills[skill_index]
+				var trigger := str(active_skill.get("trigger", ""))
+				if trigger == SkillEngine.TRIGGER_ON_ACTIVATE and not source.skills_used.has(skill_index) \
+						and SkillEngine.has_uses_remaining(source, active_skill, skill_index):
 					game.trigger_activate_skills(source_slot, int(action.get("target_slot", -1)), skill_index, int(action.get("target_player", 0)))
 					ok = true
 		"end_turn":
@@ -179,6 +184,65 @@ static func apply_action(game: RefCounted, action: Dictionary) -> Dictionary:
 		return {"ok": false, "reason": "illegal_action", "type": action_type}
 	game.state_revision += 1
 	return {"ok": true, "type": action_type, "revision": game.state_revision}
+
+
+static func _auto_resolve_summon_skills(game: RefCounted, source_slot: int) -> void:
+	var card: CardData = game.active_field().slots[source_slot] if source_slot >= 0 and source_slot < game.active_field().slots.size() else null
+	if card == null:
+		return
+	for skill_index in range(card.skills.size()):
+		var skill: Dictionary = card.skills[skill_index]
+		if str(skill.get("trigger", "")) != SkillEngine.TRIGGER_ON_SUMMON \
+				or card.skills_used.has(skill_index) \
+				or not SkillEngine.has_uses_remaining(card, skill, skill_index):
+			continue
+		if game.turn_number <= 1 and SkillRegistry.skill_changes_enemy_hp_or_presence(skill):
+			continue
+		if card.is_silenced() and str(skill.get("skill_type", SkillEngine.SKILL_TYPE_NORMAL)) != SkillEngine.SKILL_TYPE_TALENT:
+			continue
+		var target_player: int = int(game.current_player) if _summon_manual_target_side(skill) == SkillEngine.TARGET_SIDE_ALLY else 3 - int(game.current_player)
+		var target_slot := _first_legal_summon_target(game, skill, target_player)
+		card.skills_used.append(skill_index)
+		game.trigger_summon_skills(source_slot, target_slot, skill_index, target_player)
+		card = game.active_field().slots[source_slot]
+		if card == null:
+			return
+
+
+static func _summon_manual_target_side(skill: Dictionary) -> String:
+	return _manual_target_side_in_effects(skill.get("effects", []))
+
+
+static func _manual_target_side_in_effects(effects: Variant) -> String:
+	if not effects is Array:
+		return SkillEngine.TARGET_SIDE_ENEMY
+	for value in effects:
+		if not value is Dictionary:
+			continue
+		var effect: Dictionary = value
+		if str(effect.get("target", "")) in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES]:
+			return str(effect.get("target_side", SkillEngine.TARGET_SIDE_ENEMY))
+		for branch in ["then_effects", "else_effects"]:
+			var nested: Variant = effect.get(branch, [])
+			if nested is Array and SpellRules._effects_need_target(nested):
+				return _manual_target_side_in_effects(nested)
+	return SkillEngine.TARGET_SIDE_ENEMY
+
+
+static func _first_legal_summon_target(game: RefCounted, skill: Dictionary, target_player: int) -> int:
+	if not SpellRules.needs_target(skill):
+		return -1
+	var field: BattleField = game.player_field if target_player == 1 else game.player2_field
+	var candidates: Array[int] = []
+	for slot in range(field.slots.size()):
+		var candidate: CardData = field.slots[slot]
+		if candidate != null and candidate.is_alive():
+			candidates.append(slot)
+	if target_player != game.current_player and field.has_any_taunt():
+		for slot in candidates:
+			if field.slots[slot].has_taunt():
+				return slot
+	return candidates[0] if not candidates.is_empty() else -1
 
 
 static func _canonical(value: Variant) -> String:

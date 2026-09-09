@@ -65,8 +65,12 @@ func _field() -> String:
 
 func _default_value() -> String:
 	if kind == "side":
+		var forced := SkillRegistry.forced_target_side(str(data.get("effect", "")))
+		if forced != "":
+			return forced
 		return _TargetResolver.default_target_side(str(data.get("target", SkillEngine.TARGET_SINGLE)))
-	return SkillEngine.TARGET_SINGLE
+	var allowed := SkillRegistry.allowed_targets(str(data.get("effect", "")))
+	return str(allowed[0]) if not allowed.is_empty() else SkillEngine.TARGET_SINGLE
 
 
 func _current_value() -> String:
@@ -78,7 +82,17 @@ func _current_value() -> String:
 
 
 func _ids() -> Array:
-	return SkillRegistry.TARGET_SIDE_IDS if kind == "side" else SkillRegistry.TARGET_IDS
+	if kind == "side":
+		var forced := SkillRegistry.forced_target_side(str(data.get("effect", "")))
+		if forced != "":
+			return [forced]
+		return SkillRegistry.TARGET_SIDE_IDS
+	var ids: Array = SkillRegistry.allowed_targets(str(data.get("effect", ""))).duplicate()
+	# Keep irrelevant choices out of the common picker. A persisted invalid
+	# combination is still caught by SkillErrorChecker.
+	if not SkillRegistry.allows_player_target(str(data.get("effect", ""))):
+		ids.erase(SkillEngine.TARGET_PLAYER)
+	return ids
 
 
 func _value_label(value: String) -> String:
@@ -120,6 +134,8 @@ func _rebuild() -> void:
 	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	if empty:
 		btn.tooltip_text = Locale.t("skill_editor.target_pick_hint_tip") if kind == "target" else Locale.t("skill_editor.side_pick_hint_tip")
+	else:
+		btn.tooltip_text = SkillHelp.description("target_side" if kind == "side" else "target", value)
 	btn.pressed.connect(func(): _open_menu(btn))
 	_set_param_pass(btn)
 	add_child(btn)
@@ -131,9 +147,11 @@ func _placeholder_text() -> String:
 
 func _open_menu(anchor: Control) -> void:
 	var menu := PopupMenu.new()
+	menu.popup_hide.connect(menu.queue_free)
 	var ids: Array = _ids()
 	for i in range(ids.size()):
 		menu.add_item(_value_label(str(ids[i])), i)
+		menu.set_item_tooltip(i, SkillHelp.description("target" if kind == "target" else "target_side", str(ids[i])))
 	menu.id_pressed.connect(func(id: int):
 		var value: String = str(ids[id])
 		data[_field()] = value
@@ -149,27 +167,28 @@ func _slot_get_drag_data(_pos: Vector2):
 	var value := _current_value()
 	if value == "":
 		return null
-	var lbl := Label.new()
-	lbl.text = _value_label(value)
-	lbl.add_theme_font_size_override("font_size", 13)
-	lbl.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
-	var st := StyleBoxFlat.new()
-	var tint := _tint_color()
-	st.bg_color = Color(tint.r, tint.g, tint.b, 0.85)
-	st.border_color = tint
-	st.set_border_width_all(1)
-	st.set_corner_radius_all(12)
-	st.content_margin_left = 8
-	st.content_margin_right = 8
-	st.content_margin_top = 3
-	st.content_margin_bottom = 3
-	lbl.add_theme_stylebox_override("normal", st)
-	var wrap := Control.new()
-	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	wrap.add_child(lbl)
-	set_drag_preview(wrap)
-	_dragging = true
-	_animate_slot(Vector2(0.94, 0.94), Color(0.72, 0.76, 0.84, 0.48), 0.07)
+	if get_viewport().gui_is_dragging():
+		var lbl := Label.new()
+		lbl.text = _value_label(value)
+		lbl.add_theme_font_size_override("font_size", 13)
+		lbl.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
+		var st := StyleBoxFlat.new()
+		var tint := _tint_color()
+		st.bg_color = Color(tint.r, tint.g, tint.b, 0.85)
+		st.border_color = tint
+		st.set_border_width_all(1)
+		st.set_corner_radius_all(12)
+		st.content_margin_left = 8
+		st.content_margin_right = 8
+		st.content_margin_top = 3
+		st.content_margin_bottom = 3
+		lbl.add_theme_stylebox_override("normal", st)
+		var wrap := Control.new()
+		wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		wrap.add_child(lbl)
+		set_drag_preview(wrap)
+		_dragging = true
+		_animate_slot(Vector2(0.94, 0.94), Color(0.72, 0.76, 0.84, 0.48), 0.07)
 	return {
 		"type": "target_block" if kind == "target" else "side_block",
 		"value": value,
@@ -182,7 +201,8 @@ func _can_drop_var(_pos: Vector2, payload) -> bool:
 		_set_drop_highlight(false)
 		return false
 	var t: String = str(payload.get("type", ""))
-	var ok := t == ("target_block" if kind == "target" else "side_block")
+	var ok := t == ("target_block" if kind == "target" else "side_block") \
+		and str(payload.get("value", "")) in _ids()
 	_set_drop_highlight(ok)
 	return ok
 
@@ -194,7 +214,7 @@ func _drop_var(_pos: Vector2, payload) -> void:
 	if src != null and src != self and is_instance_valid(src) and src.has_method("clear_to_number"):
 		src.call("clear_to_number")
 	var value: String = str(payload.get("value", ""))
-	if value == "":
+	if value == "" or value not in _ids():
 		return
 	data[_field()] = value
 	_rebuild()

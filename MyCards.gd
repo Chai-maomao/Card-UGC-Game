@@ -6,7 +6,6 @@ extends Control
 
 const BASE_VIEWPORT_SIZE := Vector2(1152, 648)
 const UITheme = preload("res://UITheme.gd")
-const _TextFormatter = preload("res://SkillTextFormatter.gd")
 
 var card_ui_scene = preload("res://CardUI.tscn")
 
@@ -188,7 +187,7 @@ func _add_card_box(card_data: CardData) -> void:
 	var card_width: float = 120.0 * s
 	var row_gap: int = max(1, int(2 * s))
 	var card_box := VBoxContainer.new()
-	card_box.custom_minimum_size = Vector2(card_width, 280 * s)
+	card_box.custom_minimum_size = Vector2(card_width, 224 * s)
 	card_box.add_theme_constant_override("separation", max(2, int(4 * s)))
 	card_grid.add_child(card_box)
 
@@ -206,26 +205,8 @@ func _add_card_box(card_data: CardData) -> void:
 	var card_ui_instance = card_ui_scene.instantiate()
 	card_box.add_child(card_ui_instance)
 	card_ui_instance.set_card(card_data)
-	card_ui_instance.set_actions_visible(false)
+	card_ui_instance.set_battle_layout_preview(true)
 	card_ui_instance.apply_ui_scale(s)
-
-	var skill_box := VBoxContainer.new()
-	skill_box.custom_minimum_size = Vector2(card_width, 54 * s)
-	skill_box.add_theme_constant_override("separation", row_gap)
-	card_box.add_child(skill_box)
-	for s_idx in range(card_data.skills.size()):
-		var skill: Dictionary = card_data.skills[s_idx]
-		var skill_btn := Button.new()
-		var fallback := Locale.t("mycards.skill_fallback") % (s_idx + 1)
-		var skill_name: String = skill.get("skill_name", "")
-		skill_btn.text = skill_name if skill_name != "" else fallback
-		skill_btn.tooltip_text = _TextFormatter.format_skill_tooltip(skill)
-		skill_btn.disabled = true
-		UITheme.apply_button(skill_btn, "secondary")
-		skill_btn.clip_text = true
-		skill_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		skill_btn.custom_minimum_size = Vector2(card_width, 26 * s)
-		skill_box.add_child(skill_btn)
 
 	var btn_row := HBoxContainer.new()
 	btn_row.custom_minimum_size = Vector2(card_width, 28 * s)
@@ -319,6 +300,7 @@ func _on_create_new_pressed():
 	box.add_child(title)
 	var minion_btn := Button.new()
 	minion_btn.text = Locale.t("editor.create_minion")
+	minion_btn.tooltip_text = SkillHelp.description("card_type", "minion")
 	minion_btn.custom_minimum_size = Vector2(280, 42)
 	UITheme.apply_button(minion_btn, "primary")
 	minion_btn.pressed.connect(func():
@@ -333,6 +315,7 @@ func _on_create_new_pressed():
 	box.add_child(minion_btn)
 	var spell_btn := Button.new()
 	spell_btn.text = Locale.t("editor.create_spell")
+	spell_btn.tooltip_text = SkillHelp.description("card_type", "spell")
 	spell_btn.custom_minimum_size = Vector2(280, 42)
 	UITheme.apply_button(spell_btn, "primary")
 	spell_btn.pressed.connect(func():
@@ -347,6 +330,7 @@ func _on_create_new_pressed():
 	box.add_child(spell_btn)
 	var parasite_btn := Button.new()
 	parasite_btn.text = Locale.t("editor.create_parasite")
+	parasite_btn.tooltip_text = SkillHelp.description("card_type", "parasite")
 	parasite_btn.custom_minimum_size = Vector2(280, 42)
 	UITheme.apply_button(parasite_btn, "primary")
 	parasite_btn.pressed.connect(func():
@@ -493,6 +477,14 @@ func _on_import_append_pressed() -> void:
 
 
 func _show_save_dialog() -> void:
+	var package: Dictionary = JSON.parse_string(pending_export_text)
+	SharePackage.edit_metadata(self, package, func(updated: Dictionary):
+		pending_export_text = JSON.stringify(updated, "\t")
+		_show_export_file_dialog()
+	)
+
+
+func _show_export_file_dialog() -> void:
 	var dialog := FileDialog.new()
 	dialog.file_mode = FileDialog.FILE_MODE_SAVE_FILE
 	dialog.access = FileDialog.ACCESS_FILESYSTEM
@@ -539,6 +531,22 @@ func _import_from_file(path: String) -> void:
 		_show_message(Locale.t("share.import_failed"))
 		return
 	pending_import_package = parsed.get("package", {})
+	var local: Array = []
+	for card in PlayerData.get_cards_for_deck(selected_deck_id):
+		local.append(PlayerData.serialize_card(card))
+	var preview := ConfirmationDialog.new()
+	preview.title = "导入预览" if Locale.language == "zh" else "Import preview"
+	preview.dialog_text = SharePackage.summary(pending_import_package, local)
+	preview.confirmed.connect(func():
+		preview.queue_free()
+		_accept_import_preview(path)
+	)
+	preview.canceled.connect(preview.queue_free)
+	add_child(preview)
+	preview.popup_centered(Vector2i(650, 300))
+
+
+func _accept_import_preview(path: String) -> void:
 	if pending_import_mode == "deck_manager":
 		_finish_deck_manager_import(path)
 		return
@@ -660,7 +668,7 @@ func _make_conflict_summary(label_text: String, card: CardData) -> VBoxContainer
 	preview_holder.add_child(card_ui)
 	card_ui.set_card(card)
 	card_ui.apply_ui_scale(0.82)
-	card_ui.set_actions_visible(false)
+	card_ui.set_battle_layout_preview(true)
 	card_ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return box
 

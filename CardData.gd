@@ -1,6 +1,9 @@
 class_name CardData
 extends RefCounted
 
+const PARASITE_DAMAGE_ABSORB := "absorb"
+const PARASITE_DAMAGE_LINKED := "linked"
+
 # ============================================
 # Card data model
 # ============================================
@@ -25,6 +28,16 @@ var skills_used_count: Dictionary = {}  # skill_index -> count (for 限定技 ma
 var charmed_slot: int = -1
 var original_cost: int = -1
 
+# Battle-only cost modifiers. Permanent reductions survive discard/reset and
+# reshuffling for the rest of the match; turn reductions and Charm expire at
+# the end of their owner's current turn. base_cost remains the printed cost,
+# so the UI can distinguish a real discount from mere affordability.
+var permanent_cost_reduction: int = 0
+var turn_cost_reduction: int = 0
+# Signed, match-long cost adjustment. Positive values raise cost and negative
+# values lower it; unlike a turn reduction this survives discard and reshuffle.
+var match_cost_delta: int = 0
+
 # When true, this card's basic attack bypasses silence (天赋特性)
 var attack_ignores_silence: bool = false
 
@@ -35,16 +48,21 @@ var field_atk_bonus: int = 0
 # Immunity to lethal damage (1-time effect, consumed when triggered)
 var immune_lethal: bool = false
 
-# Zero-cost until deployed flag (from make_zero_cost effect)
+# Legacy snapshot compatibility. New battles use the explicit reduction fields
+# above; old snapshots with this flag are migrated on deserialization.
 var zero_cost_until_deploy: bool = false
 
 # Card type: "minion" (default, occupies a battlefield slot), "spell"
 # (casts directly from hand to discard pile), or "parasite" (attaches to a
-# unit and absorbs normal attack / targeted skill damage for it).
+# unit and follows that host's battlefield lifecycle).
 var card_type: String = "minion"
 
-# Parasite cards attached to this unit. They take directed attack/skill damage
-# before this unit loses HP.
+# Parasites may either intercept directed damage for their host or remain
+# linked without taking damage. Missing legacy data defaults to interception.
+var parasite_damage_mode: String = PARASITE_DAMAGE_ABSORB
+
+# Parasite cards attached to this unit. Only attachments configured for damage
+# interception take directed attack/skill damage before this unit loses HP.
 var parasite_cards: Array = []
 
 # Temporary HP (shield replacement, expires when its owner is about to act again)
@@ -85,6 +103,14 @@ func is_parasite() -> bool:
 	return card_type == "parasite"
 
 
+static func normalize_parasite_damage_mode(mode: String) -> String:
+	return mode if mode in [PARASITE_DAMAGE_ABSORB, PARASITE_DAMAGE_LINKED] else PARASITE_DAMAGE_ABSORB
+
+
+func parasite_absorbs_host_damage() -> bool:
+	return is_parasite() and normalize_parasite_damage_mode(parasite_damage_mode) == PARASITE_DAMAGE_ABSORB
+
+
 func is_silenced() -> bool:
 	for eff in status_effects:
 		if eff.get("buff_id", "") == SkillEngine.BUFF_SILENCE and eff.get("value", 0) > 0:
@@ -100,11 +126,57 @@ func is_charmed() -> bool:
 	return original_cost != -1
 
 
+func is_cost_reduced() -> bool:
+	return is_charmed() or cost < base_cost
+
+
+func apply_cost_reduction(amount: int, permanent: bool) -> void:
+	if amount <= 0:
+		return
+	if permanent:
+		permanent_cost_reduction = mini(base_cost, permanent_cost_reduction + amount)
+	else:
+		turn_cost_reduction = mini(base_cost, turn_cost_reduction + amount)
+	_recalculate_cost()
+
+
+func apply_cost_change(amount: int) -> void:
+	if amount == 0:
+		return
+	match_cost_delta += amount
+	_recalculate_cost()
+
+
+func apply_charm_cost(slot: int) -> void:
+	if not is_charmed():
+		original_cost = cost
+	charmed_slot = slot
+	cost = 0
+
+
 func reset_charm_cost() -> void:
 	if original_cost >= 0:
-		cost = original_cost
 		original_cost = -1
 		charmed_slot = -1
+		_recalculate_cost()
+
+
+func clear_turn_cost_reduction() -> void:
+	turn_cost_reduction = 0
+	zero_cost_until_deploy = false
+	reset_charm_cost()
+	_recalculate_cost()
+
+
+func clear_cost_modifiers_after_play() -> void:
+	clear_turn_cost_reduction()
+
+
+func _recalculate_cost() -> void:
+	if is_charmed():
+		cost = 0
+		return
+	cost = maxi(0, base_cost + match_cost_delta - permanent_cost_reduction - turn_cost_reduction)
 
 
 # ============================================
@@ -130,6 +202,10 @@ func take_damage(amount: int) -> int:
 func take_damage_without_reduction(amount: int) -> int:
 	if amount <= 0:
 		return 0
+	var talent_cap := single_damage_cap()
+	if talent_cap > 0 and amount > talent_cap:
+		print("  [Talent] %s caps single damage %d -> %d" % [card_name, amount, talent_cap])
+		amount = talent_cap
 
 	var hp_before := hp
 	var remaining: int = amount
@@ -155,6 +231,39 @@ func take_damage_without_reduction(amount: int) -> int:
 				break
 
 	return hp_before - hp
+
+
+func single_damage_cap() -> int:
+	var result := 0
+	for skill_value in skills:
+		if not skill_value is Dictionary:
+			continue
+		var skill: Dictionary = skill_value
+		if str(skill.get("skill_type", SkillEngine.SKILL_TYPE_NORMAL)) != SkillEngine.SKILL_TYPE_TALENT:
+			continue
+		if str(skill.get("trigger", "")) != SkillEngine.TRIGGER_ALWAYS:
+			continue
+		result = _scan_damage_cap(skill.get("effects", []), result)
+	return result
+
+
+func _scan_damage_cap(effects: Variant, current: int) -> int:
+	if not effects is Array:
+		return current
+	var result := current
+	for value in effects:
+		if not value is Dictionary:
+			continue
+		var effect: Dictionary = value
+		if str(effect.get("effect", "")) == SkillEngine.EFFECT_DAMAGE_CAP:
+			# Continuous talents are evaluated at damage time so restored math and
+			# self/target reporter blocks remain live instead of degrading to the
+			# old fixed `value` field.
+			var cap := maxi(1, SkillEngine._resolve_value(effect, self, self, {"source_card": self}))
+			result = cap if result <= 0 else mini(result, cap)
+		for branch in ["then_effects", "else_effects"]:
+			result = _scan_damage_cap(effect.get(branch, []), result)
+	return result
 
 
 func heal(amount: int) -> int:
@@ -213,7 +322,9 @@ func get_mana_refund() -> int:
 
 func has_taunt() -> bool:
 	for eff in status_effects:
-		if eff.get("buff_id", "") == SkillEngine.BUFF_TAUNT and eff.get("value", 0) > 0:
+		# Taunt is a presence-based status; its editor intentionally hides the
+		# numeric value. Older/value-less cards must therefore still taunt.
+		if eff.get("buff_id", "") == SkillEngine.BUFF_TAUNT:
 			return true
 	return false
 
@@ -311,7 +422,11 @@ func tick_buffs(owner_player: int) -> void:
 # ============================================
 
 func reset_to_base() -> void:
-	cost = base_cost
+	turn_cost_reduction = 0
+	original_cost = -1
+	charmed_slot = -1
+	zero_cost_until_deploy = false
+	_recalculate_cost()
 	max_hp = base_max_hp
 	atk = base_atk
 	hp = max_hp
@@ -323,11 +438,8 @@ func reset_to_base() -> void:
 	skills_used_count.clear()
 	status_effects.clear()
 	parasite_cards.clear()
-	original_cost = -1
-	charmed_slot = -1
 	field_atk_bonus = 0
 	immune_lethal = false
-	zero_cost_until_deploy = false
 
 
 # ============================================
@@ -348,9 +460,16 @@ func duplicate_card() -> CardData:
 	copy.summoned_this_turn = summoned_this_turn
 	copy.gender = gender
 	copy.card_type = card_type
-	copy.parasite_cards = parasite_cards.duplicate(true)
+	copy.parasite_damage_mode = parasite_damage_mode
+	copy.parasite_cards.clear()
+	for parasite in parasite_cards:
+		if parasite is CardData:
+			copy.parasite_cards.append(parasite.duplicate_card())
 	copy.charmed_slot = charmed_slot
 	copy.original_cost = original_cost
+	copy.permanent_cost_reduction = permanent_cost_reduction
+	copy.turn_cost_reduction = turn_cost_reduction
+	copy.match_cost_delta = match_cost_delta
 	copy.skills_used = skills_used.duplicate()
 	copy.skills_used_count = skills_used_count.duplicate()
 	copy.attack_ignores_silence = attack_ignores_silence

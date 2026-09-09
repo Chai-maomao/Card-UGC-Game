@@ -36,6 +36,7 @@ var _condition_value_spin: SpinBox
 var _condition_buff_sel: OptionButton
 var _buff_sel: OptionButton
 var _dur_spin: SpinBox
+var _cost_mode_sel: OptionButton
 
 # Labels / rows
 var _warning_label: Label
@@ -49,6 +50,8 @@ var _mode_row: HBoxContainer
 var _buff_row: HBoxContainer
 var _condition_detail_row: HBoxContainer
 var _condition_buff_row: HBoxContainer
+var _rcount_row: HBoxContainer
+var _cost_mode_row: HBoxContainer
 
 
 func setup(scale_factor: float, existing: Dictionary, trigger_key: String) -> void:
@@ -177,12 +180,20 @@ func _build_ui(existing: Dictionary) -> void:
 	vb.add_child(prob_row)
 
 	# Random target count
-	var rcount_row := _make_row(s)
+	_rcount_row = _make_row(s)
 	_rcount_label = _make_label(Locale.t("skill_editor.max_targets"), s)
-	rcount_row.add_child(_rcount_label)
+	_rcount_row.add_child(_rcount_label)
 	_rcount_spin = _make_spin(0.0, 15.0, 0.0, s)
-	rcount_row.add_child(_rcount_spin)
-	vb.add_child(rcount_row)
+	_rcount_row.add_child(_rcount_spin)
+	vb.add_child(_rcount_row)
+
+	_cost_mode_row = _make_row(s)
+	_cost_mode_row.add_child(_make_label(Locale.t("skill_editor.cost_reduction_mode"), s))
+	_cost_mode_sel = _make_option(SkillRegistry.COST_REDUCTION_MODES, "cost_reduction_mode", s)
+	_cost_mode_sel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_cost_mode_row.add_child(_cost_mode_sel)
+	_cost_mode_row.visible = false
+	vb.add_child(_cost_mode_row)
 
 	# Effect condition row
 	var condition_row := _make_row(s)
@@ -361,8 +372,8 @@ func _update_tooltips() -> void:
 
 
 func _editor_term(category: String, value: String) -> String:
-	var label := Locale.term("editor_%s" % category, value)
-	if label == value:
+	var label := SkillHelp.description(category, value)
+	if label.is_empty():
 		return Locale.term(category, value)
 	return label
 
@@ -384,7 +395,7 @@ func _connect_signals() -> void:
 	_mode_sel.item_selected.connect(func(m: int): _update_value_mode(m))
 	_condition_sel.item_selected.connect(func(_i: int): _update_condition_mode())
 
-	for control in [_target_sel, _side_sel, _effect_sel, _buff_sel, _mode_sel, _var_sel, _condition_sel, _condition_op_sel, _condition_buff_sel]:
+	for control in [_target_sel, _side_sel, _effect_sel, _buff_sel, _mode_sel, _var_sel, _condition_sel, _condition_op_sel, _condition_buff_sel, _cost_mode_sel]:
 		control.item_selected.connect(func(_i: int): _update_preview())
 	for control in [_val_spin, _min_spin, _max_spin, _off_spin, _eff_prob_spin, _rcount_spin, _dur_spin, _condition_value_spin]:
 		control.value_changed.connect(func(_value: float): _update_preview())
@@ -392,7 +403,13 @@ func _connect_signals() -> void:
 
 func _on_effect_changed(_i: int) -> void:
 	var effect_key: String = SkillRegistry.EFFECT_IDS[_effect_sel.selected]
+	var allowed_targets := SkillRegistry.allowed_targets(effect_key)
+	for i in range(SkillRegistry.TARGET_IDS.size()):
+		_target_sel.set_item_disabled(i, SkillRegistry.TARGET_IDS[i] not in allowed_targets)
+	if SkillRegistry.TARGET_IDS[_target_sel.selected] not in allowed_targets and not allowed_targets.is_empty():
+		_target_sel.selected = _idx_of(str(allowed_targets[0]), SkillRegistry.TARGET_IDS)
 	_buff_row.visible = (effect_key == SkillEngine.EFFECT_ADD_BUFF)
+	_cost_mode_row.visible = (effect_key == SkillEngine.EFFECT_ZERO_COST)
 	_target_sel.disabled = SkillRegistry.force_self(effect_key)
 	_update_target_side()
 	_mode_sel.disabled = not SkillRegistry.uses_value(effect_key)
@@ -418,13 +435,18 @@ func _on_buff_changed(_i: int) -> void:
 func _update_target_side() -> void:
 	var target_key: String = SkillRegistry.TARGET_IDS[_target_sel.selected]
 	var effect_key: String = SkillRegistry.EFFECT_IDS[_effect_sel.selected]
+	var forced_side := SkillRegistry.forced_target_side(effect_key)
+	if forced_side != "":
+		_side_sel.selected = _idx_of(forced_side, SkillRegistry.TARGET_SIDE_IDS)
 	# Zero-cost effect always targets own hand — target_side is irrelevant.
 	var is_hand_effect_ui: bool = effect_key == SkillEngine.EFFECT_ZERO_COST
-	var disabled: bool = _target_sel.disabled or target_key in [SkillEngine.TARGET_SELF, SkillEngine.TARGET_SELF_SIDES] or is_hand_effect_ui
+	var disabled: bool = _target_sel.disabled or target_key in [SkillEngine.TARGET_SELF, SkillEngine.TARGET_SELF_SIDES] or is_hand_effect_ui or forced_side != ""
 	_side_sel.disabled = disabled
-	if disabled:
+	if forced_side != "":
+		_side_sel.selected = _idx_of(forced_side, SkillRegistry.TARGET_SIDE_IDS)
+	elif disabled:
 		_side_sel.selected = _idx_of(SkillEngine.TARGET_SIDE_ALL, SkillRegistry.TARGET_SIDE_IDS)
-	elif target_key in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES] and SkillRegistry.TARGET_SIDE_IDS[_side_sel.selected] == SkillEngine.TARGET_SIDE_ALL:
+	elif target_key in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES, SkillEngine.TARGET_PLAYER] and SkillRegistry.TARGET_SIDE_IDS[_side_sel.selected] == SkillEngine.TARGET_SIDE_ALL:
 		_side_sel.selected = _idx_of(SkillEngine.TARGET_SIDE_ENEMY, SkillRegistry.TARGET_SIDE_IDS)
 	_update_target_warning()
 
@@ -476,9 +498,10 @@ func _update_effect_labels() -> void:
 		_rcount_label.text = Locale.t("skill_editor.draw_count")
 		_rcount_spin.max_value = 30.0
 	else:
-		_val_label.text = Locale.t("skill_editor.value")
-		_rcount_label.text = Locale.t("skill_editor.max_targets")
+		_val_label.text = Locale.t("skill_editor.cost_reduction_value") if effect_key == SkillEngine.EFFECT_ZERO_COST else Locale.t("skill_editor.value")
+		_rcount_label.text = Locale.t("skill_editor.random_card_count") if effect_key == SkillEngine.EFFECT_ZERO_COST else Locale.t("skill_editor.max_targets")
 		_rcount_spin.max_value = 15.0
+	_rcount_row.visible = SkillRegistry.supports_random_count(effect_key)
 	_val_spin.min_value = -500.0 if allows_negative else 0.0
 	_val_spin.suffix = "%" if (effect_key == SkillEngine.EFFECT_ADD_BUFF and SkillRegistry.BUFF_IDS[_buff_sel.selected] in [SkillEngine.BUFF_DAMAGE_REDUCTION, SkillEngine.BUFF_MISFORTUNE]) else ""
 	_min_spin.min_value = -500.0 if allows_negative else 0.0
@@ -511,16 +534,19 @@ func _update_condition_mode() -> void:
 # ============================================
 
 func _preview_dict() -> Dictionary:
+	var effect_id: String = str(SkillRegistry.EFFECT_IDS[_effect_sel.selected])
 	var preview := {
 		"target": SkillRegistry.TARGET_IDS[_target_sel.selected],
 		"target_side": SkillRegistry.TARGET_SIDE_IDS[_side_sel.selected],
-		"effect": SkillRegistry.EFFECT_IDS[_effect_sel.selected],
+		"effect": effect_id,
 		"value": float(_val_spin.value),
 		"buff_id": "",
 		"duration": 0,
-		"random_count": int(_rcount_spin.value),
+		"random_count": int(_rcount_spin.value) if SkillRegistry.supports_random_count(effect_id) else 0,
 		"probability": int(_eff_prob_spin.value),
 	}
+	if effect_id == SkillEngine.EFFECT_ZERO_COST:
+		preview.cost_reduction_mode = SkillRegistry.COST_REDUCTION_MODES[_cost_mode_sel.selected]
 	var vmode: int = _mode_sel.selected
 	if vmode == 1:
 		preview.value_min = int(_min_spin.value)
@@ -556,6 +582,7 @@ func _backfill(existing: Dictionary) -> void:
 	_side_sel.selected = _idx_of(eff.get("target_side", SkillEngine.TARGET_SIDE_ALL), SkillRegistry.TARGET_SIDE_IDS)
 	_update_target_side()
 	_effect_sel.selected = _idx_of(eff.get("effect", SkillEngine.EFFECT_DAMAGE), SkillRegistry.EFFECT_IDS)
+	_cost_mode_sel.selected = _idx_of(eff.get("cost_reduction_mode", SkillRegistry.COST_REDUCTION_TURN), SkillRegistry.COST_REDUCTION_MODES)
 	_val_spin.value = float(eff.get("value", 1))
 	_buff_sel.selected = _idx_of(eff.get("buff_id", SkillEngine.BUFF_ATK_BOOST), SkillRegistry.BUFF_IDS)
 	_val_spin.editable = SkillRegistry.buff_uses_value(SkillRegistry.BUFF_IDS[_buff_sel.selected])
@@ -565,6 +592,10 @@ func _backfill(existing: Dictionary) -> void:
 	_rcount_spin.value = float(eff.get("random_count", 0))
 	_eff_prob_spin.value = float(eff.get("probability", 100))
 	_buff_row.visible = (SkillRegistry.EFFECT_IDS[_effect_sel.selected] == SkillEngine.EFFECT_ADD_BUFF)
+	_cost_mode_row.visible = (SkillRegistry.EFFECT_IDS[_effect_sel.selected] == SkillEngine.EFFECT_ZERO_COST)
+	var allowed_targets := SkillRegistry.allowed_targets(SkillRegistry.EFFECT_IDS[_effect_sel.selected])
+	for i in range(SkillRegistry.TARGET_IDS.size()):
+		_target_sel.set_item_disabled(i, SkillRegistry.TARGET_IDS[i] not in allowed_targets)
 	# Detect value mode from which optional fields are present.
 	var var_id: String = eff.get("value_var", "")
 	if var_id != "":
@@ -597,16 +628,19 @@ func _on_ok() -> void:
 	var selected_side: String = SkillRegistry.TARGET_SIDE_IDS[_side_sel.selected]
 	if selected_target in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES] and selected_side == SkillEngine.TARGET_SIDE_ALL:
 		selected_side = SkillEngine.TARGET_SIDE_ENEMY
+	var effect_id: String = str(SkillRegistry.EFFECT_IDS[_effect_sel.selected])
 	var eff := {
 		"target": selected_target,
 		"target_side": selected_side,
-		"effect": SkillRegistry.EFFECT_IDS[_effect_sel.selected],
+		"effect": effect_id,
 		"value": float(_val_spin.value),
 		"buff_id": "",
 		"duration": 0,
-		"random_count": int(_rcount_spin.value),
+		"random_count": int(_rcount_spin.value) if SkillRegistry.supports_random_count(effect_id) else 0,
 		"probability": int(_eff_prob_spin.value),
 	}
+	if effect_id == SkillEngine.EFFECT_ZERO_COST:
+		eff.cost_reduction_mode = SkillRegistry.COST_REDUCTION_MODES[_cost_mode_sel.selected]
 	# Value mode: 0=fixed, 1=random range, 2=variable. Only the active mode's
 	# fields are written so _resolve_value / _describe_value pick the right one.
 	var vmode: int = _mode_sel.selected
@@ -630,6 +664,9 @@ func _on_ok() -> void:
 	if SkillRegistry.force_self(str(eff.effect)):
 		eff.target = SkillEngine.TARGET_SELF
 		eff.target_side = SkillEngine.TARGET_SIDE_ALL
+	var forced_side := SkillRegistry.forced_target_side(effect_id)
+	if forced_side != "":
+		eff.target_side = forced_side
 	eff = _TargetResolver.normalize_effect_target(eff)
 	confirmed.emit(eff)
 	queue_free()

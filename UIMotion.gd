@@ -20,9 +20,13 @@ var _pending_restore_state := ""
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	get_tree().node_added.connect(_on_ui_node_added)
+	var hints := preload("res://UIHoverHints.gd").new()
+	hints.name = "HoverHints"
+	add_child(hints)
 	_layer = CanvasLayer.new()
 	_layer.name = "UIMotionLayer"
-	_layer.layer = 1000
+	_layer.layer = 1200
 	add_child(_layer)
 	_overlay = ColorRect.new()
 	_overlay.name = "FadeOverlay"
@@ -36,6 +40,16 @@ func _ready() -> void:
 	# Startup: reveal the very first scene from black.
 	_overlay.color = Color(OVERLAY_COLOR, 1.0)
 	fade_in()
+
+
+func _on_ui_node_added(node: Node) -> void:
+	# Includes internal OptionButton/LineEdit menus and dynamically-created
+	# right-click/left-click menus, without replacing the block colours.
+	if node is PopupMenu:
+		UITheme.apply_popup_menu(node)
+		get_node("HoverHints").watch_menu(node)
+		if not node.about_to_popup.is_connected(UITheme.apply_popup_menu.bind(node)):
+			node.about_to_popup.connect(UITheme.apply_popup_menu.bind(node))
 
 
 # Fade out -> change scene. Ordinary forward navigation records the current

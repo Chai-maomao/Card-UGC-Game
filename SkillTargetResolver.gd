@@ -6,6 +6,7 @@ const TARGET_SIDES := "target_sides"
 const TARGET_SELF := "self"
 const TARGET_SELF_SIDES := "self_sides"
 const TARGET_ALL := "all"
+const TARGET_PLAYER := "player"
 const TARGET_MALE := "target_male"
 const TARGET_FEMALE := "target_female"
 const TARGET_NONHUMAN := "target_nonhuman"
@@ -35,6 +36,13 @@ static func default_target_side(target_str: String) -> String:
 static func normalize_effect_target(eff: Dictionary) -> Dictionary:
 	var normalized := eff.duplicate(true)
 	var target_str: String = normalized.get("target", "")
+	# Old reduce-cost blocks could be saved without a target because their
+	# sentence has no target socket.  Its intended/default operation is choosing
+	# one card from the active hand, with no battlefield faction involved.
+	if str(normalized.get("effect", "")) == "make_zero_cost" and target_str == "":
+		normalized["target"] = TARGET_SINGLE
+		normalized["target_side"] = TARGET_SIDE_ALL
+		target_str = TARGET_SINGLE
 	# Legacy save compat: split the old pre-combined "all_enemies"/"all_allies"
 	# targets into the two-dimensional side + target form.
 	if target_str == "all_enemies":
@@ -67,6 +75,9 @@ static func resolve_targets(target_str: String, source_card: CardData, context: 
 			return _resolve_cards_by_side(source_card, context, TARGET_SIDE_ALLY)
 		TARGET_ALL:
 			return _resolve_cards_by_side(source_card, context, target_side)
+		TARGET_PLAYER:
+			var field := _player_target_field(source_card, context, target_side)
+			return [field] if field != null else []
 		TARGET_MALE:
 			return _resolve_by_gender(source_card, context, "male", target_side)
 		TARGET_FEMALE:
@@ -91,6 +102,8 @@ static func targets_include_enemy(targets: Array, source_card: CardData, context
 	if enemy_field == null:
 		return false
 	for t in targets:
+		if t == enemy_field:
+			return true
 		if t != null and t in enemy_field.slots:
 			return true
 	return false
@@ -123,6 +136,17 @@ static func _directed_target_field(source_card: CardData, context: Dictionary, t
 		TARGET_SIDE_ENEMY:
 			return enemy_field_of_source(source_card, context)
 	return enemy_field_of_source(source_card, context)
+
+
+static func _player_target_field(source_card: CardData, context: Dictionary, target_side: String) -> BattleField:
+	match target_side:
+		TARGET_SIDE_ALLY:
+			return _source_field_of(source_card, context)
+		TARGET_SIDE_ENEMY:
+			return enemy_field_of_source(source_card, context)
+	# "All players" is intentionally undefined. The editor rejects it rather
+	# than silently turning a singular player target into an area effect.
+	return null
 
 
 static func _resolve_self_adjacent(source_card: CardData, context: Dictionary) -> Array:

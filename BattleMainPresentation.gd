@@ -58,6 +58,7 @@ func _refresh_hand_ui():
 				break
 		if identical:
 			for i in range(hand.size()):
+				children[i].refresh_cost_display()
 				_apply_hand_castability(children[i], hand[i])
 			_update_pile_labels()
 			return
@@ -92,7 +93,7 @@ func _refresh_hand_ui():
 			_scale_control(card_ui, BASE_CARD_SIZE)
 			card_ui.is_hand_card = true
 			_connect_hand_card_signals(card_ui)
-			_play_hand_card_enter_feedback(card_ui)
+			_prepare_hand_entry_ui(card_ui, card_data)
 		else:
 			# Reused node: refresh texts only (cost/charm state may have
 			# changed in place); skip entry feedback to avoid flicker.
@@ -101,14 +102,14 @@ func _refresh_hand_ui():
 	_update_pile_labels()
 
 
-# Hand cards show a green cost when affordable now, red when mana is
-# insufficient. Charmed cards keep their own green "免费" display. The mana
-# basis is the hand owner's field (view player), not the acting player's.
+# Only an actual discount is green. Ordinary affordable cards stay white and
+# unaffordable cards are red; this keeps "green" semantically unambiguous.
 func _apply_hand_castability(card_ui, card_data: CardData) -> void:
-	if card_data == null or card_data.is_charmed():
+	if card_data == null:
 		return
 	var affordable: bool = _field_for_player(_view_player()).get_total_mana() >= card_data.cost
-	var color := Color(0.4, 1.0, 0.5) if affordable else Color(1.0, 0.35, 0.3)
+	var color := Color(0.35, 1.0, 0.48) if card_data.is_cost_reduced() \
+		else (Color.WHITE if affordable else Color(1.0, 0.35, 0.3))
 	# Re-applying the same theme override marks the label dirty every refresh;
 	# skip when the cached tint still matches (CardUI invalidates on set_card).
 	if color.is_equal_approx(card_ui.get("_last_cost_color")):
@@ -133,6 +134,109 @@ func _hand_index_of(card_ui) -> int:
 
 func _play_hand_card_enter_feedback(card_ui: Control) -> void:
 	BattleFx.hand_card_enter($CanvasLayer, card_ui, _ui_scale())
+
+
+func _prepare_hand_entry_ui(card_ui: Control, card_data: CardData) -> void:
+	if card_data != null and _pending_hand_entry_ids.has(card_data.instance_id):
+		_pending_hand_entry_ids.erase(card_data.instance_id)
+		card_ui.modulate.a = 0.0
+		get_tree().create_timer(0.58).timeout.connect(_reveal_arriving_hand_card.bind(weakref(card_ui)))
+		return
+	_play_hand_card_enter_feedback(card_ui)
+
+
+func _reveal_arriving_hand_card(reference: WeakRef) -> void:
+	var card_ui: Control = reference.get_ref()
+	if card_ui != null and is_instance_valid(card_ui):
+		_play_hand_card_enter_feedback(card_ui)
+
+
+func _on_hand_entry_resolved(card: CardData, player: int, destination: String, source: String, source_meta: Dictionary) -> void:
+	if destination == "hand" and player == _view_player():
+		_pending_hand_entry_ids[card.instance_id] = true
+	_play_hand_resolution_feedback(card, player, destination, source, source_meta)
+	if destination == "discard":
+		_spawn_toast(Locale.t("tip.hand_overflow", [card.card_name]), "warn", 2.0)
+	var network_meta := source_meta.duplicate(true)
+	# Screen coordinates are local to one client's layout/viewpoint. The remote
+	# peer reconstructs a correct source from player + slot instead.
+	network_meta.erase("source_position")
+	_record_feedback_event("hand_entry", player, -1, {
+		"destination": destination,
+		"source": source,
+		"source_meta": network_meta,
+		"instance_id": card.instance_id,
+		"card_name": card.card_name,
+	})
+
+
+func _play_hand_resolution_feedback(card: CardData, player: int, destination: String, source: String, source_meta: Dictionary) -> void:
+	var start := _hand_resolution_source_position(player, source, source_meta)
+	var target := _draw_fly_target_for_player(player) if destination == "hand" else _discard_fly_target()
+	var can_show_face := card != null and (destination == "discard" or player == _view_player()) and (source != "deck" or source_meta.has("source_position"))
+	if can_show_face:
+		var ghost = card_ui_scene.instantiate()
+		ghost.set_card(card)
+		ghost.set_battle_layout_preview(true)
+		ghost.is_hand_card = false
+		ghost.apply_ui_scale(0.52 * _ui_scale())
+		_set_ghost_mouse_filter(ghost)
+		BattleFx.travel_card_control($CanvasLayer, ghost, start, target, 0, _ui_scale())
+	else:
+		BattleFx.spawn_draw_fly_card($CanvasLayer, start, target, 0, _ui_scale())
+	if destination == "discard":
+		get_tree().create_timer(0.46).timeout.connect(_play_overflow_discard_feedback)
+
+
+func _play_overflow_discard_feedback() -> void:
+	var target: Control = discard_pile_btn if discard_pile_btn != null else discard_zone
+	if target == null or not is_instance_valid(target):
+		return
+	var base_modulate: Color = target.modulate
+	var base_scale: Vector2 = target.scale
+	var twn := create_tween().set_parallel(true)
+	twn.tween_property(target, "modulate", Color(1.0, 0.70, 0.42, 1.0), 0.08)
+	twn.tween_property(target, "scale", base_scale * 1.04, 0.08)
+	twn.tween_property(target, "modulate", base_modulate, 0.18).set_delay(0.08)
+	twn.tween_property(target, "scale", base_scale, 0.18).set_delay(0.08)
+
+
+func _set_ghost_mouse_filter(node: Node) -> void:
+	if node is Control:
+		node.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	for child in node.get_children():
+		_set_ghost_mouse_filter(child)
+
+
+func _hand_resolution_source_position(player: int, source: String, source_meta: Dictionary) -> Vector2:
+	var exact = source_meta.get("source_position", null)
+	if exact is Vector2 and exact != Vector2.ZERO:
+		return exact
+	if source == "deck" and draw_pile_btn != null:
+		return draw_pile_btn.global_position + draw_pile_btn.size / 2
+	if source == "discard" and discard_pile_btn != null:
+		return discard_pile_btn.global_position + discard_pile_btn.size / 2
+	if source == "field":
+		var source_player: int = int(source_meta.get("source_player", player))
+		var source_slot: int = int(source_meta.get("source_slot", -1))
+		var slot_ui := _slot_ui_for_player(source_player, source_slot)
+		if slot_ui != null:
+			return slot_ui.global_position + slot_ui.size / 2
+	if source == "hand" and player == _view_player():
+		var source_id := str(source_meta.get("source_instance_id", ""))
+		for index in range(_my_hand().size()):
+			var hand_card: CardData = _my_hand()[index]
+			if hand_card.instance_id == source_id and index < hand_container.get_child_count():
+				var card_ui: Control = hand_container.get_child(index)
+				return card_ui.global_position + card_ui.size / 2
+	return _draw_fly_target_for_player(player)
+
+
+func _discard_fly_target() -> Vector2:
+	var target: Control = discard_pile_btn if discard_pile_btn != null else discard_zone
+	if target != null:
+		return target.global_position + target.size / 2
+	return get_viewport_rect().size * Vector2(0.9, 0.8)
 
 
 func _play_draw_fly_feedback(player: int, count: int) -> void:
@@ -210,7 +314,7 @@ func _show_result(result: String):
 	_show_battle_result_page(result)
 
 # ============================================
-# Skill interaction handlers (view discard/deck, zero cost)
+# Skill interaction handlers (view discard/deck, hand cost reduction)
 # ============================================
 
 func _on_shuffle_discard_into_deck() -> void:
@@ -239,236 +343,74 @@ func _on_view_deck_select(count: int, draw_count: int, current_player: int, hand
 	_show_pile_selection_popup(display_cards, count, "deck", hand, current_player)
 
 
-func _on_make_zero_cost_select(count: int, _current_player: int, hand: Array, target: String, _random_count: int) -> void:
+func _on_make_zero_cost_select(reduction: int, cost_mode: String, _current_player: int, hand: Array, target: String, _random_count: int) -> void:
 	var candidates: Array = []
 	for card in hand:
-		if card is CardData and card.cost > 0 and not card.zero_cost_until_deploy:
+		if card is CardData and card.cost > 0:
 			candidates.append(card)
 	if candidates.is_empty():
 		return
-	# For SIDES, player picks 1 card (neighbors auto-included)
-	var pick_count: int = 1 if target in [SkillEngine.TARGET_SIDES, SkillEngine.TARGET_SELF_SIDES] else min(count, candidates.size())
-	_show_zero_cost_selection_popup(candidates, pick_count, hand, target)
+	_show_zero_cost_selection_popup(candidates, reduction, cost_mode, 1, hand, target)
 
 
-func _show_pile_selection_popup(cards: Array, count: int, source: String, hand: Array, _player: int) -> void:
-	var popup := UITheme.make_popup_layer(self, 120)
-	var layer: CanvasLayer = popup["layer"]
-	var panel := Panel.new()
-	panel.anchor_left = 0.5
-	panel.anchor_right = 0.5
-	panel.anchor_top = 0.5
-	panel.anchor_bottom = 0.5
-	panel.offset_left = -320
-	panel.offset_top = -300
-	panel.offset_right = 320
-	panel.offset_bottom = 300
-	panel.clip_contents = true
-	UITheme.apply_popup_frame(panel, "gold")
-	layer.add_child(panel)
-	var margin := MarginContainer.new()
-	margin.anchor_right = 1.0
-	margin.anchor_bottom = 1.0
-	margin.add_theme_constant_override("margin_left", 18)
-	margin.add_theme_constant_override("margin_right", 18)
-	margin.add_theme_constant_override("margin_top", 18)
-	margin.add_theme_constant_override("margin_bottom", 18)
-	panel.add_child(margin)
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 8)
-	margin.add_child(box)
-	var title := Label.new()
-	var max_slots := SkillEngine.MAX_HAND_SIZE - hand.size()
+func _show_pile_selection_popup(cards: Array, count: int, source: String, hand: Array, player: int) -> void:
 	var source_label: String = Locale.t("battle.draw_pile") if source == "deck" else Locale.t("battle.discard_pile")
-	title.text = Locale.t("battle.choose_keep") + (" (%s)" % source_label)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	UITheme.apply_title(title, 18)
-	box.add_child(title)
-	var hint := Label.new()
-	hint.text = Locale.t("battle.hand_remaining") % [max_slots, min(count, max_slots)]
-	UITheme.apply_label(hint, true)
-	box.add_child(hint)
-
-	var selected_indices: Dictionary = {}
-	var grid_scroll: ScrollContainer = ScrollContainer.new()
-	grid_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	grid_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	grid_scroll.custom_minimum_size = Vector2(0, 300 * _ui_scale())
-	box.add_child(grid_scroll)
-	var grid := GridContainer.new()
-	grid.columns = 4
-	grid.add_theme_constant_override("h_separation", 6)
-	grid.add_theme_constant_override("v_separation", 6)
-	grid_scroll.add_child(grid)
-
-	for i in range(cards.size()):
-		var card: CardData = cards[i]
-		var card_box := VBoxContainer.new()
-		card_box.custom_minimum_size = Vector2(100, 140) * _ui_scale()
-		card_box.add_theme_constant_override("separation", 2)
-		var card_ui := card_ui_scene.instantiate()
-		card_ui.set_card(card)
-		card_ui.apply_ui_scale(_ui_scale() * 0.7)
-		card_ui.set_skill_preview_visible(true)
-		card_box.add_child(card_ui)
-		var check := CheckBox.new()
-		check.text = card.card_name
-		check.clip_text = true
-		check.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		check.toggled.connect(func(pressed: bool):
-			if pressed:
-				if selected_indices.size() >= count:
-					check.button_pressed = false
-					return
-				selected_indices[i] = true
-			else:
-				selected_indices.erase(i)
-		)
-		card_box.add_child(check)
-		grid.add_child(card_box)
-
-	var confirm_btn := Button.new()
-	confirm_btn.text = Locale.t("battle.confirm")
-	confirm_btn.custom_minimum_size = Vector2(160, 36)
-	UITheme.apply_button(confirm_btn, "primary")
-	confirm_btn.pressed.connect(func():
-		if selected_indices.is_empty():
-			return
-		layer.queue_free()
-		for idx in selected_indices.keys():
-			if hand.size() >= SkillEngine.MAX_HAND_SIZE:
-				break
-			var chosen: CardData = cards[int(idx)]
-			hand.append(chosen.duplicate_card() if source == "deck" else chosen)
-			if source == "deck":
-				game.shared_deck.erase(chosen)
-			elif source == "discard":
-				game.shared_discard.erase(chosen)
+	var limit := mini(count, cards.size())
+	if limit <= 0:
+		return
+	var on_selected := func(selected_cards: Array, source_positions: Array):
+		var pile: Array = game.shared_deck if source == "deck" else game.shared_discard
+		for index in range(selected_cards.size()):
+			var chosen: CardData = selected_cards[index]
+			if chosen not in pile:
+				continue
+			pile.erase(chosen)
+			var origin: Vector2 = source_positions[index] if index < source_positions.size() else Vector2.ZERO
+			game.resolve_hand_entry_for_player(chosen, source, {
+				"source_position": origin,
+				"source_instance_id": chosen.instance_id,
+			}, player)
 		_refresh_hand_ui()
 		update_entire_screen()
+		if NetworkManager.is_online and NetworkManager.is_authority():
+			_commit_authority_state("pile selection")
+	preload("res://CardCollectionDialog.gd").show_cards(
+		self,
+		cards,
+		Locale.t("battle.choose_keep") + " (" + source_label + ")",
+		limit,
+		on_selected,
+		true
 	)
-	box.add_child(confirm_btn)
-
-	var close_btn := Button.new()
-	close_btn.text = Locale.t("battle.close")
-	UITheme.apply_button(close_btn, "secondary")
-	close_btn.pressed.connect(layer.queue_free)
-	box.add_child(close_btn)
 
 
-func _show_zero_cost_selection_popup(candidates: Array, count: int, hand: Array = [], target: String = SkillEngine.TARGET_SELF) -> void:
-	var popup := UITheme.make_popup_layer(self, 120)
-	var layer: CanvasLayer = popup["layer"]
-	var panel := Panel.new()
-	panel.anchor_left = 0.5
-	panel.anchor_right = 0.5
-	panel.anchor_top = 0.5
-	panel.anchor_bottom = 0.5
-	panel.offset_left = -280
-	panel.offset_top = -240
-	panel.offset_right = 280
-	panel.offset_bottom = 240
-	panel.clip_contents = true
-	UITheme.apply_popup_frame(panel, "gold")
-	layer.add_child(panel)
-	var margin := MarginContainer.new()
-	margin.anchor_right = 1.0
-	margin.anchor_bottom = 1.0
-	margin.add_theme_constant_override("margin_left", 18)
-	margin.add_theme_constant_override("margin_right", 18)
-	margin.add_theme_constant_override("margin_top", 18)
-	margin.add_theme_constant_override("margin_bottom", 18)
-	panel.add_child(margin)
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 8)
-	margin.add_child(box)
+func _show_zero_cost_selection_popup(candidates: Array, reduction: int, cost_mode: String = SkillRegistry.COST_REDUCTION_TURN,
+		count: int = 1, hand: Array = [], target: String = SkillEngine.TARGET_SELF) -> void:
 	var include_sides: bool = target in [SkillEngine.TARGET_SIDES, SkillEngine.TARGET_SELF_SIDES]
-	var title := Label.new()
-	if include_sides:
-		title.text = Locale.t("battle.zero_cost_title_sides")
-	else:
-		title.text = Locale.t("battle.zero_cost_title")
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	UITheme.apply_title(title, 16)
-	box.add_child(title)
-
-	var grid := GridContainer.new()
-	grid.columns = 4
-	grid.add_theme_constant_override("h_separation", 6)
-	grid.add_theme_constant_override("v_separation", 6)
-	var grid_scroll: ScrollContainer = ScrollContainer.new()
-	grid_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	grid_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	grid_scroll.custom_minimum_size = Vector2(0, 220 * _ui_scale())
-	grid_scroll.add_child(grid)
-	box.add_child(grid_scroll)
-
-	var selected_indices: Dictionary = {}
-	for i in range(min(candidates.size(), 8)):
-		var card: CardData = candidates[i]
-		var card_box := VBoxContainer.new()
-		card_box.add_theme_constant_override("separation", 2)
-		var card_ui := card_ui_scene.instantiate()
-		card_ui.set_card(card)
-		card_ui.apply_ui_scale(_ui_scale() * 0.7)
-		card_ui.set_skill_preview_visible(true)
-		card_box.add_child(card_ui)
-		var check := CheckBox.new()
-		check.text = card.card_name
-		check.clip_text = true
-		check.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		check.toggled.connect(func(pressed: bool):
-			if pressed:
-				if selected_indices.size() >= count:
-					check.button_pressed = false
-					return
-				selected_indices[i] = true
-			else:
-				selected_indices.erase(i)
-		)
-		card_box.add_child(check)
-		grid.add_child(card_box)
-
-	var confirm_btn := Button.new()
-	confirm_btn.text = Locale.t("battle.confirm")
-	confirm_btn.custom_minimum_size = Vector2(160, 36)
-	UITheme.apply_button(confirm_btn, "primary")
-	confirm_btn.pressed.connect(func():
-		if selected_indices.is_empty():
-			return
-		layer.queue_free()
-		if include_sides and not hand.is_empty():
-			# SIDES: apply to chosen card plus its hand neighbors
+	var actual_hand: Array = hand if not hand.is_empty() else _my_hand()
+	var mode_text := Locale.term("cost_reduction_mode", cost_mode)
+	var title := Locale.t("battle.reduce_cost_title_sides" if include_sides else "battle.reduce_cost_title", [reduction, mode_text])
+	preload("res://CardCollectionDialog.gd").show_cards(self, candidates, title, count,
+		func(selected_cards: Array):
 			var applied: Array = []
-			for idx in selected_indices.keys():
-				var chosen: CardData = candidates[int(idx)]
-				var hand_idx: int = hand.find(chosen)
-				if hand_idx >= 0 and not (chosen in applied):
+			for chosen: CardData in selected_cards:
+				var index := actual_hand.find(chosen)
+				if index < 0:
+					continue
+				if chosen not in applied:
 					applied.append(chosen)
+				if include_sides:
 					for offset in [-1, 1]:
-						var adj_idx : int = hand_idx + offset
-						if adj_idx >= 0 and adj_idx < hand.size():
-							var adj_card: CardData = hand[adj_idx]
-							if adj_card is CardData and adj_card.cost > 0 and not adj_card.zero_cost_until_deploy and not (adj_card in applied):
-								applied.append(adj_card)
-			for card in applied:
-				card.cost = 0
-				card.zero_cost_until_deploy = true
-		else:
-			for idx in selected_indices.keys():
-				var chosen: CardData = candidates[int(idx)]
-				chosen.cost = 0
-				chosen.zero_cost_until_deploy = true
-		_refresh_hand_ui()
-		update_entire_screen()
+						var adjacent: int = index + offset
+						if adjacent >= 0 and adjacent < actual_hand.size():
+							var card: CardData = actual_hand[adjacent]
+							if card not in applied:
+								applied.append(card)
+			for card: CardData in applied:
+				card.apply_cost_reduction(reduction, cost_mode == SkillRegistry.COST_REDUCTION_PERMANENT)
+			_refresh_hand_ui()
+			update_entire_screen()
 	)
-	box.add_child(confirm_btn)
-
-	var close_btn := Button.new()
-	close_btn.text = Locale.t("battle.close")
-	UITheme.apply_button(close_btn, "secondary")
-	close_btn.pressed.connect(layer.queue_free)
-	box.add_child(close_btn)
 
 
 func _show_disconnect_result_page(resume_sync_failed: bool = false) -> void:
@@ -737,6 +679,7 @@ func _on_result_back_editor_pressed() -> void:
 
 func _on_result_back_menu_pressed() -> void:
 	NetworkManager.close_connection()
+	PlayerData.restore_after_card_playtest()
 	UIMotion.change_scene("res://MainMenu.tscn")
 
 
@@ -744,22 +687,55 @@ func _on_result_back_menu_pressed() -> void:
 # UI refresh
 # ============================================
 
-func _update_status_hud(hud: Panel, field: BattleField, hand_size: int, enemy: bool, active: bool) -> void:
+func _update_status_hud(hud: Panel, field: BattleField, hand_size: int, enemy: bool, active: bool, player_number: int) -> void:
 	if hud == null or field == null:
 		return
 	var content := hud.get_node("Margin/Content") as HBoxContainer
 	(content.get_node("SideLabel") as Label).text = Locale.t("battle.enemy") if enemy else Locale.t("battle.you")
+	if not NetworkManager.is_online and PlayerData.battle_mode == "hotseat":
+		(content.get_node("SideLabel") as Label).text = Locale.t("battle.hotseat_player", [_opponent_player() if enemy else _view_player()])
 	(content.get_node("HpLabel") as Label).text = Locale.t("battle.hp_value", [field.player_hp, field.max_player_hp])
 	(content.get_node("ManaLabel") as Label).text = Locale.t("battle.mana_value", [field.get_total_mana(), field.max_mana])
 	(content.get_node("HandLabel") as Label).text = Locale.t("battle.hand_count", [hand_size, SkillEngine.MAX_HAND_SIZE])
 
 	var hp_bar := content.get_node("HpBar") as ProgressBar
 	hp_bar.max_value = max(1, field.max_player_hp)
-	hp_bar.value = clamp(field.player_hp, 0, field.max_player_hp)
 	var mana_bar := content.get_node("ManaBar") as ProgressBar
 	mana_bar.max_value = max(1, max(field.max_mana, field.get_total_mana()))
-	mana_bar.value = max(0, field.get_total_mana())
+	var hp_value: int = clampi(field.player_hp, 0, field.max_player_hp)
+	var mana_value: int = maxi(0, field.get_total_mana())
+	var hud_key: int = hud.get_instance_id()
+	var previous: Dictionary = _status_hud_state.get(hud_key, {})
+	var same_player: bool = int(previous.get("player", -1)) == player_number
+	var may_animate: bool = same_player and not _suppress_status_feedback_once
+	var hp_delta: int = hp_value - int(previous.get("hp", hp_value)) if same_player else 0
+	var mana_delta: int = mana_value - int(previous.get("mana", mana_value)) if same_player else 0
+	_set_status_bar_value(hp_bar, hp_value, may_animate and hp_delta != 0)
+	_set_status_bar_value(mana_bar, mana_value, may_animate and mana_delta > 0)
+	if may_animate and hp_delta != 0:
+		BattleFx.status_bar_feedback($CanvasLayer, hp_bar, hp_delta, "heal" if hp_delta > 0 else "damage", _ui_scale())
+	if may_animate and mana_delta > 0:
+		BattleFx.status_bar_feedback($CanvasLayer, mana_bar, mana_delta, "mana", _ui_scale())
+	_status_hud_state[hud_key] = {"player": player_number, "hp": hp_value, "mana": mana_value}
 	_apply_status_hud_theme(hud, enemy, active)
+
+
+func _set_status_bar_value(bar: ProgressBar, target_value: float, animate: bool) -> void:
+	var key: int = bar.get_instance_id()
+	var old_tween: Tween = _status_value_tweens.get(key)
+	if old_tween != null and old_tween.is_valid():
+		old_tween.kill()
+	if not animate:
+		bar.value = target_value
+		_status_value_tweens.erase(key)
+		return
+	bar.pivot_offset = bar.size * 0.5
+	var twn := create_tween().set_parallel(true)
+	twn.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	twn.tween_property(bar, "value", target_value, 0.38)
+	twn.tween_property(bar, "scale", Vector2(1.0, 1.16), 0.09)
+	twn.tween_property(bar, "scale", Vector2.ONE, 0.22).set_delay(0.09).set_trans(Tween.TRANS_BACK)
+	_status_value_tweens[key] = twn
 
 
 func _update_battle_status_huds() -> void:
@@ -767,8 +743,9 @@ func _update_battle_status_huds() -> void:
 		return
 	var my_turn_active: bool = game.is_player_turn and game.current_player == _view_player()
 	var enemy_turn_active: bool = game.is_player_turn and not my_turn_active
-	_update_status_hud(player_status_hud, _my_field(), _my_hand().size(), false, my_turn_active)
-	_update_status_hud(enemy_status_hud, _their_field(), _hand_for_player(_opponent_player()).size(), true, enemy_turn_active)
+	_update_status_hud(player_status_hud, _my_field(), _my_hand().size(), false, my_turn_active, _view_player())
+	_update_status_hud(enemy_status_hud, _their_field(), _hand_for_player(_opponent_player()).size(), true, enemy_turn_active, _opponent_player())
+	_suppress_status_feedback_once = false
 
 
 # Coalesces full-screen refreshes: dozens of action paths call this within the
@@ -788,7 +765,7 @@ func _do_update_entire_screen() -> void:
 		return
 	if turn_label:
 		if game.is_player_turn:
-			var turn_owner := Locale.t("battle.your_turn") if game.current_player == _view_player() else Locale.t("battle.opponent_turn")
+			var turn_owner := _turn_owner_text()
 			turn_label.text = "%s  ·  %s" % [Locale.t("battle.turn_label", [game.turn_number]), turn_owner]
 		else:
 			turn_label.text = Locale.t("battle.switching")
@@ -913,7 +890,8 @@ func _process(_delta):
 
 
 # Cyan marks every legal destination; the hovered legal target turns gold.
-# Recomputed every frame, so highlights never go stale after cancelling a drag.
+# A guaranteed lethal outcome overrides both with a red glow. Recomputed every
+# frame, so neither target nor lethal highlights can go stale after cancelling.
 func _update_slot_highlights() -> void:
 	var my_ui: Array = _my_slots_ui()
 	var their_ui: Array = _their_slots_ui()
@@ -951,12 +929,59 @@ func _update_slot_highlights() -> void:
 				s.set_target_hint(false)
 			else:
 				s.set_highlighted(false)
+			if s.has_method("set_lethal_hint"):
+				s.set_lethal_hint(false)
 	for entry in targets:
 		var slot = entry[0][entry[1]]
 		if slot.has_method("set_target_hint"):
 			slot.set_target_hint(true, bool(entry[2]))
 		else:
 			slot.set_highlighted(bool(entry[2]))
+		var target_player: int = _view_player() if entry[0] == my_ui else _opponent_player()
+		var target_card: CardData = _field_for_player(target_player).slots[int(entry[1])]
+		if slot.has_method("set_lethal_hint") and _targeting_action_can_kill(target_card, target_player, int(entry[1])):
+			slot.set_lethal_hint(true)
+
+
+func _targeting_action_can_kill(target: CardData, target_player: int, target_slot: int) -> bool:
+	if target == null or parasite_targeting:
+		return false
+	if current_attacker_idx >= 0:
+		var attacker: CardData = _my_field().slots[current_attacker_idx]
+		if attacker == null or target_player != _opponent_player():
+			return false
+		var damage := attacker.effective_atk()
+		damage = maxi(0, int(floor(float(damage) * (1.0 - float(target.get_damage_reduction()) / 100.0))))
+		# One directed hit is fully intercepted by the outermost parasite even
+		# when its damage exceeds the parasite's remaining HP.
+		if ParasiteRules.has_damage_absorber(target) or target.immune_lethal:
+			return false
+		return damage >= target.hp + target.temp_hp
+
+	var skill := _current_targeting_skill()
+	var source := _current_targeting_source_card()
+	if skill.is_empty() or source == null:
+		return false
+	var context: Dictionary = game.make_skill_context_for_player(_view_player(), _current_targeting_source_slot(), target_slot, target_player)
+	return SkillEngine.predicts_target_lethal(skill, source, target, context)
+
+
+func _current_targeting_source_card() -> CardData:
+	var source_slot := _current_targeting_source_slot()
+	if source_slot >= 0:
+		return _my_field().slots[source_slot]
+	if cast_targeting:
+		var hand := _my_hand()
+		return hand[cast_hand_index] if cast_hand_index >= 0 and cast_hand_index < hand.size() else null
+	return null
+
+
+func _current_targeting_source_slot() -> int:
+	if summon_targeting:
+		return summon_source_slot
+	if activate_targeting:
+		return activate_source_slot
+	return -1
 
 
 # Pulsing gold border on friendly cards that can still act this turn.
@@ -976,13 +1001,11 @@ func _card_can_act(card: CardData) -> bool:
 		return false
 	if not game.is_player_turn or not is_my_turn():
 		return false
-	if game.turn_number <= 1:
-		return false
 	if card.is_silenced() and not card.attack_ignores_silence:
 		return false
 	if card.has_acted:
 		return false
-	if card.effective_atk() > 0:
+	if game.turn_number > 1 and card.effective_atk() > 0:
 		return true
 	for i in range(card.skills.size()):
 		if not card.skills_used.has(i):
