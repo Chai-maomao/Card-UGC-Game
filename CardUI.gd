@@ -131,11 +131,14 @@ func apply_ui_scale(scale_value: float) -> void:
 	for label in [cost_label, hp_label, atk_label]:
 		if label:
 			label.add_theme_font_size_override("font_size", max(9, int(11 * ui_scale)))
-	# Action buttons are compact chips; a slightly smaller font keeps 4 stacked
-	# buttons (basic attack + 3 skills) inside the ~76px action column.
+	# Action buttons are compact chips; the font keeps 4 stacked buttons (basic
+	# attack + 3 skills) inside the fixed action column on every platform. CJK
+	# fallback line metrics are ~1.5x the font size on Linux (Noto) vs ~1.4x on
+	# Windows (YaHei), so size 9 keeps the worst-case stack <= 63px with room
+	# for the last chip's hover shadow; compact (0.75x) still floors at 7.
 	for button in [normal_atk_btn, skill1_btn, skill2_btn, skill3_btn]:
 		if button:
-			button.add_theme_font_size_override("font_size", max(7, int(10 * ui_scale)))
+			button.add_theme_font_size_override("font_size", max(7, int(9 * ui_scale)))
 	if action_buttons:
 		action_buttons.add_theme_constant_override("separation", max(1, int(2 * ui_scale)))
 	if status_icons:
