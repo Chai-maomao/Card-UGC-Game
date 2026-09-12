@@ -35,6 +35,7 @@ static func apply_app_background(control: Control) -> void:
 static func apply_panel(panel: Control, variant: String = "normal") -> void:
 	if panel == null:
 		return
+	panel.set_meta("ui_panel_variant", variant)
 	var fill := COLOR_PANEL
 	var border := COLOR_GOLD_SOFT
 	var radius := 12
@@ -94,6 +95,7 @@ static func apply_panel(panel: Control, variant: String = "normal") -> void:
 static func apply_button(button: BaseButton, variant: String = "secondary", animated: bool = true) -> void:
 	if button == null:
 		return
+	button.set_meta("ui_button_variant", variant)
 	var base := COLOR_BUTTON
 	var hover := COLOR_BUTTON_HOVER
 	var pressed := COLOR_BUTTON_PRESSED
@@ -194,6 +196,51 @@ static func apply_input(control: Control) -> void:
 	control.add_theme_color_override("font_placeholder_color", COLOR_TEXT_MUTED)
 
 
+static func apply_item_list(list: ItemList) -> void:
+	if list == null:
+		return
+	list.add_theme_stylebox_override("panel", panel_style(COLOR_PANEL_DARK, Color(0.24, 0.29, 0.38), 1, 7))
+	var selected := panel_style(Color(0.18, 0.28, 0.40), COLOR_ACCENT, 1, 5)
+	list.add_theme_stylebox_override("selected", selected)
+	list.add_theme_stylebox_override("selected_focus", selected)
+	list.add_theme_stylebox_override("focus", panel_style(Color(0, 0, 0, 0), COLOR_ACCENT, 1, 7))
+	list.add_theme_color_override("font_color", COLOR_TEXT)
+	list.add_theme_color_override("font_selected_color", Color(1.0, 0.94, 0.72))
+	list.add_theme_color_override("font_hovered_color", Color(1.0, 0.94, 0.72))
+	list.add_theme_constant_override("h_separation", 8)
+	list.add_theme_constant_override("v_separation", 6)
+
+
+static func apply_scrollbar(bar: ScrollBar) -> void:
+	if bar == null:
+		return
+	bar.add_theme_stylebox_override("scroll", panel_style(Color(0.055, 0.065, 0.085, 0.78), Color(0.16, 0.19, 0.25), 1, 5))
+	bar.add_theme_stylebox_override("scroll_focus", panel_style(Color(0.055, 0.065, 0.085, 0.9), COLOR_ACCENT, 1, 5))
+	bar.add_theme_stylebox_override("grabber", panel_style(COLOR_BLUE, COLOR_ACCENT, 1, 5))
+	bar.add_theme_stylebox_override("grabber_highlight", panel_style(COLOR_ACCENT, COLOR_GOLD_SOFT, 1, 5))
+	bar.add_theme_stylebox_override("grabber_pressed", panel_style(COLOR_PRIMARY_HOVER, COLOR_GOLD, 1, 5))
+
+
+static func apply_dialog(dialog: AcceptDialog, confirm_primary: bool = false) -> void:
+	if dialog == null:
+		return
+	dialog.add_theme_stylebox_override("panel", panel_style(COLOR_PANEL_DARK, COLOR_GOLD_SOFT, 1, 12, COLOR_SHADOW, 8))
+	dialog.add_theme_color_override("title_color", Color(1.0, 0.90, 0.62))
+	dialog.add_theme_font_size_override("title_font_size", 18)
+	dialog.add_theme_constant_override("buttons_separation", 10)
+	var message := dialog.get_label()
+	if message != null:
+		apply_label(message)
+		message.add_theme_font_size_override("font_size", 15)
+	apply_button(dialog.get_ok_button(), "primary" if confirm_primary else "secondary")
+	dialog.get_ok_button().custom_minimum_size = Vector2(104, 36)
+	if dialog is ConfirmationDialog:
+		var cancel := (dialog as ConfirmationDialog).get_cancel_button()
+		apply_button(cancel, "secondary")
+		cancel.custom_minimum_size = Vector2(104, 36)
+	theme_tree(dialog, true)
+
+
 static func apply_popup_menu(menu: PopupMenu) -> void:
 	menu.add_theme_stylebox_override("panel", panel_style(COLOR_PANEL_DARK, COLOR_GOLD_SOFT, 1, 8, COLOR_SHADOW, 4))
 	menu.add_theme_stylebox_override("hover", panel_style(COLOR_BUTTON_HOVER, COLOR_BLUE, 1, 5))
@@ -225,22 +272,30 @@ static func apply_popup_frame(panel: Control, variant: String = "gold") -> void:
 	animate_popup_enter(panel)
 
 
-static func theme_tree(root: Node) -> void:
+static func theme_tree(root: Node, include_internal: bool = false) -> void:
 	if root == null:
 		return
-	for child in root.get_children():
+	for child in root.get_children(include_internal):
 		if child is Label:
 			apply_label(child)
+		elif child is OptionButton:
+			apply_button(child, str(child.get_meta("ui_button_variant", "secondary")))
+			apply_popup_menu(child.get_popup())
+		elif child is CheckBox:
+			apply_button(child, str(child.get_meta("ui_button_variant", "secondary")))
 		elif child is Button:
-			var variant := "danger" if child.text == "X" else "secondary"
-			apply_button(child, variant)
-		elif child is OptionButton or child is CheckBox:
-			apply_button(child, "secondary")
+			var fallback := "danger" if child.text == "X" else "secondary"
+			apply_button(child, str(child.get_meta("ui_button_variant", fallback)))
 		elif child is LineEdit or child is SpinBox or child is TextEdit:
 			apply_input(child)
+		elif child is ItemList:
+			apply_item_list(child)
+		elif child is ScrollContainer:
+			apply_scrollbar(child.get_h_scroll_bar())
+			apply_scrollbar(child.get_v_scroll_bar())
 		elif child is Panel or child is PanelContainer:
-			apply_panel(child, "soft")
-		theme_tree(child)
+			apply_panel(child, str(child.get_meta("ui_panel_variant", "soft")))
+		theme_tree(child, include_internal)
 
 
 static func make_popup_layer(parent: Node, layer_index: int = 100) -> Dictionary:

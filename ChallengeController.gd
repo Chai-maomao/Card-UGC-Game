@@ -46,9 +46,11 @@ func _show(include_hint := false) -> void:
 		else:
 			dialog.dialog_text += "\n\n" + PracticeChallenges.failure_reason(battle.game, challenge_id)
 	dialog.get_ok_button().text = "关闭" if Locale.language == "zh" else "Close"
-	dialog.add_button("重新挑战" if Locale.language == "zh" else "Retry", false, "retry")
+	var retry := dialog.add_button("重新挑战" if Locale.language == "zh" else "Retry", false, "retry")
+	UITheme.apply_button(retry, "secondary")
 	if not finished:
-		dialog.add_button("查看提示" if Locale.language == "zh" else "Hint", false, "hint")
+		var hint_button := dialog.add_button("查看提示" if Locale.language == "zh" else "Hint", false, "hint")
+		UITheme.apply_button(hint_button, "secondary")
 	dialog.custom_action.connect(func(action: String):
 		if action == "retry":
 			_reset()
@@ -58,6 +60,7 @@ func _show(include_hint := false) -> void:
 	dialog.confirmed.connect(dialog.queue_free)
 	dialog.canceled.connect(dialog.queue_free)
 	add_child(dialog)
+	UITheme.apply_dialog(dialog)
 	dialog.popup_centered(Vector2i(640, 240))
 
 

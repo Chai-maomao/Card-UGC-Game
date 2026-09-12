@@ -88,6 +88,7 @@ func _show_offer() -> void:
 		_finish()
 	)
 	dialog.canceled.connect(func(): lobby._on_back_pressed())
+	UITheme.apply_dialog(dialog, true)
 	dialog.popup_centered()
 
 

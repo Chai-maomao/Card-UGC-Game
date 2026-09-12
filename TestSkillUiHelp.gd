@@ -233,6 +233,20 @@ func _test_menu_theme() -> void:
 	popup.set_item_tooltip(0, "")
 	_assert(Hints.menu_hint(popup).is_empty(), "popup item hints must clear when removed")
 	popup.queue_free()
+	var dialog := ConfirmationDialog.new()
+	var content := VBoxContainer.new()
+	var label := Label.new()
+	var list := ItemList.new()
+	content.add_child(label)
+	content.add_child(list)
+	dialog.add_child(content)
+	add_child(dialog)
+	UITheme.apply_dialog(dialog, true)
+	_assert(dialog.get_theme_stylebox("panel").bg_color == UITheme.COLOR_PANEL_DARK, "dialogs must use the shared dark panel")
+	_assert(dialog.get_ok_button().get_meta("ui_button_variant", "") == "primary", "dialog confirmation must use primary action style")
+	_assert(dialog.get_cancel_button().get_meta("ui_button_variant", "") == "secondary", "dialog cancellation must use secondary action style")
+	_assert(list.get_theme_stylebox("panel").bg_color == UITheme.COLOR_PANEL_DARK, "dialog lists must use the shared dark surface")
+	dialog.queue_free()
 
 
 func _test_live_menu_hover() -> void:

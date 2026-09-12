@@ -64,6 +64,7 @@ func show_trace() -> void:
 		var specimen: Dictionary = PlayerData.card_playtest_context.get("test_card", {})
 		edit.disabled = str(entry.get("card_id", "")) != str(specimen.get("card_id", "")) or int(entry.get("skill_index", -1)) < 0 or (entry.get("path", []) as Array).is_empty()
 	)
+	UITheme.apply_dialog(dialog)
 	dialog.popup_centered(Vector2i(720, 540))
 
 
@@ -140,6 +141,7 @@ func _export_trace() -> void:
 		picker.queue_free()
 	)
 	picker.canceled.connect(picker.queue_free)
+	UITheme.apply_dialog(picker, true)
 	picker.popup_centered_ratio(0.7)
 
 

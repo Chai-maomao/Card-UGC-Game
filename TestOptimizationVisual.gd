@@ -61,6 +61,17 @@ func _ready() -> void:
 		if child is Window:
 			child.queue_free()
 	await _settle()
+	var file_dialog := FileDialog.new()
+	file_dialog.title = "选择卡图 / Select artwork"
+	file_dialog.access = FileDialog.ACCESS_RESOURCES
+	file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
+	file_dialog.filters = PackedStringArray(["*.png, *.jpg ; Images"])
+	add_child(file_dialog)
+	UITheme.apply_dialog(file_dialog, true)
+	file_dialog.popup_centered(Vector2i(820, 520))
+	await _capture("optimization-file-dialog.png")
+	file_dialog.queue_free()
+	await _settle()
 	PlayerData.battle_deck = [CardData.new("我方先锋", 2, 4, 2)]
 	PlayerData.opponent_battle_deck = [CardData.new("对方守卫", 3, 6, 1)]
 	var agreement := MatchAgreement.new()

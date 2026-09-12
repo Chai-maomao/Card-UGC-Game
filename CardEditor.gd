@@ -182,6 +182,7 @@ func _apply_theme() -> void:
 		UITheme.apply_input(input)
 	for btn in [template_button, browse_button, clear_art_button, edit_skill1_btn, edit_talent_btn, edit_skill2_btn, edit_skill3_btn, save_button, back_button]:
 		UITheme.apply_button(btn, "primary" if btn == save_button or btn == template_button else "secondary")
+	UITheme.apply_dialog(art_dialog, true)
 	UITheme.apply_label(art_path_label, true)
 	UITheme.apply_panel(card_preview_panel, "gold")
 	UITheme.apply_title(preview_title, 14)

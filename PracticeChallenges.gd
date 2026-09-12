@@ -339,4 +339,5 @@ static func show_picker(parent: Node) -> void:
 	dialog.get_ok_button().text = _t("关闭", "Close")
 	dialog.confirmed.connect(dialog.queue_free)
 	dialog.canceled.connect(dialog.queue_free)
+	UITheme.apply_dialog(dialog)
 	dialog.popup_centered(Vector2i(620, 620))

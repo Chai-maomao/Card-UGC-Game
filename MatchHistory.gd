@@ -687,6 +687,7 @@ func _show_clear_confirmation() -> void:
 	dialog.canceled.connect(dialog.queue_free)
 	dialog.confirmed.connect(dialog.queue_free)
 	add_child(dialog)
+	UITheme.apply_dialog(dialog, true)
 	var dialog_size := Vector2i(Vector2(430, 180) * _ui_scale())
 	dialog_size.x = mini(dialog_size.x, int(get_viewport_rect().size.x - 32.0))
 	dialog_size.y = mini(dialog_size.y, int(get_viewport_rect().size.y - 32.0))

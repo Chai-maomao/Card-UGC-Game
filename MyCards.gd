@@ -502,6 +502,7 @@ func _show_export_file_dialog() -> void:
 	)
 	dialog.canceled.connect(dialog.queue_free)
 	add_child(dialog)
+	UITheme.apply_dialog(dialog, true)
 	dialog.popup_centered_ratio(0.75)
 
 
@@ -516,6 +517,7 @@ func _show_open_dialog() -> void:
 	)
 	dialog.canceled.connect(dialog.queue_free)
 	add_child(dialog)
+	UITheme.apply_dialog(dialog, true)
 	dialog.popup_centered_ratio(0.75)
 
 
@@ -545,6 +547,7 @@ func _import_from_file(path: String) -> void:
 	)
 	preview.canceled.connect(preview.queue_free)
 	add_child(preview)
+	UITheme.apply_dialog(preview, true)
 	preview.popup_centered(Vector2i(650, 300))
 
 
