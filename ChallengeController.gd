@@ -35,7 +35,8 @@ func _show(include_hint := false) -> void:
 	if is_instance_valid(dialog):
 		dialog.queue_free()
 	dialog = AcceptDialog.new()
-	dialog.title = PracticeChallenges.title(challenge_id)
+	var number := PracticeChallenges.IDS.find(challenge_id) + 1
+	dialog.title = "%d/%d · %s · %s" % [number, PracticeChallenges.IDS.size(), PracticeChallenges.title(challenge_id), PracticeChallenges.difficulty(challenge_id)]
 	dialog.dialog_text = PracticeChallenges.objective(challenge_id) + "\n\n" + PracticeChallenges.progress(battle.game, challenge_id)
 	if include_hint:
 		dialog.dialog_text += "\n\n" + PracticeChallenges.hint(challenge_id)
@@ -57,7 +58,7 @@ func _show(include_hint := false) -> void:
 	dialog.confirmed.connect(dialog.queue_free)
 	dialog.canceled.connect(dialog.queue_free)
 	add_child(dialog)
-	dialog.popup_centered(Vector2i(580, 180))
+	dialog.popup_centered(Vector2i(640, 240))
 
 
 func _process(delta: float) -> void:

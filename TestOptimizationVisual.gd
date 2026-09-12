@@ -37,6 +37,14 @@ func _ready() -> void:
 	battle.queue_free()
 	await _settle()
 	PlayerData.card_playtest_context = {}
+	PlayerData.practice_challenge_id = "parasite"
+	PlayerData.configure_hotseat_battle(CardDatabase.beginner_deck(), CardDatabase.beginner_deck())
+	var challenge_battle := preload("res://Main.tscn").instantiate()
+	add_child(challenge_battle)
+	await _capture("optimization-challenge-gameplay.png")
+	challenge_battle.queue_free()
+	PlayerData.practice_challenge_id = ""
+	await _settle()
 	PlayerData.card_draft = PlayerData.card_to_draft(card)
 	PlayerData.card_draft.skill1.effects[0].repeat_expr = {"kind": "var", "var_id": "hand_count"}
 	var editor := preload("res://CardEditor.tscn").instantiate()

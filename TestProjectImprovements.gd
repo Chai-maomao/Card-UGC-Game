@@ -55,25 +55,88 @@ func _on_event(_card: CardData, _delta: int, _hp: int) -> void:
 
 
 func _test_search_and_challenges() -> void:
-	var preferences := PlayerData.battle_config.duplicate(true)
-	EventBus.hp_changed.connect(_on_event)
+	_check(PracticeChallenges.IDS.size() == 7, "challenge catalog must contain seven lessons")
+	var titles := {}
 	for id in PracticeChallenges.IDS:
 		var game := _game()
 		PracticeChallenges.configure(game, id)
 		_check(PracticeChallenges.stage(game, id) == "setup", "challenge must begin at setup stage: " + id)
-		if id == "resource":
-			_check(game.player_hand.size() == 3 and game.player_hand[2].card_name == "斥候", "resource challenge needs a tempting legal misplay")
-			var trap := _game()
-			PracticeChallenges.configure(trap, id)
-			_check(trap.summon_card(trap.player_hand[2], 0), "resource distractor must be playable")
-			_check(PracticeChallenges.failed(trap, id), "resource challenge must explain an unrecoverable wrong order")
-		else:
-			var early_attack := _game()
-			PracticeChallenges.configure(early_attack, id)
-			_check(not early_attack.execute_attack(0, 0).is_empty(), "combination challenge early attack must be legal")
-			early_attack.cleanup_deaths()
-			_check(PracticeChallenges.failed(early_attack, id), "combination challenge must detect attack-before-buff order")
-			event_count = 0
+		_check(not PracticeChallenges.objective(id).is_empty() and not PracticeChallenges.hint(id).is_empty() and not PracticeChallenges.lesson(id).is_empty(), "challenge teaching copy missing: " + id)
+		titles[PracticeChallenges.title(id)] = true
+	_check(titles.size() == PracticeChallenges.IDS.size(), "challenge titles must be unique")
+	_test_challenge_failure_paths()
+	_test_challenge_solution_paths()
+	_test_challenge_search_isolation()
+
+
+func _test_challenge_failure_paths() -> void:
+	var wrong_actions := {
+		"resource": {"type": "summon", "hand_index": 2, "slot": 0},
+		"combination": {"type": "attack", "source_slot": 0, "target_slot": 0},
+		"taunt": {"type": "attack", "source_slot": 1, "target_slot": 0},
+		"cleanse": {"type": "cast", "hand_index": 1, "skill_index": 0, "target_slot": 0, "target_player": 1},
+		"dispel": {"type": "cast", "hand_index": 1, "skill_index": 0, "target_slot": 0, "target_player": 1},
+		"execute": {"type": "cast", "hand_index": 1, "skill_index": 0, "target_slot": 0, "target_player": 2},
+		"parasite": {"type": "attach", "hand_index": 0, "target_slot": 0, "target_player": 2},
+	}
+	for id in PracticeChallenges.IDS:
+		var game := _game()
+		PracticeChallenges.configure(game, id)
+		_check(BattleRepro.apply_action(game, wrong_actions[id]).ok, "challenge wrong-order probe must be legal: " + id)
+		game.cleanup_deaths()
+		_check(PracticeChallenges.failed(game, id), "challenge must detect unrecoverable wrong order: " + id)
+		_check(not PracticeChallenges.failure_reason(game, id).is_empty(), "challenge failure needs an explanation: " + id)
+
+
+func _test_challenge_solution_paths() -> void:
+	var paths := {
+		"resource": [
+			{"type": "cast", "hand_index": 0, "skill_index": 0},
+			{"type": "summon", "hand_index": 0, "slot": 0},
+		],
+		"combination": [
+			{"type": "cast", "hand_index": 0, "skill_index": 0, "target_slot": 0, "target_player": 1},
+			{"type": "attack", "source_slot": 0, "target_slot": 0},
+		],
+		"taunt": [
+			{"type": "attack", "source_slot": 0, "target_slot": 0},
+			{"type": "attack", "source_slot": 1, "target_slot": 1},
+		],
+		"cleanse": [
+			{"type": "cast", "hand_index": 0, "skill_index": 0, "target_slot": 0, "target_player": 1},
+			{"type": "attack", "source_slot": 0, "target_slot": 0},
+		],
+		"dispel": [
+			{"type": "cast", "hand_index": 0, "skill_index": 0, "target_slot": 0, "target_player": 2},
+			{"type": "attack", "source_slot": 0, "target_slot": 1},
+		],
+		"execute": [
+			{"type": "cast", "hand_index": 0, "skill_index": 0, "target_slot": 0, "target_player": 2},
+			{"type": "activate", "slot": 0, "skill_index": 0, "target_slot": 0, "target_player": 2},
+		],
+		"parasite": [
+			{"type": "attach", "hand_index": 0, "target_slot": 0, "target_player": 1},
+			{"type": "attack", "source_slot": 0, "target_slot": 0},
+		],
+	}
+	for id in PracticeChallenges.IDS:
+		var game := _game()
+		PracticeChallenges.configure(game, id)
+		_check(BattleRepro.apply_action(game, paths[id][0]).ok, "challenge setup action must be legal: " + id)
+		game.cleanup_deaths()
+		_check(PracticeChallenges.stage(game, id) == "payoff", "challenge setup must advance progress: " + id)
+		_check(BattleRepro.apply_action(game, paths[id][1]).ok, "challenge payoff action must be legal: " + id)
+		game.cleanup_deaths()
+		_check(PracticeChallenges.succeeded(game, id), "challenge path must solve lesson: " + id)
+		_check(PracticeChallenges.stage(game, id) == "success", "challenge must expose completed progress: " + id)
+
+
+func _test_challenge_search_isolation() -> void:
+	var preferences := PlayerData.battle_config.duplicate(true)
+	EventBus.hp_changed.connect(_on_event)
+	for id in ["resource", "combination"]:
+		var game := _game()
+		PracticeChallenges.configure(game, id)
 		var trace := SkillTrace.new()
 		game.trace_callable = trace.record
 		var before := BattleRepro.state_hash(game)
