@@ -98,6 +98,7 @@ var _resolution_running: bool = false
 var _resolution_blocker: Control
 var _network_command_phase: String = ""
 var tutorial_controller: BattleTutorialController
+var _active_challenge_id: String = ""
 var _last_pile_counts := Vector2i(-1, -1)
 const BASE_VIEWPORT_SIZE := Vector2(1152, 648)
 const BASE_CARD_SIZE := Vector2(120, 160)
@@ -447,6 +448,18 @@ func _ready():
 	_battle_started_at = Time.get_unix_time_from_system()
 	_init_network()
 	game.init_game(Callable(self, "_on_game_draw_cards"))
+	_active_challenge_id = PlayerData.practice_challenge_id
+	if not _active_challenge_id.is_empty():
+		if _active_challenge_id in PracticeChallenges.IDS:
+			# Challenge hands and boards must exist before the first UI refresh.
+			# Deferring this replacement let the normal shuffled opening hand flash
+			# or remain visible when another deferred startup callback won the race.
+			PracticeChallenges.configure(game, _active_challenge_id)
+			_pending_hand_entry_ids.clear()
+			_pending_feedback_events.clear()
+		else:
+			_active_challenge_id = ""
+			PlayerData.practice_challenge_id = ""
 	if PlayerData.battle_mode == "tutorial":
 		TutorialController.configure_game(game)
 	if NetworkManager.just_reconnected:
@@ -532,7 +545,8 @@ func _ready():
 		tutorial_controller = TutorialController.new()
 		add_child(tutorial_controller)
 		tutorial_controller.start(self)
-	_play_opening_draw_feedback.call_deferred()
+	if _active_challenge_id.is_empty():
+		_play_opening_draw_feedback.call_deferred()
 	if NetworkManager.is_online:
 		var server_state := NetworkManager.take_pending_server_match_state()
 		if not server_state.is_empty() and int(server_state.get("state_revision", -1)) >= game.state_revision:
@@ -738,10 +752,10 @@ func _build_action_log() -> void:
 		var inspector := PlaytestInspector.new()
 		add_child(inspector)
 		inspector.setup(self, header)
-	if not PlayerData.practice_challenge_id.is_empty():
+	if not _active_challenge_id.is_empty():
 		var challenge := ChallengeController.new()
 		add_child(challenge)
-		challenge.setup(self, header)
+		challenge.setup(self, header, _active_challenge_id)
 	var clear_btn := Button.new()
 	clear_btn.text = Locale.t("battle.clear_log")
 	clear_btn.custom_minimum_size = Vector2(64, 26)

@@ -8,15 +8,15 @@ var elapsed := 0.0
 var dialog: AcceptDialog
 
 
-func setup(owner_battle: Node, header: HBoxContainer) -> void:
+func setup(owner_battle: Node, header: HBoxContainer, selected_challenge_id: String) -> void:
 	battle = owner_battle
-	challenge_id = PlayerData.practice_challenge_id
+	challenge_id = selected_challenge_id
 	var button := Button.new()
 	button.text = "挑战目标 / Challenge"
 	UITheme.apply_button(button, "secondary")
 	header.add_child(button)
 	button.pressed.connect(_show)
-	_reset.call_deferred()
+	_show.call_deferred()
 
 
 func _reset() -> void:
@@ -24,6 +24,8 @@ func _reset() -> void:
 		dialog.queue_free()
 	battle.cancel_attack()
 	PracticeChallenges.configure(battle.game, challenge_id)
+	battle._pending_hand_entry_ids.clear()
+	battle._pending_feedback_events.clear()
 	battle.battle_finished = false
 	finished = false
 	elapsed = 0.0
@@ -75,4 +77,7 @@ func _process(delta: float) -> void:
 
 
 func _exit_tree() -> void:
-	PlayerData.practice_challenge_id = ""
+	# A scene queued for deletion can exit after the player has already picked
+	# another challenge. Only clear the selection this controller owns.
+	if PlayerData.practice_challenge_id == challenge_id:
+		PlayerData.practice_challenge_id = ""
