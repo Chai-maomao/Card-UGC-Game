@@ -17,7 +17,7 @@ static func choose(game: RefCounted, ranked: Array) -> Dictionary:
 	# playtest traces or network listeners. No await is allowed in this scope.
 	var previously_blocked := EventBus.is_blocking_signals()
 	EventBus.set_block_signals(true)
-	for candidate in ranked.slice(0, WIDTH):
+	for candidate in _diverse_actions(ranked, WIDTH):
 		if str(candidate.get("type", "")) == "end_turn":
 			continue
 		if not _supported(game, candidate): continue
@@ -36,7 +36,7 @@ static func choose(game: RefCounted, ranked: Array) -> Dictionary:
 			followups.append(row)
 		followups.sort_custom(func(a: Dictionary, b: Dictionary): return float(a.score) > float(b.score))
 		var next_state: Dictionary = simulated.export_initial_state()
-		for action in followups.slice(0, WIDTH):
+		for action in _diverse_actions(followups, WIDTH):
 			if not _supported(simulated, action): continue
 			if nodes >= MAX_NODES:
 				break
@@ -55,6 +55,36 @@ static func choose(game: RefCounted, ranked: Array) -> Dictionary:
 	best["search_depth"] = 2
 	best["explanation"].append("two_action_outcome:%.1f" % best_score)
 	return best
+
+
+static func _diverse_actions(ranked: Array, limit: int) -> Array:
+	var result: Array = []
+	var seen := {}
+	for action in ranked:
+		var key := _action_key(action)
+		if seen.has(key):
+			continue
+		seen[key] = true
+		result.append(action)
+		if result.size() >= limit:
+			break
+	return result
+
+
+static func _action_key(action: Dictionary) -> String:
+	var action_type := str(action.get("type", ""))
+	if action_type == "summon":
+		# Empty-slot choices are strategically equivalent in the current rules.
+		# Keeping one leaves the bounded search room for other cards and actions.
+		return "summon:%d" % int(action.get("hand_index", -1))
+	return "%s:%d:%d:%d:%d:%d" % [
+		action_type,
+		int(action.get("hand_index", -1)),
+		int(action.get("source_slot", action.get("slot", -1))),
+		int(action.get("target_slot", -1)),
+		int(action.get("target_player", -1)),
+		int(action.get("skill_index", -1)),
+	]
 
 
 static func _clone(state: Dictionary) -> RefCounted:

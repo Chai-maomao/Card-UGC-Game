@@ -60,6 +60,20 @@ func _test_search_and_challenges() -> void:
 	for id in PracticeChallenges.IDS:
 		var game := _game()
 		PracticeChallenges.configure(game, id)
+		_check(PracticeChallenges.stage(game, id) == "setup", "challenge must begin at setup stage: " + id)
+		if id == "resource":
+			_check(game.player_hand.size() == 3 and game.player_hand[2].card_name == "斥候", "resource challenge needs a tempting legal misplay")
+			var trap := _game()
+			PracticeChallenges.configure(trap, id)
+			_check(trap.summon_card(trap.player_hand[2], 0), "resource distractor must be playable")
+			_check(PracticeChallenges.failed(trap, id), "resource challenge must explain an unrecoverable wrong order")
+		else:
+			var early_attack := _game()
+			PracticeChallenges.configure(early_attack, id)
+			_check(not early_attack.execute_attack(0, 0).is_empty(), "combination challenge early attack must be legal")
+			early_attack.cleanup_deaths()
+			_check(PracticeChallenges.failed(early_attack, id), "combination challenge must detect attack-before-buff order")
+			event_count = 0
 		var trace := SkillTrace.new()
 		game.trace_callable = trace.record
 		var before := BattleRepro.state_hash(game)
@@ -71,10 +85,12 @@ func _test_search_and_challenges() -> void:
 		_check(trace.entries.is_empty() and event_count == 0, "search leaked events or trace")
 		_check(PlayerData.battle_config == preferences, "search mutated preferences")
 		_check(BattleRepro.apply_action(game, first).ok, "setup action illegal")
+		_check(PracticeChallenges.stage(game, id) == "payoff", "setup action must advance challenge progress: " + id)
 		var second := BattleAiPlanner.choose_action(game, "hard", game.game_rng)
 		_check(BattleRepro.apply_action(game, second).ok, "follow-up action illegal")
 		game.cleanup_deaths()
 		_check(PracticeChallenges.succeeded(game, id), "two actions must solve challenge: " + id)
+		_check(PracticeChallenges.stage(game, id) == "success", "challenge must expose completed progress: " + id)
 		event_count = 0
 	EventBus.hp_changed.disconnect(_on_event)
 
