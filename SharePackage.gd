@@ -66,4 +66,6 @@ static func edit_metadata(parent: Node, package: Dictionary, accepted: Callable)
 	)
 	dialog.canceled.connect(dialog.queue_free)
 	parent.add_child(dialog)
+	dialog.get_ok_button().text = "继续导出" if Locale.language == "zh" else "Continue"
+	dialog.get_cancel_button().text = "取消" if Locale.language == "zh" else "Cancel"
 	dialog.popup_centered()

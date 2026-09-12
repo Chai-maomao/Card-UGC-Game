@@ -35,13 +35,14 @@ func show_trace() -> void:
 		dialog.queue_free()
 	dialog = AcceptDialog.new()
 	dialog.title = _t("试打诊断 · 最近 300 条", "Playtest · latest 300 events")
-	dialog.min_size = Vector2i(700, 430)
+	dialog.get_ok_button().text = _t("关闭", "Close")
+	dialog.min_size = Vector2i(700, 500)
 	add_child(dialog)
 	var box := VBoxContainer.new()
 	dialog.add_child(box)
 	rows = ItemList.new()
-	rows.custom_minimum_size = Vector2(670, 250)
-	rows.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	rows.custom_minimum_size = Vector2(670, 220)
+	rows.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
 	box.add_child(rows)
 	for row in trace.entries:
 		rows.add_item(SkillTrace.describe(row))
@@ -63,7 +64,7 @@ func show_trace() -> void:
 		var specimen: Dictionary = PlayerData.card_playtest_context.get("test_card", {})
 		edit.disabled = str(entry.get("card_id", "")) != str(specimen.get("card_id", "")) or int(entry.get("skill_index", -1)) < 0 or (entry.get("path", []) as Array).is_empty()
 	)
-	dialog.popup_centered()
+	dialog.popup_centered(Vector2i(720, 540))
 
 
 func _button(parent: Control, text: String, action: Callable) -> Button:

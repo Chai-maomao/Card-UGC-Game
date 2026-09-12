@@ -537,6 +537,8 @@ func _import_from_file(path: String) -> void:
 	var preview := ConfirmationDialog.new()
 	preview.title = "导入预览" if Locale.language == "zh" else "Import preview"
 	preview.dialog_text = SharePackage.summary(pending_import_package, local)
+	preview.get_ok_button().text = "继续导入" if Locale.language == "zh" else "Continue"
+	preview.get_cancel_button().text = "取消" if Locale.language == "zh" else "Cancel"
 	preview.confirmed.connect(func():
 		preview.queue_free()
 		_accept_import_preview(path)

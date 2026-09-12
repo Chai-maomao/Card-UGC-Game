@@ -7,6 +7,10 @@ func _ready() -> void:
 	for row in report.pools:
 		if row.simulation.stability_failures != 0 or row.simulation.games != 40:
 			failures += 1
+		if row.draw_rate >= 0.25 and not row.warnings.has("high_draw_rate"):
+			failures += 1
+		if row.simulation.wins.draw == row.simulation.games and row.warnings.has("first_player_skew"):
+			failures += 1
 	DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://artifacts"))
 	var file := FileAccess.open("res://artifacts/balance-calibration.json", FileAccess.WRITE)
 	if file == null:

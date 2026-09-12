@@ -75,6 +75,7 @@ static func show_picker(parent: Node) -> void:
 		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		box.add_child(label)
 	parent.add_child(dialog)
+	dialog.get_ok_button().text = "关闭" if Locale.language == "zh" else "Close"
 	dialog.confirmed.connect(dialog.queue_free)
 	dialog.canceled.connect(dialog.queue_free)
 	dialog.popup_centered()

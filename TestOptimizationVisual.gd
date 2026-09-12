@@ -41,16 +41,39 @@ func _ready() -> void:
 	PlayerData.card_draft.skill1.effects[0].repeat_expr = {"kind": "var", "var_id": "hand_count"}
 	var editor := preload("res://CardEditor.tscn").instantiate()
 	add_child(editor)
+	await _settle()
+	var editor_scroll := editor.get_node("Panel/MarginContainer/ScrollContainer") as ScrollContainer
+	editor_scroll.scroll_vertical = 10000
 	await _capture("optimization-balance.png")
 	editor.queue_free()
 	await _settle()
 	SharePackage.edit_metadata(self, SharePackage.build([]), func(_data): pass)
 	await _capture("optimization-share.png")
+	for child in get_children():
+		if child is Window:
+			child.queue_free()
+	await _settle()
+	PlayerData.battle_deck = [CardData.new("我方先锋", 2, 4, 2)]
+	PlayerData.opponent_battle_deck = [CardData.new("对方守卫", 3, 6, 1)]
+	var agreement := MatchAgreement.new()
+	agreement.lobby = self
+	agreement.offer = {
+		"rules": PlayerData.DEFAULT_BATTLE_CONFIG.duplicate(true),
+		"p1": MatchAgreement.deck_signature(PlayerData.battle_deck),
+		"p2": MatchAgreement.deck_signature(PlayerData.opponent_battle_deck),
+	}
+	add_child(agreement)
+	agreement._show_offer()
+	await _capture("optimization-match-agreement.png")
 	PlayerData._apply_battle_preparation(backup)
 	PlayerData.card_draft = old_draft
 	PlayerData.card_playtest_context = old_context
 	print("TEST_OPTIMIZATION_VISUAL_OK")
 	get_tree().quit(0)
+
+
+func _on_back_pressed() -> void:
+	pass
 
 
 func _settle() -> void:
