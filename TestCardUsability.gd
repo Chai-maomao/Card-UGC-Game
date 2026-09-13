@@ -22,6 +22,12 @@ func _ready() -> void:
 		"skill1": {}, "skill2": {}, "skill3": {},
 	})
 	_assert(not bool(expensive.get("playable", true)), "cost above cap must be an error")
+	var linked_parasite := Analyzer.analyze({
+		"name": "依附虫", "card_type": "parasite", "parasite_damage_mode": CardData.PARASITE_DAMAGE_LINKED,
+		"cost": 1, "hp": 0, "skill1": {"trigger": SkillEngine.TRIGGER_ON_ATTACK, "effects": [{"target": SkillEngine.TARGET_SINGLE, "target_side": SkillEngine.TARGET_SIDE_ENEMY, "effect": SkillEngine.EFFECT_DAMAGE, "value": 1}]},
+		"skill2": {}, "skill3": {}, "talent": {},
+	})
+	_assert(bool(linked_parasite.get("playable", false)) and not _has_issue(linked_parasite, "usability.no_health"), "linked parasite HP must be excluded from usability checks")
 	print("TEST_CARD_USABILITY_OK")
 	get_tree().quit(0)
 

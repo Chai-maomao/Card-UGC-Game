@@ -280,10 +280,10 @@ func _on_hand_card_skill_activated(card_ui, skill_index: int = SpellRules.CAST_S
 	if hand_index < 0 or hand_index >= hand.size():
 		return
 	var card: CardData = hand[hand_index]
-	if card != null and card.is_parasite():
-		_start_parasite_attach_from_hand(hand_index)
+	# Spell and parasite chips are descriptive only. Their gameplay gesture is
+	# dragging the card to a battlefield slot, never pressing the chip.
+	if card != null and (card.is_spell() or card.is_parasite()):
 		return
-	_start_spell_cast_from_hand(hand_index, skill_index)
 
 
 func _start_parasite_attach_from_hand(hand_index: int) -> void:

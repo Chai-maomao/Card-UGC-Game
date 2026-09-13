@@ -248,11 +248,18 @@ func _setup_parasite_damage_mode_dropdown() -> void:
 func _apply_card_type_restrictions() -> void:
 	var card_type: String = PlayerData.card_draft.get("card_type", "minion")
 	var is_spell: bool = card_type == "spell"
+	var is_linked_parasite: bool = card_type == "parasite" and str(PlayerData.card_draft.get("parasite_damage_mode", CardData.PARASITE_DAMAGE_ABSORB)) == CardData.PARASITE_DAMAGE_LINKED
 	if is_spell:
 		hp_input.value = 0
 		atk_input.value = 0
 		PlayerData.card_draft["hp"] = 0
 		PlayerData.card_draft["atk"] = 0
+	hp_input.editable = not is_spell and not is_linked_parasite
+	var hp_tint := Color(0.48, 0.52, 0.60, 0.78) if is_linked_parasite else Color.WHITE
+	hp_input.modulate = hp_tint
+	hp_label.modulate = hp_tint
+	hp_input.tooltip_text = Locale.t("editor.parasite_linked_hp_help") if is_linked_parasite else ""
+	hp_label.tooltip_text = hp_input.tooltip_text
 
 
 func _restore_form_from_draft():
@@ -302,6 +309,7 @@ func _connect_live_balance_updates() -> void:
 
 func _update_balance_from_form() -> void:
 	_save_form_to_draft()
+	_apply_card_type_restrictions()
 	_update_balance_summary()
 	_update_usability_summary()
 	_refresh_card_preview()
@@ -341,7 +349,9 @@ func _update_balance_summary() -> void:
 		int(PlayerData.card_draft.get("atk", 0)),
 		int(PlayerData.card_draft.get("hp", 1)),
 		skills,
-		str(PlayerData.card_draft.get("card_type", "minion"))
+		str(PlayerData.card_draft.get("card_type", "minion")),
+		1,
+		str(PlayerData.card_draft.get("parasite_damage_mode", CardData.PARASITE_DAMAGE_ABSORB))
 	)
 	var level: String = result.get("level", "balanced")
 	var reasons: Array = result.get("reasons", [])

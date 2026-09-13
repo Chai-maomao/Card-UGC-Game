@@ -125,8 +125,10 @@ func _check_spell_and_parasite_affordances() -> void:
 	spell_ui.set_card(spell)
 	spell_ui.is_hand_card = true
 	await get_tree().process_frame
-	if spell_ui.get_node("ActionButtons").is_visible_in_tree() or spell_ui.get_node("ActionButtons/NormalAtkButton").is_visible_in_tree():
-		push_error("CARD_SPELL_DRAG_FAIL hand spell exposed action buttons")
+	var spell_button: Button = spell_ui.get_node("ActionButtons/Skill1Button")
+	if not spell_ui.get_node("ActionButtons").is_visible_in_tree() or spell_ui.get_node("ActionButtons/NormalAtkButton").is_visible_in_tree() \
+			or not spell_button.is_visible_in_tree() or not spell_button.disabled:
+		push_error("CARD_SPELL_DRAG_FAIL spell effect chip was not descriptive-only")
 		get_tree().quit(1)
 		return
 	var holder: Control = spell_ui.call("_build_drag_preview", Vector2(30, 40))
@@ -134,8 +136,9 @@ func _check_spell_and_parasite_affordances() -> void:
 	await get_tree().process_frame
 	await get_tree().process_frame
 	var preview: Control = holder.get_node("PreviewCard")
-	if preview.get_node("ActionButtons").is_visible_in_tree() or preview.get_node("ActionButtons/NormalAtkButton").is_visible_in_tree():
-		push_error("CARD_SPELL_DRAG_FAIL spell preview exposed action buttons")
+	var preview_button: Button = preview.get_node("ActionButtons/Skill1Button")
+	if preview.get_node("ActionButtons/NormalAtkButton").is_visible_in_tree() or not preview_button.is_visible_in_tree() or not preview_button.disabled:
+		push_error("CARD_SPELL_DRAG_FAIL spell preview state box=%s normal=%s skill=%s disabled=%s" % [preview.get_node("ActionButtons").is_visible_in_tree(), preview.get_node("ActionButtons/NormalAtkButton").is_visible_in_tree(), preview_button.is_visible_in_tree(), preview_button.disabled])
 		get_tree().quit(1)
 		return
 
@@ -144,6 +147,14 @@ func _check_spell_and_parasite_affordances() -> void:
 	var host := CardData.new("宿主", 1, 5, 2)
 	var shield := CardData.new("护巢虫", 1, 3, 1, [{"skill_name": "反击", "trigger": SkillEngine.TRIGGER_ON_DAMAGED, "effects": [{"target": SkillEngine.TARGET_SINGLE, "target_side": SkillEngine.TARGET_SIDE_ENEMY, "effect": SkillEngine.EFFECT_DAMAGE, "value": 1}]}])
 	shield.card_type = "parasite"
+	spell_ui.set_card(shield)
+	await get_tree().process_frame
+	var parasite_button: Button = spell_ui.get_node("ActionButtons/Skill1Button")
+	if not parasite_button.is_visible_in_tree() or not parasite_button.disabled or parasite_button.text != "反击" \
+			or spell_ui.get_node("ActionButtons/NormalAtkButton").is_visible_in_tree():
+		push_error("CARD_PARASITE_SKILL_FAIL passive chip was not descriptive-only")
+		get_tree().quit(1)
+		return
 	ParasiteRules.attach(shield, host)
 	host_ui.set_card(host)
 	await get_tree().process_frame

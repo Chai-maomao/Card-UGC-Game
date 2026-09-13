@@ -454,6 +454,24 @@ func _ready() -> void:
 		get_tree().quit(1)
 		return
 
+	# Linked parasites do not use editable HP. The greyed field explains the
+	# fixed 2.4-HP balance contribution and becomes editable again for absorbers.
+	PlayerData.card_draft["card_type"] = "parasite"
+	PlayerData.card_draft["parasite_damage_mode"] = CardData.PARASITE_DAMAGE_LINKED
+	editor.call("_apply_card_type_restrictions")
+	var hp_input: SpinBox = editor.get_node("Panel/MarginContainer/ScrollContainer/VBoxContainer/HpInput")
+	var hp_label: Label = editor.get_node("Panel/MarginContainer/ScrollContainer/VBoxContainer/HpLabel")
+	if hp_input.editable or hp_input.modulate == Color.WHITE or not hp_input.tooltip_text.contains("2.4") or hp_label.modulate == Color.WHITE:
+		push_error("Linked parasite HP control was not greyed with fixed-weight guidance")
+		get_tree().quit(1)
+		return
+	PlayerData.card_draft["parasite_damage_mode"] = CardData.PARASITE_DAMAGE_ABSORB
+	editor.call("_apply_card_type_restrictions")
+	if not hp_input.editable or hp_input.modulate != Color.WHITE:
+		push_error("Absorbing parasite HP control did not become editable again")
+		get_tree().quit(1)
+		return
+
 	print("TEST_CARD_EDITOR_SKILL_SUMMARY_OK")
 	OS.delay_msec(300)
 	get_tree().quit(0)

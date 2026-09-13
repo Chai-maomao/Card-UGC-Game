@@ -25,7 +25,8 @@ static func analyze(draft: Dictionary) -> Dictionary:
 			issues.append({"severity": "warning", "key": "usability.parasite_no_effect"})
 	elif skills.is_empty():
 		issues.append({"severity": "info", "key": "usability.vanilla_card"})
-	if card_type != "spell" and int(draft.get("hp", 1)) <= 0:
+	var linked_parasite := card_type == "parasite" and str(draft.get("parasite_damage_mode", CardData.PARASITE_DAMAGE_ABSORB)) == CardData.PARASITE_DAMAGE_LINKED
+	if card_type != "spell" and not linked_parasite and int(draft.get("hp", 1)) <= 0:
 		issues.append({"severity": "error", "key": "usability.no_health"})
 	var manual_actions := 0
 	for skill in skills:

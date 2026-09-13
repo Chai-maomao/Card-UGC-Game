@@ -146,6 +146,7 @@ func apply_ui_scale(scale_value: float) -> void:
 		status_icons.add_theme_constant_override("separation", max(1, int(1 * ui_scale)))
 	_apply_card_visual_style()
 	_update_card_layout_for_type()
+	_resize_action_buttons()
 	_is_layout_applying = false
 
 
@@ -383,6 +384,7 @@ func set_card(card_data: CardData):
 
 	_update_status_icons()
 	_update_skill_buttons()
+	_resize_action_buttons()
 	if card_data.is_spell() and card_data.skills.size() > 0:
 		tooltip_text = _TextFormatter.format_skill_tooltip(SpellRules.spell_skill(card_data))
 	elif card_data.is_parasite():
@@ -390,7 +392,7 @@ func set_card(card_data: CardData):
 	else:
 		tooltip_text = _parasite_tooltip(card_data)
 	if action_buttons:
-		action_buttons.visible = _actions_visible and not card_data.is_silenced() and not card_data.is_spell()
+		action_buttons.visible = _actions_visible and not card_data.is_silenced() and _has_visible_action_buttons()
 	self.modulate = Color(0.5, 0.5, 0.5) if card_data.is_silenced() else Color.WHITE
 	_auto_hide_if_enemy()
 
@@ -615,16 +617,6 @@ func _parasite_tooltip(card_data: CardData) -> String:
 	return Locale.t("card.parasite_attached", ["\n".join(parts)])
 
 
-func _parasite_attach_tooltip(parasite: CardData) -> String:
-	var lines: Array = [Locale.t("card.parasite_tooltip")]
-	if parasite != null and not parasite.skills.is_empty():
-		lines.append(Locale.t("card.parasite_passive_marker", [parasite.card_name]))
-		for skill in parasite.skills:
-			if skill is Dictionary:
-				lines.append(_TextFormatter.format_skill_tooltip(skill))
-	return "\n\n".join(lines)
-
-
 func _gender_text(gender: String) -> String:
 	match gender:
 		"male":
@@ -639,16 +631,24 @@ func _update_skill_buttons():
 		return
 	var silenced: bool = current_card_data.is_silenced()
 	if current_card_data.is_spell():
-		for button in [skill1_btn, skill2_btn, skill3_btn]:
-			if button:
-				button.visible = false
+		var spell_skill := SpellRules.spell_skill(current_card_data)
+		if skill1_btn:
+			skill1_btn.text = Locale.t("card.spell_effect_button")
+			skill1_btn.tooltip_text = _TextFormatter.format_skill_tooltip(spell_skill)
+			skill1_btn.visible = not spell_skill.is_empty()
+			skill1_btn.disabled = true
+			skill1_btn.modulate = Color.WHITE
+		if skill2_btn: skill2_btn.visible = false
+		if skill3_btn: skill3_btn.visible = false
 		return
 	if current_card_data != null and current_card_data.is_parasite():
 		if skill1_btn:
-			skill1_btn.text = Locale.t("card.parasite_attach")
-			skill1_btn.tooltip_text = _parasite_attach_tooltip(current_card_data)
-			skill1_btn.visible = true
-			skill1_btn.disabled = false
+			var has_passive := current_card_data.skills.size() > 0 and current_card_data.skills[0] is Dictionary
+			var passive: Dictionary = current_card_data.skills[0] if has_passive else {}
+			skill1_btn.text = str(passive.get("skill_name", Locale.t("mycards.skill_fallback", [1])))
+			skill1_btn.tooltip_text = _TextFormatter.format_skill_tooltip(passive) if has_passive else ""
+			skill1_btn.visible = has_passive
+			skill1_btn.disabled = true
 			skill1_btn.modulate = Color.WHITE
 		if skill2_btn:
 			skill2_btn.visible = false
@@ -755,7 +755,28 @@ func _auto_hide_if_enemy():
 func set_actions_visible(visible: bool):
 	_actions_visible = visible
 	if action_buttons:
-		action_buttons.visible = visible and (current_card_data == null or not current_card_data.is_spell())
+		action_buttons.visible = visible and _has_visible_action_buttons()
+	_resize_action_buttons()
+
+
+func _has_visible_action_buttons() -> bool:
+	for button in [normal_atk_btn, skill1_btn, skill2_btn, skill3_btn]:
+		if button != null and button.visible:
+			return true
+	return false
+
+
+func _resize_action_buttons() -> void:
+	if action_buttons == null:
+		return
+	var count := 0
+	for button in [normal_atk_btn, skill1_btn, skill2_btn, skill3_btn]:
+		if button != null and button.visible:
+			count += 1
+	var chip_height := 14.0
+	var separation := 2.0
+	var height := float(count) * chip_height + float(maxi(0, count - 1)) * separation
+	action_buttons.offset_bottom = (90.0 + height) * ui_scale
 
 
 func set_embedded_in_slot(embedded: bool) -> void:
@@ -773,21 +794,22 @@ func _sync_card_shadow_visibility() -> void:
 
 
 func set_battle_layout_preview(visible: bool) -> void:
-	# Static card displays use the same action composition as battlefield cards.
-	# Spells are drag-to-cast objects and never expose action buttons.
+	# Static card displays retain descriptive skill chips. Spell and parasite
+	# chips stay disabled because those cards are played by dragging.
 	# Preview-only blocks dragging; unconnected action signals are inert but the
 	# live buttons retain hover tooltips and the normal battle visual treatment.
 	_preview_only = true
 	_actions_visible = visible
 	if action_buttons:
-		action_buttons.visible = visible and (current_card_data == null or not current_card_data.is_spell())
+		action_buttons.visible = visible and _has_visible_action_buttons()
 	if normal_atk_btn:
 		normal_atk_btn.visible = visible and current_card_data != null \
 			and not current_card_data.is_spell() and not current_card_data.is_parasite()
 		normal_atk_btn.disabled = false
 		normal_atk_btn.modulate = Color.WHITE
+	var descriptive_only := current_card_data != null and (current_card_data.is_spell() or current_card_data.is_parasite())
 	if skill1_btn:
-		skill1_btn.disabled = false
+		skill1_btn.disabled = descriptive_only
 		skill1_btn.modulate = Color.WHITE
 	if skill2_btn:
 		skill2_btn.disabled = false
@@ -795,6 +817,7 @@ func set_battle_layout_preview(visible: bool) -> void:
 	if skill3_btn:
 		skill3_btn.disabled = false
 		skill3_btn.modulate = Color.WHITE
+	_resize_action_buttons()
 
 
 # Compatibility for older callers; display cards now deliberately mirror the
@@ -832,6 +855,7 @@ func _build_drag_preview(grab_position: Vector2) -> Control:
 	var preview_holder := Control.new()
 	preview_holder.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	preview_holder.custom_minimum_size = Vector2.ONE
+	var preview_data: CardData = current_card_data
 	var preview_card = duplicate()
 	preview_card.name = "PreviewCard"
 	# The drag preview owns a purpose-built compact shadow below; prevent the
@@ -858,11 +882,14 @@ func _build_drag_preview(grab_position: Vector2) -> Control:
 	# CardUI._ready() reapplies its root rect and therefore resets position.
 	# Restore the grab transform after that initialization has completed.
 	preview_card.ready.connect(func():
+		# Scene duplication may restore authored child visibility after copying
+		# runtime state. Rebind the face so special cards keep only their
+		# descriptive skill chip and never regain the attack button.
+		preview_card.set_card(preview_data)
+		preview_card.set_actions_visible(true)
 		preview_card.pivot_offset = Vector2.ZERO
 		preview_card.scale = Vector2.ONE * DRAG_PREVIEW_SCALE
 		preview_card.position = preview_origin
-		if preview_card.current_card_data != null and preview_card.current_card_data.is_spell():
-			preview_card.set_actions_visible(false)
 	, CONNECT_ONE_SHOT)
 
 	var preview_shadow := Panel.new()

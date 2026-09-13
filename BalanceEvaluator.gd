@@ -10,6 +10,7 @@ const WEAK_MARGIN := -1.5
 const ACTIVATE_ATTACK_OPPORTUNITY_COST := 0.75
 const HEAL_SOFT_CAP := 6.0
 const REGEN_SOFT_CAP := 4.0
+const LINKED_PARASITE_HP_EQUIVALENT := 2.4
 
 const TRIGGER_WEIGHTS := {
 	"on_activate": 1.0,
@@ -37,11 +38,12 @@ const TARGET_WEIGHTS := {
 static func evaluate_card(card: CardData) -> Dictionary:
 	if card == null:
 		return _result(0.0, 0, 0.0, "balanced", [])
-	return evaluate_values(card.cost, card.atk, card.max_hp, card.skills, card.card_type)
+	return evaluate_values(card.cost, card.atk, card.max_hp, card.skills, card.card_type, 1, card.parasite_damage_mode)
 
 
-static func evaluate_values(cost: int, atk: int, hp: int, skills: Array, card_type: String = "minion", scenario: int = 1) -> Dictionary:
-	var body_score: float = 0.0 if card_type == "spell" else _body_score(atk, hp)
+static func evaluate_values(cost: int, atk: int, hp: int, skills: Array, card_type: String = "minion", scenario: int = 1, parasite_damage_mode: String = CardData.PARASITE_DAMAGE_ABSORB) -> Dictionary:
+	var effective_hp := LINKED_PARASITE_HP_EQUIVALENT if card_type == "parasite" and parasite_damage_mode == CardData.PARASITE_DAMAGE_LINKED else float(hp)
+	var body_score: float = 0.0 if card_type == "spell" else _body_score(atk, effective_hp)
 	var skill_score: float = 0.0
 	for skill in skills:
 		if skill is Dictionary and not skill.is_empty():
@@ -61,16 +63,16 @@ static func evaluate_values(cost: int, atk: int, hp: int, skills: Array, card_ty
 	result["uncertain"] = SkillEstimate.uncertain(skills)
 	result["estimate_kind"] = "heuristic"
 	if scenario == 1:
-		var low := float(evaluate_values(cost, atk, hp, skills, card_type, 0)["score"])
-		var high := float(evaluate_values(cost, atk, hp, skills, card_type, 2)["score"])
+		var low := float(evaluate_values(cost, atk, hp, skills, card_type, 0, parasite_damage_mode)["score"])
+		var high := float(evaluate_values(cost, atk, hp, skills, card_type, 2, parasite_damage_mode)["score"])
 		result["scenario_min"] = minf(total_score, minf(low, high))
 		result["scenario_max"] = maxf(total_score, maxf(low, high))
 	return result
 
 
-static func _body_score(atk: int, hp: int) -> float:
+static func _body_score(atk: int, hp: float) -> float:
 	var safe_atk: int = max(0, atk)
-	var safe_hp: int = max(0, hp)
+	var safe_hp: float = maxf(0.0, hp)
 	return float(safe_atk) * ATK_WEIGHT + float(safe_hp) * HP_WEIGHT
 
 

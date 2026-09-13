@@ -6,6 +6,7 @@ func _ready() -> void:
 	_test_target_side_signs()
 	_test_random_target_cap_and_conditions()
 	_test_large_heal_has_diminishing_returns()
+	_test_linked_parasite_uses_fixed_hp_strength()
 	print("TEST_BALANCE_EVALUATOR_OK")
 	get_tree().quit(0)
 
@@ -28,6 +29,18 @@ func _test_active_skill_opportunity_cost() -> void:
 	}])
 	if float(active_result.get("score", 0.0)) >= float(passive_result.get("score", 0.0)):
 		_fail("active skill opportunity cost did not reduce score")
+
+
+func _test_linked_parasite_uses_fixed_hp_strength() -> void:
+	var low_hp := BalanceEvaluator.evaluate_values(2, 1, 1, [], "parasite", 1, CardData.PARASITE_DAMAGE_LINKED)
+	var high_hp := BalanceEvaluator.evaluate_values(2, 1, 99, [], "parasite", 1, CardData.PARASITE_DAMAGE_LINKED)
+	var absorbing := BalanceEvaluator.evaluate_values(2, 1, 99, [], "parasite", 1, CardData.PARASITE_DAMAGE_ABSORB)
+	if not is_equal_approx(float(low_hp.score), float(high_hp.score)):
+		_fail("linked parasite strength still changed with its stored HP")
+	if not is_equal_approx(float(low_hp.score), 1.0 * BalanceEvaluator.ATK_WEIGHT + 2.4 * BalanceEvaluator.HP_WEIGHT):
+		_fail("linked parasite did not use the fixed 2.4 HP equivalent")
+	if float(absorbing.score) <= float(high_hp.score):
+		_fail("absorbing parasite did not retain real HP strength")
 
 
 func _test_target_side_signs() -> void:
