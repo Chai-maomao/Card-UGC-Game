@@ -59,6 +59,10 @@ func _test_invalid_boundaries() -> void:
 	invalid_parasite["card_type"] = "parasite"
 	invalid_parasite["parasite_damage_mode"] = "invulnerable"
 	_assert(not Schema.validate(Schema.KIND_CARD, invalid_parasite).is_empty(), "unknown parasite damage mode was accepted")
+	var parasite_talent := _card()
+	parasite_talent["card_type"] = "parasite"
+	parasite_talent["skills"][0]["skill_type"] = SkillRegistry.SKILL_TYPE_TALENT
+	_assert(_has_code(Schema.validate(Schema.KIND_CARD, parasite_talent), "parasite_talent"), "parasite talent was accepted")
 	_assert(not bool(Schema.parse_and_migrate(Schema.KIND_LIBRARY, "{\"version\":3,\"decks\":[").get("ok", true)), "partial JSON was accepted")
 	var oversized := "x".repeat(UgcSafety.MAX_SHARE_PACKAGE_BYTES + 1)
 	_assert(_has_code(Schema.parse_and_migrate(Schema.KIND_SHARE_PACKAGE, oversized).get("errors", []), "document_too_large"), "oversized document was not rejected before parsing")

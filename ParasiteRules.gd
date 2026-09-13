@@ -27,7 +27,8 @@ static func normalize_parasite_card(card: CardData) -> void:
 	card.parasite_damage_mode = CardData.normalize_parasite_damage_mode(card.parasite_damage_mode)
 	for i in range(card.skills.size() - 1, -1, -1):
 		var skill: Dictionary = card.skills[i]
-		if not is_passive_trigger(skill.get("trigger", "")):
+		if str(skill.get("skill_type", SkillEngine.SKILL_TYPE_NORMAL)) == SkillEngine.SKILL_TYPE_TALENT \
+				or not is_passive_trigger(skill.get("trigger", "")):
 			card.skills.remove_at(i)
 
 
@@ -66,12 +67,19 @@ static func release_all_to_discard(host: CardData, discard_pile: Array) -> void:
 
 
 static func has_damage_absorber(host: CardData) -> bool:
+	return active_damage_absorber(host) != null
+
+
+# Damage resolution walks attachments from newest to oldest. Returning the
+# same card keeps the HP affordance aligned with the next directed hit.
+static func active_damage_absorber(host: CardData) -> CardData:
 	if host == null:
-		return false
-	for parasite in host.parasite_cards:
+		return null
+	for i in range(host.parasite_cards.size() - 1, -1, -1):
+		var parasite = host.parasite_cards[i]
 		if parasite is CardData and parasite.parasite_absorbs_host_damage():
-			return true
-	return false
+			return parasite
+	return null
 
 
 static func absorb_damage(target: CardData, amount: int, discard_pile: Array) -> int:

@@ -23,6 +23,7 @@ func _ready() -> void:
 	_test_host_discard_discards_attached_parasite()
 	_test_serialization_keeps_attached_parasites()
 	_test_parasite_draft_keeps_passive_skills_only()
+	_test_parasite_rejects_talents()
 	_test_parasite_on_attack_passive_uses_host_context()
 	_test_parasite_on_damaged_passive_targets_damage_source()
 	_test_parasite_on_death_passive_resolves_before_discard()
@@ -316,6 +317,22 @@ func _test_parasite_draft_keeps_passive_skills_only() -> void:
 		_fail("parasite draft kept wrong trigger")
 	if card.parasite_damage_mode != CardData.PARASITE_DAMAGE_LINKED:
 		_fail("parasite draft did not keep the selected damage mode")
+
+
+func _test_parasite_rejects_talents() -> void:
+	var talent := _damage_skill("Talent", SkillEngine.TARGET_SINGLE, 1, SkillEngine.TRIGGER_ON_ATTACK)
+	talent["skill_type"] = SkillEngine.SKILL_TYPE_TALENT
+	var passive := _damage_skill("Passive", SkillEngine.TARGET_SINGLE, 1, SkillEngine.TRIGGER_ON_ATTACK)
+	var parasite := _parasite("No Talent", 1, 3, 0, [talent, passive])
+	ParasiteRules.normalize_parasite_card(parasite)
+	if parasite.skills.size() != 1 or parasite.skills[0].get("skill_name", "") != "Passive":
+		_fail("parasite normalization retained a talent")
+	PlayerData.init_parasite_draft()
+	PlayerData.card_draft["skill1"] = passive
+	PlayerData.card_draft["talent"] = talent
+	var built := PlayerData.build_card_from_draft()
+	if built.skills.size() != 1 or str(built.skills[0].get("skill_type", "")) == SkillEngine.SKILL_TYPE_TALENT:
+		_fail("parasite draft built a talent")
 
 
 func _test_parasite_on_attack_passive_uses_host_context() -> void:

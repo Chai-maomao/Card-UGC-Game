@@ -157,7 +157,7 @@ func _is_parasite() -> bool:
 
 
 func _is_talent_mode() -> bool:
-	return PlayerData.editing_skill_index == 3 and not _is_spell()
+	return PlayerData.editing_skill_index == 3 and not _is_spell() and not _is_parasite()
 
 
 func _apply_texts() -> void:

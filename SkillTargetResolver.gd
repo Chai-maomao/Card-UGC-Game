@@ -135,6 +135,10 @@ static func _directed_target_field(source_card: CardData, context: Dictionary, t
 			return _source_field_of(source_card, context)
 		TARGET_SIDE_ENEMY:
 			return enemy_field_of_source(source_card, context)
+	var target_player := int(context.get("target_player", 0))
+	var current_player := int(context.get("current_player", 0))
+	if target_player in [1, 2] and current_player in [1, 2]:
+		return _source_field_of(source_card, context) if target_player == current_player else enemy_field_of_source(source_card, context)
 	return enemy_field_of_source(source_card, context)
 
 

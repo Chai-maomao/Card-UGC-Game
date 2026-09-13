@@ -74,8 +74,12 @@ static func configure(game: RefCounted, id: String) -> void:
 	game.turn_number = 2
 	game.player_field.slots = [null, null, null, null, null]
 	game.player2_field.slots = [null, null, null, null, null]
+	game.player_field.player_hp = game.player_field.max_player_hp
+	game.player2_field.player_hp = game.player2_field.max_player_hp
 	game.player_field.current_mana = 2
 	game.player_field.temp_mana = 0
+	game.player2_field.current_mana = 0
+	game.player2_field.temp_mana = 0
 	game.player_hand.clear()
 	game.player2_hand.clear()
 	game.shared_deck.clear()

@@ -24,6 +24,8 @@ func _ready() -> void:
 	_test_second_player_enemy_spell_is_blocked_on_turn_one()
 	_test_ally_spell_is_allowed_on_turn_one()
 	_test_nested_enemy_spell_is_blocked_on_turn_one()
+	_test_drop_target_side_validation()
+	_test_drop_target_player_selects_exact_field()
 	if failures.is_empty():
 		print("TEST_SPELL_CAST_OK")
 		get_tree().quit(0)
@@ -73,6 +75,29 @@ func _test_spell_card_type_flag() -> void:
 		_fail("spell was not marked as spell")
 	if spell.card_type != "spell":
 		_fail("spell card_type value is wrong")
+
+
+func _test_drop_target_side_validation() -> void:
+	var ally_skill := {"effects": [{"target": SkillEngine.TARGET_SINGLE, "target_side": SkillEngine.TARGET_SIDE_ALLY, "effect": SkillEngine.EFFECT_HEAL, "value": 1}]}
+	var enemy_skill := {"effects": [{"target": SkillEngine.TARGET_SINGLE, "target_side": SkillEngine.TARGET_SIDE_ENEMY, "effect": SkillEngine.EFFECT_DAMAGE, "value": 1}]}
+	if not SpellRules.target_player_matches_drop(ally_skill, 1, 1) or SpellRules.target_player_matches_drop(ally_skill, 1, 2):
+		_fail("ally spell drop validation accepted the wrong field")
+	if not SpellRules.target_player_matches_drop(enemy_skill, 1, 2) or SpellRules.target_player_matches_drop(enemy_skill, 1, 1):
+		_fail("enemy spell drop validation accepted the wrong field")
+
+
+func _test_drop_target_player_selects_exact_field() -> void:
+	var game = _new_game()
+	var ally := _card("Ally", 1, 5)
+	var enemy := _card("Enemy", 1, 5)
+	game.player_field.slots[2] = ally
+	game.player2_field.slots[2] = enemy
+	var spell := _spell("Flexible", 0, [{"target": SkillEngine.TARGET_SINGLE, "target_side": SkillEngine.TARGET_SIDE_ALL, "effect": SkillEngine.EFFECT_DAMAGE, "value": 2}])
+	game.player_hand.append(spell)
+	if not game.cast_spell(0, SpellRules.CAST_SKILL_INDEX, 2, 1):
+		_fail("spell could not cast on its dropped player field")
+	elif ally.hp != 3 or enemy.hp != 5:
+		_fail("spell did not use the exact dropped grid as its target")
 
 
 func _test_spell_cast_moves_to_discard() -> void:

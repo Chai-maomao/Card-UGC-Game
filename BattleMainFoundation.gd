@@ -1507,6 +1507,9 @@ func _record_match_history(outcome: String, result: String) -> void:
 func _refresh_hand_ui():
 	pass
 
+func reset_hand_ui_from_game_state() -> void:
+	pass
+
 func _update_wait_hint_layout() -> void:
 	pass
 
@@ -1525,7 +1528,7 @@ func _hand_index_of(card_ui) -> int:
 func _host_apply_attack(source_slot: int, target_slot: int, player: int) -> void:
 	pass
 
-func _host_apply_cast(hand_index: int, skill_index: int, target_slot: int, player: int) -> void:
+func _host_apply_cast(hand_index: int, skill_index: int, target_slot: int, player: int, target_player: int = 0) -> void:
 	pass
 
 func _host_apply_discard(location: String, index: int, player: int) -> void:

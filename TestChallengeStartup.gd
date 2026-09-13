@@ -30,6 +30,7 @@ func _ready() -> void:
 		_check(controller != null and controller.popup_layer != null, "challenge must use the in-game popup: " + id)
 		if controller != null:
 			_check(not _tree_contains_window(controller.popup_layer), "challenge popup must not use a native window: " + id)
+			await _check_retry_restores_hand(battle, controller, expected_hands[id], id)
 		if index == 0 and controller != null:
 			battle.game.player_field.slots[0] = CardData.new("巨人", 5, 8, 5)
 			controller.finished = true
@@ -77,6 +78,28 @@ func _challenge_controller(battle: Node) -> ChallengeController:
 		if child is ChallengeController:
 			return child
 	return null
+
+
+func _check_retry_restores_hand(battle: Node, controller: ChallengeController, expected: Array, id: String) -> void:
+	var stale_nodes: Array = battle.hand_container.get_children()
+	if stale_nodes.is_empty():
+		var stale_ui = preload("res://CardUI.tscn").instantiate()
+		battle.hand_container.add_child(stale_ui)
+		stale_ui.set_card(CardData.new("污染手牌", 9, 9, 9))
+		stale_nodes.append(stale_ui)
+	else:
+		for stale in stale_nodes:
+			if stale.current_card_data != null:
+				stale.current_card_data.card_name = "污染手牌"
+	battle.game.player_hand.clear()
+	battle.game.player_hand.append(CardData.new("错误手牌", 9, 9, 9))
+	controller._reset()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	_check(_card_names(battle.game.player_hand) == expected, "retry did not restore challenge hand state: " + id)
+	_check(_visible_hand_names(battle) == expected, "retry did not rebuild visible hand: " + id)
+	for stale in stale_nodes:
+		_check(not is_instance_valid(stale) or stale.get_parent() != battle.hand_container, "retry reused a stale hand card node: " + id)
 
 
 func _tree_contains_window(root: Node) -> bool:

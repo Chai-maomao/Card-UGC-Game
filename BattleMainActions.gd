@@ -58,16 +58,12 @@ func _skill_needs_targeting(skill: Dictionary) -> bool:
 
 
 func _manual_target_side(skill: Dictionary) -> String:
-	for eff in _skill_effects_for_targeting(skill):
-		var target_name: String = eff.get("target", "")
-		if target_name in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES]:
-			var side: String = eff.get("target_side", SkillEngine.TARGET_SIDE_ENEMY)
-			return SkillEngine.TARGET_SIDE_ALLY if side == SkillEngine.TARGET_SIDE_ALLY else SkillEngine.TARGET_SIDE_ENEMY
-	return SkillEngine.TARGET_SIDE_ENEMY
+	return SpellRules.manual_target_side(skill)
 
 
-func _manual_target_card_for_skill(skill: Dictionary, target_slot: int) -> CardData:
-	var field := _my_field() if _manual_target_side(skill) == SkillEngine.TARGET_SIDE_ALLY else _their_field()
+func _manual_target_card_for_skill(skill: Dictionary, target_slot: int, target_player: int = 0) -> CardData:
+	var resolved_player := target_player if target_player in [1, 2] else SpellRules.default_target_player(skill, game.current_player)
+	var field := _field_for_player(resolved_player)
 	return field.slots[target_slot] if target_slot >= 0 and target_slot < field.slots.size() else null
 
 # ============================================
@@ -249,7 +245,7 @@ func _on_card_drag_summoned(card_data, origin_ui, slot_index: int):
 		_execute_parasite_attach(hand_index, _view_player(), slot_index)
 		return
 	if card_data.is_spell():
-		_on_card_drag_cast(card_data, origin_ui, hand_index, slot_index)
+		_on_card_drag_cast(card_data, origin_ui, hand_index, slot_index, _view_player())
 		return
 	if NetworkManager.is_online:
 		if NetworkManager.is_authority():
@@ -357,16 +353,27 @@ func _execute_spell_cast(hand_index: int, skill_index: int, target_slot: int, ta
 		elif cast_check.get("reason", "") == SpellRules.REASON_ENEMY_TARGET_TURN_ONE:
 			_show_toast("tip.no_enemy_skill_turn1")
 		return
+	var skill: Dictionary = cast_check.get("skill", {})
+	var resolved_target_player := target_player
+	if cast_check.get("needs_target", false):
+		if resolved_target_player not in [1, 2]:
+			resolved_target_player = SpellRules.default_target_player(skill, game.current_player)
+		var target_field := _field_for_player(resolved_target_player)
+		var landed_target: CardData = target_field.slots[target_slot] if target_slot >= 0 and target_slot < target_field.slots.size() else null
+		if landed_target == null or not landed_target.is_alive() \
+				or not SpellRules.target_player_matches_drop(skill, game.current_player, resolved_target_player):
+			_show_toast("tip.spell_drop_target")
+			return
 	if NetworkManager.is_online:
 		if NetworkManager.is_authority():
-			_host_apply_cast(hand_index, skill_index, target_slot, game.current_player)
+			_host_apply_cast(hand_index, skill_index, target_slot, game.current_player, resolved_target_player)
 		else:
-			_send_remote_intent("activate_skill", {"slot_index": _spell_intent_source(hand_index), "skill_index": skill_index, "target_slot": target_slot})
+			_send_remote_intent("activate_skill", {"slot_index": _spell_intent_source(hand_index), "skill_index": skill_index, "target_slot": target_slot, "target_player": resolved_target_player})
 		return
 	var spell_name: String = hand[hand_index].card_name
-	var target_card := _manual_target_card_for_skill(cast_check.get("skill", {}), target_slot)
+	var target_card := _manual_target_card_for_skill(skill, target_slot, resolved_target_player)
 	_begin_action_broadcast("cast", game.current_player, spell_name, target_card.card_name if target_card != null else "")
-	if game.cast_spell(hand_index, skill_index, target_slot, target_player):
+	if game.cast_spell(hand_index, skill_index, target_slot, resolved_target_player):
 		_finish_action_broadcast()
 		_play_skill_cast_feedback(game.current_player, -1)
 		_refresh_hand_ui()
@@ -383,11 +390,11 @@ func _execute_spell_cast(hand_index: int, skill_index: int, target_slot: int, ta
 
 
 # Drag-to-cast shortcut — delegates to the skill-button handler.
-func _on_card_drag_cast(card_data: CardData, origin_ui, hand_index: int, slot_index: int) -> void:
+func _on_card_drag_cast(card_data: CardData, origin_ui, hand_index: int, slot_index: int, target_player: int) -> void:
 	if card_data == null or not card_data.is_spell():
 		return
 	if slot_index >= 0:
-		_execute_spell_cast(hand_index, SpellRules.CAST_SKILL_INDEX, slot_index)
+		_execute_spell_cast(hand_index, SpellRules.CAST_SKILL_INDEX, slot_index, target_player)
 		return
 	_start_spell_cast_from_hand(hand_index, SpellRules.CAST_SKILL_INDEX)
 
@@ -403,7 +410,7 @@ func _on_card_drag_cast_on_enemy(card_data: CardData, origin_ui, enemy_slot_inde
 		return
 	if not card_data.is_spell():
 		return
-	_execute_spell_cast(hand_index, SpellRules.CAST_SKILL_INDEX, enemy_slot_index)
+	_execute_spell_cast(hand_index, SpellRules.CAST_SKILL_INDEX, enemy_slot_index, _opponent_player())
 
 
 func _execute_parasite_attach(hand_index: int, target_player: int, target_slot: int) -> void:
@@ -793,9 +800,9 @@ func _on_opponent_slot_clicked(index: int):
 				return
 		if NetworkManager.is_online:
 			if NetworkManager.is_authority():
-				_host_apply_cast(cast_hand_index, cast_skill_index, index, game.current_player)
+				_host_apply_cast(cast_hand_index, cast_skill_index, index, game.current_player, _opponent_player())
 			else:
-				_send_remote_intent("activate_skill", {"slot_index": _spell_intent_source(cast_hand_index), "skill_index": cast_skill_index, "target_slot": index})
+				_send_remote_intent("activate_skill", {"slot_index": _spell_intent_source(cast_hand_index), "skill_index": cast_skill_index, "target_slot": index, "target_player": _opponent_player()})
 			cancel_attack()
 			return
 		_execute_spell_cast(cast_hand_index, cast_skill_index, index)

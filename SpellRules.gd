@@ -104,6 +104,44 @@ static func needs_target(skill: Dictionary) -> bool:
 	return _effects_need_target(_effects_for(skill))
 
 
+static func manual_target_side(skill: Dictionary) -> String:
+	return _manual_target_side_in_effects(_effects_for(skill))
+
+
+static func _manual_target_side_in_effects(effects: Array) -> String:
+	for value in effects:
+		if not value is Dictionary:
+			continue
+		var effect: Dictionary = value
+		for branch in ["then_effects", "else_effects"]:
+			var nested = effect.get(branch, [])
+			if nested is Array:
+				var nested_side := _manual_target_side_in_effects(nested)
+				if nested_side != "":
+					return nested_side
+		if str(effect.get("target", "")) in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES]:
+			var side := str(effect.get("target_side", SkillEngine.TARGET_SIDE_ENEMY))
+			return side if side != "" else SkillEngine.TARGET_SIDE_ENEMY
+	return ""
+
+
+static func target_player_matches_drop(skill: Dictionary, caster_player: int, target_player: int) -> bool:
+	if not needs_target(skill):
+		return true
+	if target_player not in [1, 2]:
+		return false
+	match manual_target_side(skill):
+		SkillEngine.TARGET_SIDE_ALLY:
+			return target_player == caster_player
+		SkillEngine.TARGET_SIDE_ENEMY:
+			return target_player != caster_player
+	return true
+
+
+static func default_target_player(skill: Dictionary, caster_player: int) -> int:
+	return caster_player if manual_target_side(skill) == SkillEngine.TARGET_SIDE_ALLY else 3 - caster_player
+
+
 static func _effects_need_target(effects: Array) -> bool:
 	for value in effects:
 		if not value is Dictionary:

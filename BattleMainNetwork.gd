@@ -368,7 +368,7 @@ func _on_rpc_game_intent(kind: String, payload: Dictionary, player: int, command
 			if _is_parasite_intent_source(slot_index):
 				_host_apply_parasite(_parasite_hand_index_from_intent(slot_index), _parasite_target_player_from_intent(slot_index), target_slot, player)
 			elif _is_spell_intent_source(slot_index):
-				_host_apply_cast(_spell_hand_index_from_intent(slot_index), skill_index, target_slot, player)
+				_host_apply_cast(_spell_hand_index_from_intent(slot_index), skill_index, target_slot, player, int(payload.get("target_player", 0)))
 			else:
 				_host_apply_skill(slot_index, skill_index, target_slot, player)
 		"end_turn":
@@ -552,15 +552,29 @@ func _host_apply_parasite(hand_index: int, target_player: int, target_slot: int,
 	_commit_authority_state("attach parasite")
 
 
-func _host_apply_cast(hand_index: int, skill_index: int, target_slot: int, player: int) -> void:
+func _host_apply_cast(hand_index: int, skill_index: int, target_slot: int, player: int, target_player: int = 0) -> void:
 	if match_paused or not NetworkManager.is_authority() or player != game.current_player:
 		return
 	var hand := _hand_for_player(player)
 	var spell_card: CardData = hand[hand_index] if hand_index >= 0 and hand_index < hand.size() else null
+	if spell_card == null:
+		return
+	var cast_check: Dictionary = SpellRules.can_cast(spell_card, _field_for_player(player).get_total_mana(), skill_index, game.turn_number)
+	if not cast_check.get("ok", false):
+		return
+	var resolved_target_player := target_player
+	if cast_check.get("needs_target", false):
+		var skill: Dictionary = cast_check.get("skill", {})
+		if resolved_target_player not in [1, 2]:
+			resolved_target_player = SpellRules.default_target_player(skill, player)
+		var target_field := _field_for_player(resolved_target_player)
+		var target_card: CardData = target_field.slots[target_slot] if target_slot >= 0 and target_slot < target_field.slots.size() else null
+		if target_card == null or not target_card.is_alive() or not SpellRules.target_player_matches_drop(skill, player, resolved_target_player):
+			return
 	_begin_action_broadcast("cast", player, spell_card.card_name if spell_card != null else Locale.t("battle.log.spell_word"), "")
 	var saved = game.current_player
 	game.current_player = player
-	var cast_ok: bool = game.cast_spell(hand_index, skill_index, target_slot)
+	var cast_ok: bool = game.cast_spell(hand_index, skill_index, target_slot, resolved_target_player)
 	game.current_player = saved
 	if not cast_ok:
 		_action_broadcast.clear()

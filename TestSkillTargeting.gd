@@ -175,10 +175,10 @@ func _test_target_single_all_side_uses_selected_player() -> void:
 		{"target": SkillEngine.TARGET_SINGLE, "target_side": SkillEngine.TARGET_SIDE_ALL, "effect": SkillEngine.EFFECT_HEAL, "value": 3}
 	]}]
 	SkillEngine.trigger_single_skill(caster, 0, game.make_skill_context(0, 1, 1))
-	if ally.hp != 2:
-		_fail("target_single all-side should not resolve selected allied slot")
-	if enemy.hp != 5:
-		_fail("target_single all-side should fall back to enemy field for directed targets")
+	if ally.hp != 5:
+		_fail("target_single all-side did not resolve the selected allied slot")
+	if enemy.hp != 2:
+		_fail("target_single all-side ignored the selected battlefield side")
 
 
 func _test_target_single_ally_side_uses_ally_field() -> void:

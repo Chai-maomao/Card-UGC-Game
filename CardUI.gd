@@ -318,6 +318,7 @@ func set_card(card_data: CardData):
 		if cost_label: cost_label.text = ""
 		if gender_label: gender_label.text = ""
 		if hp_label: hp_label.text = ""
+		if hp_label: hp_label.tooltip_text = ""
 		if atk_label: atk_label.text = ""
 		if action_buttons: action_buttons.visible = false
 		self.modulate = Color.WHITE
@@ -333,13 +334,23 @@ func set_card(card_data: CardData):
 	if type_label:
 		type_label.text = _card_type_text(card_data)
 	refresh_cost_display()
+	if hp_label:
+		hp_label.tooltip_text = ""
 	# set_card resets the label color, so the castability tint cache is stale.
 	_last_cost_color = Color(-1.0, -1.0, -1.0, -1.0)
 
-	# HP: show current/max, plus temp HP if any
-	if card_data.temp_hp > 0:
+	# HP: absorbing parasites are shown as a parenthesized secondary health
+	# pool. It mirrors the exact attachment that will intercept the next hit.
+	var absorber: CardData = ParasiteRules.active_damage_absorber(card_data)
+	if card_data.temp_hp > 0 and absorber != null:
+		if hp_label:
+			hp_label.text = Locale.t("card.hp_temp_parasite", [card_data.hp, card_data.max_hp, card_data.temp_hp, absorber.hp])
+	elif card_data.temp_hp > 0:
 		if hp_label:
 			hp_label.text = Locale.t("card.hp_temp", [card_data.hp, card_data.max_hp, card_data.temp_hp])
+	elif absorber != null:
+		if hp_label:
+			hp_label.text = Locale.t("card.hp_parasite", [card_data.hp, card_data.max_hp, absorber.hp])
 	else:
 		if hp_label:
 			hp_label.text = Locale.t("card.hp", [card_data.hp, card_data.max_hp])
@@ -353,6 +364,7 @@ func set_card(card_data: CardData):
 	elif card_data.is_parasite():
 		if hp_label:
 			hp_label.text = Locale.t("card.parasite_hp", [card_data.hp, card_data.max_hp]) if card_data.parasite_absorbs_host_damage() else Locale.t("card.parasite_linked")
+			hp_label.tooltip_text = Locale.t("card.parasite_absorb_help") if card_data.parasite_absorbs_host_damage() else Locale.t("card.parasite_linked_help")
 		if atk_label:
 			atk_label.text = Locale.t("card.parasite_atk", [card_data.atk])
 	else:
@@ -366,6 +378,8 @@ func set_card(card_data: CardData):
 		else:
 			if atk_label:
 				atk_label.text = Locale.t("card.atk", [eff_atk])
+	if absorber != null and hp_label:
+		hp_label.tooltip_text = Locale.t("card.host_parasite_hp_tooltip", [absorber.card_name, absorber.hp, absorber.max_hp])
 
 	_update_status_icons()
 	_update_skill_buttons()
@@ -376,7 +390,7 @@ func set_card(card_data: CardData):
 	else:
 		tooltip_text = _parasite_tooltip(card_data)
 	if action_buttons:
-		action_buttons.visible = _actions_visible and not card_data.is_silenced()
+		action_buttons.visible = _actions_visible and not card_data.is_silenced() and not card_data.is_spell()
 	self.modulate = Color(0.5, 0.5, 0.5) if card_data.is_silenced() else Color.WHITE
 	_auto_hide_if_enemy()
 
@@ -469,7 +483,7 @@ func _update_status_icons() -> void:
 		if not parasite is CardData:
 			continue
 		var p: CardData = parasite
-		parasite_tooltips.append(_format_parasite_passive_tooltip(p))
+		parasite_tooltips.append(_format_parasite_attachment_tooltip(p))
 	if not parasite_tooltips.is_empty():
 		var parasite_symbol := "⛓"
 		if parasite_tooltips.size() > 1:
@@ -563,15 +577,19 @@ func _make_status_badge(symbol: String, color: Color, tooltip: String) -> PanelC
 	return badge
 
 
-func _format_parasite_passive_tooltip(parasite: CardData) -> String:
+func _format_parasite_attachment_tooltip(parasite: CardData) -> String:
 	var mode_text := Locale.t("card.parasite_mode_absorb") if parasite.parasite_absorbs_host_damage() else Locale.t("card.parasite_mode_linked")
 	var lines: Array = [
-		Locale.t("card.parasite_passive_marker", [parasite.card_name]),
+		Locale.t("card.parasite_attachment_marker", [parasite.card_name]),
 		Locale.t("card.parasite_mode_detail", [mode_text]),
 	]
+	var passive_lines: Array = []
 	for skill in parasite.skills:
 		if skill is Dictionary:
-			lines.append(_TextFormatter.format_skill_tooltip(skill))
+			passive_lines.append(_TextFormatter.format_skill_tooltip(skill))
+	if not passive_lines.is_empty():
+		lines.append(Locale.t("card.parasite_passive_marker", [parasite.card_name]))
+		lines.append_array(passive_lines)
 	return "\n\n".join(lines)
 
 
@@ -597,6 +615,16 @@ func _parasite_tooltip(card_data: CardData) -> String:
 	return Locale.t("card.parasite_attached", ["\n".join(parts)])
 
 
+func _parasite_attach_tooltip(parasite: CardData) -> String:
+	var lines: Array = [Locale.t("card.parasite_tooltip")]
+	if parasite != null and not parasite.skills.is_empty():
+		lines.append(Locale.t("card.parasite_passive_marker", [parasite.card_name]))
+		for skill in parasite.skills:
+			if skill is Dictionary:
+				lines.append(_TextFormatter.format_skill_tooltip(skill))
+	return "\n\n".join(lines)
+
+
 func _gender_text(gender: String) -> String:
 	match gender:
 		"male":
@@ -610,16 +638,16 @@ func _update_skill_buttons():
 	if current_card_data == null:
 		return
 	var silenced: bool = current_card_data.is_silenced()
+	if current_card_data.is_spell():
+		for button in [skill1_btn, skill2_btn, skill3_btn]:
+			if button:
+				button.visible = false
+		return
 	if current_card_data != null and current_card_data.is_parasite():
 		if skill1_btn:
-			if _is_action_skill_index(0):
-				var s: Dictionary = current_card_data.skills[0]
-				var sname: String = s.get("skill_name", "")
-				skill1_btn.text = sname if sname != "" else Locale.t("mycards.skill_fallback", [1])
-				skill1_btn.tooltip_text = _TextFormatter.format_skill_tooltip(s)
-				skill1_btn.visible = true
-			else:
-				skill1_btn.visible = false
+			skill1_btn.text = Locale.t("card.parasite_attach")
+			skill1_btn.tooltip_text = _parasite_attach_tooltip(current_card_data)
+			skill1_btn.visible = true
 			skill1_btn.disabled = false
 			skill1_btn.modulate = Color.WHITE
 		if skill2_btn:
@@ -628,14 +656,10 @@ func _update_skill_buttons():
 			skill3_btn.visible = false
 		return
 	if skill1_btn:
-		if current_card_data.is_spell() and current_card_data.skills.size() >= 1 or _is_action_skill_index(0):
-			var s: Dictionary = SpellRules.spell_skill(current_card_data) if current_card_data.is_spell() else current_card_data.skills[0]
+		if _is_action_skill_index(0):
+			var s: Dictionary = current_card_data.skills[0]
 			var sname: String = s.get("skill_name", "")
-			# Spell cards show a generic "Cast" button instead of the skill name.
-			if current_card_data.is_spell():
-				skill1_btn.text = Locale.t("card.spell_cast")
-			else:
-				skill1_btn.text = sname if sname != "" else Locale.t("mycards.skill_fallback", [1])
+			skill1_btn.text = sname if sname != "" else Locale.t("mycards.skill_fallback", [1])
 			skill1_btn.tooltip_text = _TextFormatter.format_skill_tooltip(s)
 			skill1_btn.visible = true
 			_apply_skill_button_state(skill1_btn, s, 0)
@@ -731,7 +755,7 @@ func _auto_hide_if_enemy():
 func set_actions_visible(visible: bool):
 	_actions_visible = visible
 	if action_buttons:
-		action_buttons.visible = visible
+		action_buttons.visible = visible and (current_card_data == null or not current_card_data.is_spell())
 
 
 func set_embedded_in_slot(embedded: bool) -> void:
@@ -749,14 +773,14 @@ func _sync_card_shadow_visibility() -> void:
 
 
 func set_battle_layout_preview(visible: bool) -> void:
-	# Static card displays use the same action composition as battlefield cards:
-	# minions keep ATK beside their skills, while spells keep their Cast button.
+	# Static card displays use the same action composition as battlefield cards.
+	# Spells are drag-to-cast objects and never expose action buttons.
 	# Preview-only blocks dragging; unconnected action signals are inert but the
 	# live buttons retain hover tooltips and the normal battle visual treatment.
 	_preview_only = true
 	_actions_visible = visible
 	if action_buttons:
-		action_buttons.visible = visible
+		action_buttons.visible = visible and (current_card_data == null or not current_card_data.is_spell())
 	if normal_atk_btn:
 		normal_atk_btn.visible = visible and current_card_data != null \
 			and not current_card_data.is_spell() and not current_card_data.is_parasite()
@@ -837,6 +861,8 @@ func _build_drag_preview(grab_position: Vector2) -> Control:
 		preview_card.pivot_offset = Vector2.ZERO
 		preview_card.scale = Vector2.ONE * DRAG_PREVIEW_SCALE
 		preview_card.position = preview_origin
+		if preview_card.current_card_data != null and preview_card.current_card_data.is_spell():
+			preview_card.set_actions_visible(false)
 	, CONNECT_ONE_SHOT)
 
 	var preview_shadow := Panel.new()

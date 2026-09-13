@@ -382,6 +382,7 @@ static func deserialize_card(data: Dictionary) -> CardData:
 	card.field_atk_bonus = int(data.get("field_atk_bonus", 0))
 	card.immune_lethal = bool(data.get("immune_lethal", false))
 	card.zero_cost_until_deploy = bool(data.get("zero_cost_until_deploy", false))
+	ParasiteRules.normalize_parasite_card(card)
 	# Old online snapshots represented every temporary discount as a zero-cost
 	# until-deploy flag. Preserve the discounted state, but migrate it to the
 	# new current-turn lifecycle.
@@ -1417,6 +1418,8 @@ func card_to_draft(card: CardData) -> Dictionary:
 			continue
 		var skill: Dictionary = skill_value
 		if str(skill.get("skill_type", SkillEngine.SKILL_TYPE_NORMAL)) == SkillEngine.SKILL_TYPE_TALENT:
+			if card.is_parasite():
+				continue
 			# Only one talent can occupy the first ability slot. Legacy cards with
 			# duplicates keep the first deterministic value.
 			if draft["talent"].is_empty():
@@ -1443,7 +1446,7 @@ func build_card_from_draft() -> CardData:
 	var is_spell: bool = card_type == "spell"
 	var is_parasite: bool = card_type == "parasite"
 	var skills: Array = []
-	var has_talent: bool = not card_draft.get("talent", {}).is_empty() and not is_spell
+	var has_talent: bool = not card_draft.get("talent", {}).is_empty() and not is_spell and not is_parasite
 	if not has_talent and not card_draft.get("skill1", {}).is_empty():
 		var skill1: Dictionary = card_draft["skill1"].duplicate(true)
 		if is_spell:

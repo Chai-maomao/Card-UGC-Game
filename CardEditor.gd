@@ -457,11 +457,11 @@ func _update_skill_labels():
 	skill3_label.visible = not is_spell and not is_parasite
 	skill3_summary.visible = not is_spell and not is_parasite
 	edit_skill1_btn.visible = true
-	edit_talent_btn.visible = not is_spell
+	edit_talent_btn.visible = not is_spell and not is_parasite
 	# Skill 1 and Talent are two modes of the same first slot. Show only the
 	# active mode's summary so the editor never presents four simultaneous slots.
 	skill1_summary.visible = is_spell or is_parasite or not has_talent
-	talent_summary.visible = not is_spell and has_talent
+	talent_summary.visible = not is_spell and not is_parasite and has_talent
 	edit_skill2_btn.visible = (not is_spell and not is_parasite) or has_skill2
 	edit_skill3_btn.visible = (not is_spell and not is_parasite) or has_skill3
 	_refresh_card_preview()

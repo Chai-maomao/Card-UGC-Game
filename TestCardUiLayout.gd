@@ -53,6 +53,7 @@ func _ready() -> void:
 		push_error("CARD_STATIC_PREVIEW_FAIL display card did not retain the battle ATK layout")
 		get_tree().quit(1)
 		return
+	await _check_spell_and_parasite_affordances()
 	await _check_drag_preview(Vector2(16, 28))
 	await _check_drag_preview(Vector2(94, 132))
 	_check_card_shadow_contexts()
@@ -114,6 +115,62 @@ func _check_buttons(tag: String, expected: int) -> void:
 		push_error("CARD_LAYOUT_FAIL %s type accent too thick: %.1f" % [tag, accent.size.y])
 		get_tree().quit(1)
 		return
+
+
+func _check_spell_and_parasite_affordances() -> void:
+	var spell_ui = preload("res://CardUI.tscn").instantiate()
+	add_child(spell_ui)
+	var spell := CardData.new("落雷", 1, 0, 0, [{"trigger": SkillEngine.TRIGGER_ON_CAST, "effects": [{"target": SkillEngine.TARGET_SINGLE, "target_side": SkillEngine.TARGET_SIDE_ENEMY, "effect": SkillEngine.EFFECT_DAMAGE, "value": 2}]}])
+	spell.card_type = "spell"
+	spell_ui.set_card(spell)
+	spell_ui.is_hand_card = true
+	await get_tree().process_frame
+	if spell_ui.get_node("ActionButtons").is_visible_in_tree() or spell_ui.get_node("ActionButtons/NormalAtkButton").is_visible_in_tree():
+		push_error("CARD_SPELL_DRAG_FAIL hand spell exposed action buttons")
+		get_tree().quit(1)
+		return
+	var holder: Control = spell_ui.call("_build_drag_preview", Vector2(30, 40))
+	add_child(holder)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	var preview: Control = holder.get_node("PreviewCard")
+	if preview.get_node("ActionButtons").is_visible_in_tree() or preview.get_node("ActionButtons/NormalAtkButton").is_visible_in_tree():
+		push_error("CARD_SPELL_DRAG_FAIL spell preview exposed action buttons")
+		get_tree().quit(1)
+		return
+
+	var host_ui = preload("res://CardUI.tscn").instantiate()
+	add_child(host_ui)
+	var host := CardData.new("宿主", 1, 5, 2)
+	var shield := CardData.new("护巢虫", 1, 3, 1, [{"skill_name": "反击", "trigger": SkillEngine.TRIGGER_ON_DAMAGED, "effects": [{"target": SkillEngine.TARGET_SINGLE, "target_side": SkillEngine.TARGET_SIDE_ENEMY, "effect": SkillEngine.EFFECT_DAMAGE, "value": 1}]}])
+	shield.card_type = "parasite"
+	ParasiteRules.attach(shield, host)
+	host_ui.set_card(host)
+	await get_tree().process_frame
+	var hp: Label = host_ui.get_node("HpLabel")
+	if not hp.text.contains("(3)") or not hp.tooltip_text.begins_with("寄生卡的生命值"):
+		push_error("CARD_PARASITE_HP_FAIL host did not expose absorbing parasite HP")
+		get_tree().quit(1)
+		return
+	var attachment_tip: String = host_ui.call("_format_parasite_attachment_tooltip", shield)
+	if attachment_tip.find("承伤方式") < 0 or attachment_tip.find("寄生被动") < attachment_tip.find("承伤方式"):
+		push_error("CARD_PARASITE_HP_FAIL damage mode was presented as part of the passive")
+		get_tree().quit(1)
+		return
+
+	var linked_host := CardData.new("依附宿主", 1, 5, 2)
+	var linked := CardData.new("依附虫", 1, 4, 1)
+	linked.card_type = "parasite"
+	linked.parasite_damage_mode = CardData.PARASITE_DAMAGE_LINKED
+	ParasiteRules.attach(linked, linked_host)
+	host_ui.set_card(linked_host)
+	if (host_ui.get_node("HpLabel") as Label).text.contains("(") or (host_ui.get_node("HpLabel") as Label).tooltip_text != "":
+		push_error("CARD_PARASITE_HP_FAIL linked parasite exposed an absorbing HP pool")
+		get_tree().quit(1)
+		return
+	holder.queue_free()
+	spell_ui.queue_free()
+	host_ui.queue_free()
 
 
 func _check_drag_preview(grab_position: Vector2) -> void:

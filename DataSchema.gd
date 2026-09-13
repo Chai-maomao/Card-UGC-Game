@@ -128,12 +128,20 @@ static func _migrate(kind: String, data: Dictionary, from_version: int) -> Dicti
 static func _normalize_ability_slots(value: Variant) -> void:
 	if value is Dictionary:
 		var dict: Dictionary = value
+		var is_parasite_card := str(dict.get("card_type", "")) == "parasite"
+		if is_parasite_card and dict.has("talent"):
+			dict["talent"] = {}
 		if dict.has("skill1") and dict.has("talent"):
 			var talent = dict.get("talent", {})
 			if talent is Dictionary and not talent.is_empty():
 				dict["skill1"] = {}
 		if dict.has("skills") and dict.get("skills") is Array:
 			var skills: Array = dict.get("skills")
+			if is_parasite_card:
+				for i in range(skills.size() - 1, -1, -1):
+					var parasite_skill = skills[i]
+					if parasite_skill is Dictionary and str(parasite_skill.get("skill_type", SkillRegistry.SKILL_TYPE_NORMAL)) == SkillRegistry.SKILL_TYPE_TALENT:
+						skills.remove_at(i)
 			var talents: Array = []
 			var normal: Array = []
 			for skill in skills:
@@ -228,6 +236,9 @@ static func _validate_card(value: Variant, path: Array, errors: Array, parasite_
 	else:
 		for i in range(mini(skills.size(), UgcSafetyPolicy.MAX_SKILLS_PER_CARD + 1)):
 			_validate_skill(skills[i], path + ["skills", i], errors)
+			if str(card.get("card_type", "minion")) == "parasite" and skills[i] is Dictionary \
+					and str(skills[i].get("skill_type", SkillRegistry.SKILL_TYPE_NORMAL)) == SkillRegistry.SKILL_TYPE_TALENT:
+				errors.append(_issue("parasite_talent", path + ["skills", i, "skill_type"], {}))
 	var safety := UgcSafetyPolicy.validate_serialized_card(card)
 	for entry in safety:
 		var copy: Dictionary = entry.duplicate(true)
@@ -342,6 +353,9 @@ static func _validate_draft_recovery(value: Variant, errors: Array) -> void:
 			errors.append(_issue("skill_type", ["draft", key], {}))
 		elif not skill.is_empty():
 			_validate_skill(skill, ["draft", key], errors)
+			if str(draft.get("card_type", "minion")) == "parasite" and (key == "talent" \
+					or str(skill.get("skill_type", SkillRegistry.SKILL_TYPE_NORMAL)) == SkillRegistry.SKILL_TYPE_TALENT):
+				errors.append(_issue("parasite_talent", ["draft", key], {}))
 
 
 static func _validate_templates(value: Variant, errors: Array) -> void:

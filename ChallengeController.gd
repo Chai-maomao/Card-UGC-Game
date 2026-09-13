@@ -31,6 +31,7 @@ func _reset() -> void:
 	PracticeChallenges.configure(battle.game, challenge_id)
 	battle._pending_hand_entry_ids.clear()
 	battle._pending_feedback_events.clear()
+	battle.reset_hand_ui_from_game_state()
 	battle.battle_finished = false
 	finished = false
 	elapsed = 0.0

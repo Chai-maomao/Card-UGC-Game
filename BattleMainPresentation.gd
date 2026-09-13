@@ -102,6 +102,19 @@ func _refresh_hand_ui():
 	_update_pile_labels()
 
 
+# Challenge retries replace CardData objects wholesale. Force the hand view to
+# discard every cached node so no dragged, modified, or removed card face can
+# survive into the restored puzzle state.
+func reset_hand_ui_from_game_state() -> void:
+	if hand_container == null:
+		return
+	for child in hand_container.get_children():
+		hand_container.remove_child(child)
+		child.queue_free()
+	_pending_hand_entry_ids.clear()
+	_refresh_hand_ui()
+
+
 # Only an actual discount is green. Ordinary affordable cards stay white and
 # unaffordable cards are red; this keeps "green" semantically unambiguous.
 func _apply_hand_castability(card_ui, card_data: CardData) -> void:
