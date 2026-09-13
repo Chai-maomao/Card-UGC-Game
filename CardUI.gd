@@ -131,11 +131,8 @@ func apply_ui_scale(scale_value: float) -> void:
 	for label in [cost_label, hp_label, atk_label]:
 		if label:
 			label.add_theme_font_size_override("font_size", max(9, int(11 * ui_scale)))
-	# Action buttons are compact chips; the font keeps 4 stacked buttons (basic
-	# attack + 3 skills) inside the fixed action column on every platform. CJK
-	# fallback line metrics are ~1.5x the font size on Linux (Noto) vs ~1.4x on
-	# Windows (YaHei), so size 9 keeps the worst-case stack <= 63px with room
-	# for the last chip's hover shadow; compact (0.75x) still floors at 7.
+	# Every visible action button shares the complete lower action area. The
+	# compact font keeps a four-button stack readable across platform fonts.
 	for button in [normal_atk_btn, skill1_btn, skill2_btn, skill3_btn]:
 		if button:
 			button.add_theme_font_size_override("font_size", max(7, int(9 * ui_scale)))
@@ -146,7 +143,6 @@ func apply_ui_scale(scale_value: float) -> void:
 		status_icons.add_theme_constant_override("separation", max(1, int(1 * ui_scale)))
 	_apply_card_visual_style()
 	_update_card_layout_for_type()
-	_resize_action_buttons()
 	_is_layout_applying = false
 
 
@@ -384,7 +380,6 @@ func set_card(card_data: CardData):
 
 	_update_status_icons()
 	_update_skill_buttons()
-	_resize_action_buttons()
 	if card_data.is_spell() and card_data.skills.size() > 0:
 		tooltip_text = _TextFormatter.format_skill_tooltip(SpellRules.spell_skill(card_data))
 	elif card_data.is_parasite():
@@ -633,10 +628,10 @@ func _update_skill_buttons():
 	if current_card_data.is_spell():
 		var spell_skill := SpellRules.spell_skill(current_card_data)
 		if skill1_btn:
-			skill1_btn.text = Locale.t("card.spell_effect_button")
+			skill1_btn.text = Locale.t("card.spell_cast")
 			skill1_btn.tooltip_text = _TextFormatter.format_skill_tooltip(spell_skill)
-			skill1_btn.visible = not spell_skill.is_empty()
-			skill1_btn.disabled = true
+			skill1_btn.visible = true
+			skill1_btn.disabled = false
 			skill1_btn.modulate = Color.WHITE
 		if skill2_btn: skill2_btn.visible = false
 		if skill3_btn: skill3_btn.visible = false
@@ -645,10 +640,11 @@ func _update_skill_buttons():
 		if skill1_btn:
 			var has_passive := current_card_data.skills.size() > 0 and current_card_data.skills[0] is Dictionary
 			var passive: Dictionary = current_card_data.skills[0] if has_passive else {}
-			skill1_btn.text = str(passive.get("skill_name", Locale.t("mycards.skill_fallback", [1])))
+			var passive_name := str(passive.get("skill_name", ""))
+			skill1_btn.text = passive_name if passive_name != "" else Locale.t("mycards.skill_fallback", [1])
 			skill1_btn.tooltip_text = _TextFormatter.format_skill_tooltip(passive) if has_passive else ""
-			skill1_btn.visible = has_passive
-			skill1_btn.disabled = true
+			skill1_btn.visible = true
+			skill1_btn.disabled = false
 			skill1_btn.modulate = Color.WHITE
 		if skill2_btn:
 			skill2_btn.visible = false
@@ -756,7 +752,6 @@ func set_actions_visible(visible: bool):
 	_actions_visible = visible
 	if action_buttons:
 		action_buttons.visible = visible and _has_visible_action_buttons()
-	_resize_action_buttons()
 
 
 func _has_visible_action_buttons() -> bool:
@@ -764,19 +759,6 @@ func _has_visible_action_buttons() -> bool:
 		if button != null and button.visible:
 			return true
 	return false
-
-
-func _resize_action_buttons() -> void:
-	if action_buttons == null:
-		return
-	var count := 0
-	for button in [normal_atk_btn, skill1_btn, skill2_btn, skill3_btn]:
-		if button != null and button.visible:
-			count += 1
-	var chip_height := 14.0
-	var separation := 2.0
-	var height := float(count) * chip_height + float(maxi(0, count - 1)) * separation
-	action_buttons.offset_bottom = (90.0 + height) * ui_scale
 
 
 func set_embedded_in_slot(embedded: bool) -> void:
@@ -794,10 +776,8 @@ func _sync_card_shadow_visibility() -> void:
 
 
 func set_battle_layout_preview(visible: bool) -> void:
-	# Static card displays retain descriptive skill chips. Spell and parasite
-	# chips stay disabled because those cards are played by dragging.
-	# Preview-only blocks dragging; unconnected action signals are inert but the
-	# live buttons retain hover tooltips and the normal battle visual treatment.
+	# Static card displays retain the same full-height action layout. Preview-only
+	# blocks dragging, while its unconnected buttons remain visually consistent.
 	_preview_only = true
 	_actions_visible = visible
 	if action_buttons:
@@ -807,9 +787,8 @@ func set_battle_layout_preview(visible: bool) -> void:
 			and not current_card_data.is_spell() and not current_card_data.is_parasite()
 		normal_atk_btn.disabled = false
 		normal_atk_btn.modulate = Color.WHITE
-	var descriptive_only := current_card_data != null and (current_card_data.is_spell() or current_card_data.is_parasite())
 	if skill1_btn:
-		skill1_btn.disabled = descriptive_only
+		skill1_btn.disabled = false
 		skill1_btn.modulate = Color.WHITE
 	if skill2_btn:
 		skill2_btn.disabled = false
@@ -817,7 +796,6 @@ func set_battle_layout_preview(visible: bool) -> void:
 	if skill3_btn:
 		skill3_btn.disabled = false
 		skill3_btn.modulate = Color.WHITE
-	_resize_action_buttons()
 
 
 # Compatibility for older callers; display cards now deliberately mirror the

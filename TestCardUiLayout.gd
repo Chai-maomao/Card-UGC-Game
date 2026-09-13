@@ -74,7 +74,6 @@ func _ready() -> void:
 
 func _check_buttons(tag: String, expected: int) -> void:
 	var card_rect: Rect2 = _card.get_global_rect()
-	var face_rect: Rect2 = _card.get_node("Background").get_global_rect()
 	var box: Control = _card.get_node("ActionButtons")
 	var box_rect: Rect2 = box.get_global_rect()
 	var visible := 0
@@ -98,15 +97,13 @@ func _check_buttons(tag: String, expected: int) -> void:
 			push_error("CARD_LAYOUT_FAIL %s %s spills past action column %.1f > %.1f" % [tag, btn_path.get_file(), r.end.y, box_rect.end.y])
 			get_tree().quit(1)
 			return
-		# Keep enough room for the card-button hover shadow so its lower edge
-		# remains inside the physical card face.
-		if r.end.y > face_rect.end.y - 4.0 * float(_card.ui_scale) + 0.5:
-			push_error("CARD_LAYOUT_FAIL %s %s lacks bottom shadow clearance %.1f > %.1f" % [tag, btn_path.get_file(), r.end.y, face_rect.end.y])
-			get_tree().quit(1)
-			return
 	print("CARD_LAYOUT %s visible=%d expected=%d box_h=%.1f" % [tag, visible, expected, box_rect.size.y])
 	if visible != expected:
 		push_error("CARD_LAYOUT_FAIL %s expected %d visible buttons, got %d" % [tag, expected, visible])
+		get_tree().quit(1)
+		return
+	if absf(box_rect.size.y - 63.0 * float(_card.ui_scale)) > 0.5:
+		push_error("CARD_LAYOUT_FAIL %s action buttons did not fill the lower card area: %.1f" % [tag, box_rect.size.y])
 		get_tree().quit(1)
 		return
 	var accent: ColorRect = _card.get_node("TypeAccent")
@@ -127,17 +124,19 @@ func _check_spell_and_parasite_affordances() -> void:
 	await get_tree().process_frame
 	var spell_button: Button = spell_ui.get_node("ActionButtons/Skill1Button")
 	if not spell_ui.get_node("ActionButtons").is_visible_in_tree() or spell_ui.get_node("ActionButtons/NormalAtkButton").is_visible_in_tree() \
-			or not spell_button.is_visible_in_tree() or not spell_button.disabled:
-		push_error("CARD_SPELL_DRAG_FAIL spell effect chip was not descriptive-only")
+			or not spell_button.is_visible_in_tree() or spell_button.disabled or spell_button.text != Locale.t("card.spell_cast"):
+		push_error("CARD_SPELL_DRAG_FAIL spell cast button was not shown with its normal visual state")
 		get_tree().quit(1)
 		return
+	_check_single_button_fills_action_area(spell_ui, spell_button, "spell")
 	var holder: Control = spell_ui.call("_build_drag_preview", Vector2(30, 40))
 	add_child(holder)
 	await get_tree().process_frame
 	await get_tree().process_frame
 	var preview: Control = holder.get_node("PreviewCard")
 	var preview_button: Button = preview.get_node("ActionButtons/Skill1Button")
-	if preview.get_node("ActionButtons/NormalAtkButton").is_visible_in_tree() or not preview_button.is_visible_in_tree() or not preview_button.disabled:
+	if preview.get_node("ActionButtons/NormalAtkButton").is_visible_in_tree() or not preview_button.is_visible_in_tree() or preview_button.disabled \
+			or preview_button.text != Locale.t("card.spell_cast"):
 		push_error("CARD_SPELL_DRAG_FAIL spell preview state box=%s normal=%s skill=%s disabled=%s" % [preview.get_node("ActionButtons").is_visible_in_tree(), preview.get_node("ActionButtons/NormalAtkButton").is_visible_in_tree(), preview_button.is_visible_in_tree(), preview_button.disabled])
 		get_tree().quit(1)
 		return
@@ -150,11 +149,22 @@ func _check_spell_and_parasite_affordances() -> void:
 	spell_ui.set_card(shield)
 	await get_tree().process_frame
 	var parasite_button: Button = spell_ui.get_node("ActionButtons/Skill1Button")
-	if not parasite_button.is_visible_in_tree() or not parasite_button.disabled or parasite_button.text != "反击" \
+	if not parasite_button.is_visible_in_tree() or parasite_button.disabled or parasite_button.text != "反击" \
 			or spell_ui.get_node("ActionButtons/NormalAtkButton").is_visible_in_tree():
-		push_error("CARD_PARASITE_SKILL_FAIL passive chip was not descriptive-only")
+		push_error("CARD_PARASITE_SKILL_FAIL passive button was not shown with its normal visual state")
 		get_tree().quit(1)
 		return
+	_check_single_button_fills_action_area(spell_ui, parasite_button, "parasite")
+	var nameless := CardData.new("无名寄生", 1, 2, 0)
+	nameless.card_type = "parasite"
+	spell_ui.set_card(nameless)
+	await get_tree().process_frame
+	if not parasite_button.is_visible_in_tree() or parasite_button.disabled \
+			or parasite_button.text != Locale.t("mycards.skill_fallback", [1]):
+		push_error("CARD_PARASITE_SKILL_FAIL nameless parasite did not show 技能1")
+		get_tree().quit(1)
+		return
+	spell_ui.set_card(shield)
 	ParasiteRules.attach(shield, host)
 	host_ui.set_card(host)
 	await get_tree().process_frame
@@ -182,6 +192,16 @@ func _check_spell_and_parasite_affordances() -> void:
 	holder.queue_free()
 	spell_ui.queue_free()
 	host_ui.queue_free()
+
+
+func _check_single_button_fills_action_area(card_ui: Control, button: Button, tag: String) -> void:
+	var box: Control = card_ui.get_node("ActionButtons")
+	var box_rect := box.get_global_rect()
+	var button_rect := button.get_global_rect()
+	if absf(box_rect.size.y - 63.0 * float(card_ui.ui_scale)) > 0.5 \
+			or absf(button_rect.size.y - box_rect.size.y) > 0.5:
+		push_error("CARD_LAYOUT_FAIL %s button did not fill the lower action area: button=%.1f box=%.1f" % [tag, button_rect.size.y, box_rect.size.y])
+		get_tree().quit(1)
 
 
 func _check_drag_preview(grab_position: Vector2) -> void:
