@@ -24,11 +24,6 @@ static func catalog_title() -> String:
 	return _t("组合挑战", "Skill challenges")
 
 
-static func next_id(id: String) -> String:
-	var index := IDS.find(id)
-	return IDS[index + 1] if index >= 0 and index + 1 < IDS.size() else ""
-
-
 static func difficulty(id: String) -> String:
 	if id in ["resource", "combination", "taunt"]:
 		return _t("基础", "Basic")

@@ -101,7 +101,8 @@ func _message(include_hint: bool) -> String:
 
 func _build_actions(row: HBoxContainer, include_hint: bool) -> void:
 	if finished and PracticeChallenges.succeeded(battle.game, challenge_id):
-		var next_id := PracticeChallenges.next_id(challenge_id)
+		var current_index := PracticeChallenges.IDS.find(challenge_id)
+		var next_id: String = PracticeChallenges.IDS[current_index + 1] if current_index >= 0 and current_index + 1 < PracticeChallenges.IDS.size() else ""
 		if not next_id.is_empty():
 			_add_action(row, "NextChallengeButton", _t("下一关", "Next challenge"), "primary", _start_challenge.bind(next_id))
 		_add_action(row, "ChallengePickerButton", _t("返回关卡选择", "Choose challenge"), "secondary", _return_to_picker)
