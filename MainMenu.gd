@@ -26,6 +26,8 @@ var battle_hub_resume_button: Button
 var _active_resume_button: Button
 
 func _apply_texts() -> void:
+	if subtitle_label:
+		subtitle_label.text = "UGC 卡牌对战" if Locale.language == "zh" else "UGC Card Battle"
 	resume_battle_btn.text = Locale.t("menu.resume")
 	_update_battle_entry_text()
 	tutorial_btn.text = Locale.t("menu.tutorial")
@@ -152,6 +154,8 @@ func _ready():
 		_show_card_type_popup.call_deferred()
 	elif restore_state == "battle_hub":
 		_show_battle_hub_popup.call_deferred()
+	elif restore_state == "challenge_picker":
+		PracticeChallenges.show_picker.call_deferred(self)
 	else:
 		# MainMenu without a restore state is the navigation root.
 		UIMotion.clear_history()
@@ -231,7 +235,7 @@ func _show_battle_hub_popup() -> void:
 		_on_tutorial_pressed("battle_hub")
 	)
 	box.add_child(guide_btn)
-	var challenge_btn := _battle_hub_button("组合挑战 / Skill challenges", "secondary")
+	var challenge_btn := _battle_hub_button(PracticeChallenges.catalog_title(), "secondary")
 	challenge_btn.pressed.connect(func(): PracticeChallenges.show_picker(self))
 	box.add_child(challenge_btn)
 	var back_btn := _battle_hub_button(Locale.t("common.back"), "secondary")

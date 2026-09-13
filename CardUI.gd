@@ -215,6 +215,7 @@ func _ready():
 
 	if normal_atk_btn:
 		normal_atk_btn.pressed.connect(func(): attack_requested.emit())
+		normal_atk_btn.text = Locale.t("card.attack_button")
 		normal_atk_btn.tooltip_text = Locale.t("card.basic_attack")
 	if skill1_btn:
 		skill1_btn.pressed.connect(func(): skill1_requested.emit())

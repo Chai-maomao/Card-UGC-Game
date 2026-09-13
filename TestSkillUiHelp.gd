@@ -243,6 +243,7 @@ func _test_menu_theme() -> void:
 	add_child(dialog)
 	UITheme.apply_dialog(dialog, true)
 	_assert(dialog.get_theme_stylebox("panel").bg_color == UITheme.COLOR_PANEL_DARK, "dialogs must use the shared dark panel")
+	_assert(dialog.get_theme_stylebox("embedded_border").border_color == UITheme.COLOR_GOLD, "dialog window frame must use the shared gold border")
 	_assert(dialog.get_ok_button().get_meta("ui_button_variant", "") == "primary", "dialog confirmation must use primary action style")
 	_assert(dialog.get_cancel_button().get_meta("ui_button_variant", "") == "secondary", "dialog cancellation must use secondary action style")
 	_assert(list.get_theme_stylebox("panel").bg_color == UITheme.COLOR_PANEL_DARK, "dialog lists must use the shared dark surface")

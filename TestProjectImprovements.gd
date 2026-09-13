@@ -56,6 +56,13 @@ func _on_event(_card: CardData, _delta: int, _hp: int) -> void:
 
 func _test_search_and_challenges() -> void:
 	_check(PracticeChallenges.IDS.size() == 7, "challenge catalog must contain seven lessons")
+	_check(PracticeChallenges.next_id("resource") == "combination" and PracticeChallenges.next_id("parasite").is_empty(), "challenge sequence must expose next and final states")
+	var old_language := Locale.language
+	for language in ["zh", "en"]:
+		Locale.language = language
+		for id in PracticeChallenges.IDS:
+			_check(" / " not in PracticeChallenges.title(id), "challenge title must use one language: " + id)
+	Locale.language = old_language
 	var titles := {}
 	for id in PracticeChallenges.IDS:
 		var game := _game()

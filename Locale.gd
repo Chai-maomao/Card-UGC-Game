@@ -314,7 +314,7 @@ const STRINGS := {
 		"tutorial.skill_title": "召唤技能自动结算",
 		"tutorial.skill_body": "卡牌进入战场时，召唤技能会自动发动；需要选择目标时，游戏会立即进入目标选择。",
 		"tutorial.attack_title": "发起普通攻击",
-		"tutorial.attack_body": "点击你创建的卡牌上的 Atk 按钮，进入目标选择。",
+		"tutorial.attack_body": "点击你创建的卡牌上的“攻击”按钮，进入目标选择。",
 		"tutorial.target_title": "选择攻击目标",
 		"tutorial.target_body": "点击上方发光的「训练假人」完成攻击。每张卡每回合通常只能行动一次。",
 		"tutorial.end_title": "结束你的回合",
@@ -377,6 +377,7 @@ const STRINGS := {
 		"card.parasite_passive_marker": "%s 提供的寄生被动",
 		"card.silenced": "[已沉默]",
 		"card.basic_attack": "普通攻击\n对目标造成等同攻击力的伤害",
+		"card.attack_button": "攻击",
 		"card.skill_used": "本回合已经使用过该技能",
 		"card.skill_summon_window": "仅能在召唤该卡的回合使用",
 		"card.skill_action_spent": "该卡已经攻击，主动技能不可再用",
@@ -1080,6 +1081,7 @@ const STRINGS := {
 		"card.parasite_passive_marker": "Parasite passive from %s",
 		"card.silenced": "[SILENCED]",
 		"card.basic_attack": "Basic Attack\nDeal ATK damage to target",
+		"card.attack_button": "Attack",
 		"card.skill_used": "This skill has already been used this turn",
 		"card.skill_summon_window": "Only available on the turn this card was summoned",
 		"card.skill_action_spent": "This card has attacked, so its active skill is unavailable",
@@ -1849,12 +1851,14 @@ func _load_settings() -> void:
 		var saved: String = str(cfg.get_value("locale", "language", DEFAULT_LANGUAGE))
 		if STRINGS.has(saved):
 			language = saved
+	TranslationServer.set_locale("zh_CN" if language == "zh" else "en")
 
 
 func set_language(lang: String) -> void:
 	if not STRINGS.has(lang):
 		return
 	language = lang
+	TranslationServer.set_locale("zh_CN" if language == "zh" else "en")
 	var cfg := ConfigFile.new()
 	cfg.load(SETTINGS_PATH)  # keep any other sections
 	cfg.set_value("locale", "language", language)

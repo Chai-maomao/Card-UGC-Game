@@ -65,7 +65,8 @@ func _show_offer() -> void:
 			shown = ("开启" if rules[key] else "关闭") if Locale.language == "zh" else ("On" if rules[key] else "Off")
 		text += "%s: %s\n" % [Locale.t("battle_config." + key), shown]
 	text += ("\n双方已交换所选牌组；本局使用全部已提交卡牌。\n我方 %d 张，对方 %d 张。确认后等待双方同意。" if Locale.language == "zh" else "\nBoth submitted decks are included in this match.\nYour cards: %d; opponent: %d. Both players must agree.") % [PlayerData.battle_deck.size(), PlayerData.opponent_battle_deck.size()]
-	for pair in [["我方 / You", PlayerData.battle_deck], ["对方 / Opponent", PlayerData.opponent_battle_deck]]:
+	var deck_rows := [["我方", PlayerData.battle_deck], ["对方", PlayerData.opponent_battle_deck]] if Locale.language == "zh" else [["You", PlayerData.battle_deck], ["Opponent", PlayerData.opponent_battle_deck]]
+	for pair in deck_rows:
 		var names: PackedStringArray = []
 		for card in pair[1]: names.append(card.card_name)
 		text += "\n%s: %s" % [pair[0], ", ".join(names)]

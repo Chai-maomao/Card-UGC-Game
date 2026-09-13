@@ -43,6 +43,21 @@ func _ready() -> void:
 	add_child(challenge_battle)
 	await _capture("optimization-challenge-gameplay.png")
 	challenge_battle.queue_free()
+	await _settle()
+	PlayerData.practice_challenge_id = "resource"
+	PlayerData.configure_hotseat_battle(CardDatabase.beginner_deck(), CardDatabase.beginner_deck())
+	var completed_battle := preload("res://Main.tscn").instantiate()
+	add_child(completed_battle)
+	await _settle()
+	var challenge_controller: ChallengeController
+	for child in completed_battle.get_children():
+		if child is ChallengeController:
+			challenge_controller = child
+	completed_battle.game.player_field.slots[0] = CardData.new("巨人", 5, 8, 5)
+	challenge_controller.finished = true
+	challenge_controller._show()
+	await _capture("optimization-challenge-complete.png")
+	completed_battle.queue_free()
 	PlayerData.practice_challenge_id = ""
 	await _settle()
 	PlayerData.card_draft = PlayerData.card_to_draft(card)
@@ -62,10 +77,10 @@ func _ready() -> void:
 			child.queue_free()
 	await _settle()
 	var file_dialog := FileDialog.new()
-	file_dialog.title = "选择卡图 / Select artwork"
 	file_dialog.access = FileDialog.ACCESS_RESOURCES
 	file_dialog.file_mode = FileDialog.FILE_MODE_OPEN_FILE
-	file_dialog.filters = PackedStringArray(["*.png, *.jpg ; Images"])
+	file_dialog.title = "选择卡图" if Locale.language == "zh" else "Select artwork"
+	file_dialog.filters = PackedStringArray(["*.png, *.jpg ; 图片"] if Locale.language == "zh" else ["*.png, *.jpg ; Images"])
 	add_child(file_dialog)
 	UITheme.apply_dialog(file_dialog, true)
 	file_dialog.popup_centered(Vector2i(820, 520))

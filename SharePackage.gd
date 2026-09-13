@@ -47,7 +47,8 @@ static func edit_metadata(parent: Node, package: Dictionary, accepted: Callable)
 	dialog.add_child(box)
 	var inputs := {}
 	var info := metadata(package.get("provenance", {}))
-	for field in [["author", "作者 / Author", 80], ["revision", "内容版本 / Revision", 40], ["source", "原作或来源 / Source", 240]]:
+	var fields := [["author", "作者", 80], ["revision", "内容版本", 40], ["source", "原作或来源", 240]] if Locale.language == "zh" else [["author", "Author", 80], ["revision", "Content revision", 40], ["source", "Original work or source", 240]]
+	for field in fields:
 		var label := Label.new()
 		label.text = field[1]
 		box.add_child(label)

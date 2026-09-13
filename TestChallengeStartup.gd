@@ -26,6 +26,16 @@ func _ready() -> void:
 		_check(_card_names(battle.game.player_hand) == expected_hands[id], "challenge game hand differs after startup: " + id)
 		_check(_visible_hand_names(battle) == expected_hands[id], "challenge UI hand differs after startup: " + id)
 		_check(PracticeChallenges.stage(battle.game, id) == "setup", "challenge state was replaced during startup: " + id)
+		var controller := _challenge_controller(battle)
+		_check(controller != null and controller.popup_layer != null, "challenge must use the in-game popup: " + id)
+		if controller != null:
+			_check(not _tree_contains_window(controller.popup_layer), "challenge popup must not use a native window: " + id)
+		if index == 0 and controller != null:
+			battle.game.player_field.slots[0] = CardData.new("巨人", 5, 8, 5)
+			controller.finished = true
+			controller._show()
+			_check(controller.popup_layer.find_child("NextChallengeButton", true, false) != null, "completed challenge needs a next button")
+			_check(controller.popup_layer.find_child("ChallengePickerButton", true, false) != null, "completed challenge needs a picker button")
 		if index == 0:
 			# Reproduce a queued scene exit after the next selection is already set.
 			PlayerData.practice_challenge_id = PracticeChallenges.IDS[index + 1]
@@ -60,6 +70,22 @@ func _visible_hand_names(battle: Node) -> Array:
 		if card != null:
 			names.append(card.card_name)
 	return names
+
+
+func _challenge_controller(battle: Node) -> ChallengeController:
+	for child in battle.get_children():
+		if child is ChallengeController:
+			return child
+	return null
+
+
+func _tree_contains_window(root: Node) -> bool:
+	if root is Window:
+		return true
+	for child in root.get_children():
+		if _tree_contains_window(child):
+			return true
+	return false
 
 
 func _check(ok: bool, message: String) -> void:

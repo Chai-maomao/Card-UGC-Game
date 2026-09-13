@@ -10,14 +10,23 @@ static func _t(zh: String, en: String) -> String:
 
 static func title(id: String) -> String:
 	match id:
-		"resource": return "资源连锁：蓄势登场 / Resource chain"
-		"combination": return "协同突破 / Combine effects"
-		"taunt": return "突破防线 / Break the line"
-		"cleanse": return "解除压制 / Cleanse"
-		"dispel": return "瓦解守势 / Dispel"
-		"execute": return "处刑线 / Execute threshold"
-		"parasite": return "共生突击 / Parasite assault"
+		"resource": return _t("资源连锁：蓄势登场", "Resource chain")
+		"combination": return _t("协同突破", "Combine effects")
+		"taunt": return _t("突破防线", "Break the line")
+		"cleanse": return _t("解除压制", "Cleanse")
+		"dispel": return _t("瓦解守势", "Dispel")
+		"execute": return _t("处刑线", "Execute threshold")
+		"parasite": return _t("共生突击", "Parasite assault")
 	return id
+
+
+static func catalog_title() -> String:
+	return _t("组合挑战", "Skill challenges")
+
+
+static func next_id(id: String) -> String:
+	var index := IDS.find(id)
+	return IDS[index + 1] if index >= 0 and index + 1 < IDS.size() else ""
 
 
 static func difficulty(id: String) -> String:
@@ -309,35 +318,72 @@ static func _field_card(field: RefCounted, card_name: String) -> CardData:
 
 
 static func show_picker(parent: Node) -> void:
-	var dialog := AcceptDialog.new()
-	dialog.title = _t("组合挑战 · 由浅入深", "Skill challenges · Learning path")
+	var existing := parent.get_node_or_null("ChallengePickerLayer")
+	if existing != null:
+		existing.queue_free()
+	var popup := UITheme.make_popup_layer(parent, 150)
+	var layer: CanvasLayer = popup["layer"]
+	layer.name = "ChallengePickerLayer"
+	var panel := PanelContainer.new()
+	panel.name = "ChallengePicker"
+	panel.anchor_left = 0.5
+	panel.anchor_right = 0.5
+	panel.anchor_top = 0.5
+	panel.anchor_bottom = 0.5
+	panel.offset_left = -330
+	panel.offset_right = 330
+	panel.offset_top = -310
+	panel.offset_bottom = 310
+	layer.add_child(panel)
+	UITheme.apply_popup_frame(panel, "gold")
+	var margin := MarginContainer.new()
+	for side in ["margin_left", "margin_top", "margin_right", "margin_bottom"]:
+		margin.add_theme_constant_override(side, 20)
+	panel.add_child(margin)
+	var root_box := VBoxContainer.new()
+	root_box.add_theme_constant_override("separation", 14)
+	margin.add_child(root_box)
+	var title_label := Label.new()
+	title_label.text = _t("组合挑战 · 由浅入深", "Skill challenges · Learning path")
+	title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UITheme.apply_title(title_label, 24)
+	root_box.add_child(title_label)
 	var scroll := ScrollContainer.new()
-	scroll.custom_minimum_size = Vector2(560, 520)
-	dialog.add_child(scroll)
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	UITheme.apply_scrollbar(scroll.get_v_scroll_bar())
+	root_box.add_child(scroll)
 	var box := VBoxContainer.new()
 	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_theme_constant_override("separation", 8)
 	scroll.add_child(box)
 	for index in range(IDS.size()):
 		var id: String = IDS[index]
 		var button := Button.new()
 		button.text = "%d. %s · %s" % [index + 1, title(id), difficulty(id)]
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		UITheme.apply_button(button, "primary")
+		button.custom_minimum_size.y = 42
+		UITheme.apply_button(button, "primary" if index == 0 else "secondary")
 		button.pressed.connect(func():
+			layer.queue_free()
 			NetworkManager.close_connection()
 			PlayerData.configure_hotseat_battle(CardDatabase.beginner_deck(), CardDatabase.beginner_deck())
 			PlayerData.practice_challenge_id = id
-			parent.get_tree().change_scene_to_file("res://Main.tscn")
+			UIMotion.change_scene("res://Main.tscn")
 		)
 		box.add_child(button)
 		var label := Label.new()
 		label.text = objective(id)
 		label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		label.custom_minimum_size = Vector2(530, 44)
+		UITheme.apply_label(label, true)
 		box.add_child(label)
-	parent.add_child(dialog)
-	dialog.get_ok_button().text = _t("关闭", "Close")
-	dialog.confirmed.connect(dialog.queue_free)
-	dialog.canceled.connect(dialog.queue_free)
-	UITheme.apply_dialog(dialog)
-	dialog.popup_centered(Vector2i(620, 620))
+	var close := Button.new()
+	close.text = _t("关闭", "Close")
+	close.custom_minimum_size = Vector2(120, 40)
+	UITheme.apply_button(close, "secondary")
+	close.pressed.connect(layer.queue_free)
+	var close_row := HBoxContainer.new()
+	close_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	close_row.add_child(close)
+	root_box.add_child(close_row)

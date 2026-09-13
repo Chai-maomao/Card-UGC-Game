@@ -224,9 +224,16 @@ static func apply_scrollbar(bar: ScrollBar) -> void:
 static func apply_dialog(dialog: AcceptDialog, confirm_primary: bool = false) -> void:
 	if dialog == null:
 		return
-	dialog.add_theme_stylebox_override("panel", panel_style(COLOR_PANEL_DARK, COLOR_GOLD_SOFT, 1, 12, COLOR_SHADOW, 8))
+	if dialog is FileDialog:
+		_localize_file_dialog(dialog as FileDialog)
+	var frame := panel_style(COLOR_PANEL_DARK, COLOR_GOLD, 1, 12, COLOR_SHADOW, 8)
+	dialog.add_theme_stylebox_override("embedded_border", frame)
+	dialog.add_theme_stylebox_override("embedded_unfocused_border", frame)
+	dialog.add_theme_stylebox_override("panel", panel_style(COLOR_PANEL_DARK, Color(0.24, 0.29, 0.38), 1, 10))
 	dialog.add_theme_color_override("title_color", Color(1.0, 0.90, 0.62))
 	dialog.add_theme_font_size_override("title_font_size", 18)
+	dialog.add_theme_constant_override("title_height", 38)
+	dialog.add_theme_constant_override("title_outline_size", 1)
 	dialog.add_theme_constant_override("buttons_separation", 10)
 	var message := dialog.get_label()
 	if message != null:
@@ -239,6 +246,40 @@ static func apply_dialog(dialog: AcceptDialog, confirm_primary: bool = false) ->
 		apply_button(cancel, "secondary")
 		cancel.custom_minimum_size = Vector2(104, 36)
 	theme_tree(dialog, true)
+
+
+static func _localize_file_dialog(dialog: FileDialog) -> void:
+	if Locale.language != "zh":
+		return
+	var default_titles := ["Open a File", "Open Files", "Open a Directory", "Open a File or Directory", "Save a File"]
+	if dialog.title in default_titles or dialog.title.is_empty():
+		match dialog.file_mode:
+			FileDialog.FILE_MODE_SAVE_FILE:
+				dialog.title = "保存文件"
+			FileDialog.FILE_MODE_OPEN_FILES:
+				dialog.title = "选择多个文件"
+			FileDialog.FILE_MODE_OPEN_DIR:
+				dialog.title = "选择文件夹"
+			FileDialog.FILE_MODE_OPEN_ANY:
+				dialog.title = "选择文件或文件夹"
+			_:
+				dialog.title = "选择文件"
+	dialog.get_ok_button().text = "保存" if dialog.file_mode == FileDialog.FILE_MODE_SAVE_FILE else "选择"
+	dialog.get_cancel_button().text = "取消"
+	_translate_file_dialog_labels(dialog, {
+		"Path:": "路径：",
+		"Favorites:": "收藏：",
+		"Directories & Files:": "文件夹与文件：",
+		"Recent:": "最近：",
+		"File:": "文件：",
+	})
+
+
+static func _translate_file_dialog_labels(root: Node, replacements: Dictionary) -> void:
+	for child in root.get_children(true):
+		if child is Label and replacements.has(child.text):
+			child.text = replacements[child.text]
+		_translate_file_dialog_labels(child, replacements)
 
 
 static func apply_popup_menu(menu: PopupMenu) -> void:

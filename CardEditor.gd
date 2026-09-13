@@ -112,6 +112,7 @@ func _apply_texts() -> void:
 	save_button.text = Locale.t("editor.update_card") if PlayerData.editing_index >= 0 else Locale.t("editor.save_card")
 	back_button.text = Locale.t("common.back")
 	art_dialog.title = Locale.t("editor.select_art")
+	art_dialog.filters = PackedStringArray(["*.png ; PNG 图片", "*.jpg ; JPEG 图片", "*.jpeg ; JPEG 图片", "*.bmp ; BMP 图片", "*.webp ; WebP 图片"]) if Locale.language == "zh" else PackedStringArray(["*.png ; PNG Image", "*.jpg ; JPEG Image", "*.jpeg ; JPEG Image", "*.bmp ; BMP Image", "*.webp ; WebP Image"])
 	preview_title.text = Locale.t("editor.preview_title")
 
 

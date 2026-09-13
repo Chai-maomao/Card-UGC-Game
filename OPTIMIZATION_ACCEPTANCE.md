@@ -11,6 +11,7 @@ Scope: current working tree, preserving changes already present on 2026-09-09.
 - Architecture: extract cohesive reusable responsibilities behind compatibility entry points and regression coverage.
 - Content/share: accessible practice challenges with success criteria; author/revision/source metadata and import preview; legacy import preserved; online readiness shows rules/deck agreement.
 - Challenge startup: every lesson replaces the shuffled opening state before the first UI refresh; the visible hand matches the lesson after deferred startup work, and an exiting challenge cannot clear a newly selected lesson.
+- Challenge flow: objective and selection popups use the same in-game overlay frame as other battle actions, display only the active language, and offer next-lesson and challenge-selection actions after success.
 - UI consistency: menus, editors, battle overlays, confirmation dialogs, file pickers, lists and scrollbars share one palette and preserve primary/secondary/danger action hierarchy.
 - Final: applicable full regression, rendered probes and reconnect integration pass; visual outputs inspected; diff whitespace checked. Public competitive security and universal statistical balance are outside this scope.
 

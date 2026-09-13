@@ -5,14 +5,20 @@ var battle: Node
 var challenge_id: String
 var finished := false
 var elapsed := 0.0
-var dialog: AcceptDialog
+var popup_layer: CanvasLayer
+var message_label: Label
+
+
+func _t(zh: String, en: String) -> String:
+	return zh if Locale.language == "zh" else en
 
 
 func setup(owner_battle: Node, header: HBoxContainer, selected_challenge_id: String) -> void:
 	battle = owner_battle
 	challenge_id = selected_challenge_id
 	var button := Button.new()
-	button.text = "挑战目标 / Challenge"
+	button.name = "ChallengeObjectiveButton"
+	button.text = _t("挑战目标", "Challenge objective")
 	UITheme.apply_button(button, "secondary")
 	header.add_child(button)
 	button.pressed.connect(_show)
@@ -20,8 +26,7 @@ func setup(owner_battle: Node, header: HBoxContainer, selected_challenge_id: Str
 
 
 func _reset() -> void:
-	if is_instance_valid(dialog):
-		dialog.queue_free()
+	_close_popup()
 	battle.cancel_attack()
 	PracticeChallenges.configure(battle.game, challenge_id)
 	battle._pending_hand_entry_ids.clear()
@@ -34,42 +39,119 @@ func _reset() -> void:
 
 
 func _show(include_hint := false) -> void:
-	if is_instance_valid(dialog):
-		dialog.queue_free()
-	dialog = AcceptDialog.new()
+	_close_popup()
+	var popup := UITheme.make_popup_layer(battle, 150)
+	popup_layer = popup["layer"]
+	popup_layer.name = "ChallengePopupLayer"
+	var panel := PanelContainer.new()
+	panel.name = "ChallengePopup"
+	panel.anchor_left = 0.5
+	panel.anchor_right = 0.5
+	panel.anchor_top = 0.5
+	panel.anchor_bottom = 0.5
+	panel.offset_left = -350
+	panel.offset_right = 350
+	panel.offset_top = -185
+	panel.offset_bottom = 185
+	popup_layer.add_child(panel)
+	UITheme.apply_popup_frame(panel, "gold")
+	var margin := MarginContainer.new()
+	for side in ["margin_left", "margin_top", "margin_right", "margin_bottom"]:
+		margin.add_theme_constant_override(side, 22)
+	panel.add_child(margin)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 14)
+	margin.add_child(box)
 	var number := PracticeChallenges.IDS.find(challenge_id) + 1
-	dialog.title = "%d/%d · %s · %s" % [number, PracticeChallenges.IDS.size(), PracticeChallenges.title(challenge_id), PracticeChallenges.difficulty(challenge_id)]
-	dialog.dialog_text = PracticeChallenges.objective(challenge_id) + "\n\n" + PracticeChallenges.progress(battle.game, challenge_id)
+	var title := Label.new()
+	title.name = "ChallengeTitle"
+	title.text = "%d/%d · %s · %s" % [number, PracticeChallenges.IDS.size(), PracticeChallenges.title(challenge_id), PracticeChallenges.difficulty(challenge_id)]
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UITheme.apply_title(title, 23)
+	box.add_child(title)
+	message_label = Label.new()
+	message_label.name = "ChallengeMessage"
+	message_label.text = _message(include_hint)
+	message_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	message_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+	message_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	message_label.custom_minimum_size = Vector2(0, 180)
+	UITheme.apply_label(message_label)
+	message_label.add_theme_font_size_override("font_size", 16)
+	box.add_child(message_label)
+	var row := HBoxContainer.new()
+	row.name = "ChallengeActions"
+	row.alignment = BoxContainer.ALIGNMENT_CENTER
+	row.add_theme_constant_override("separation", 12)
+	box.add_child(row)
+	_build_actions(row, include_hint)
+
+
+func _message(include_hint: bool) -> String:
+	var text := PracticeChallenges.objective(challenge_id) + "\n\n" + PracticeChallenges.progress(battle.game, challenge_id)
 	if include_hint:
-		dialog.dialog_text += "\n\n" + PracticeChallenges.hint(challenge_id)
+		text += "\n\n" + PracticeChallenges.hint(challenge_id)
 	if finished:
 		if PracticeChallenges.succeeded(battle.game, challenge_id):
-			dialog.dialog_text += "\n\n" + ("挑战成功！" if Locale.language == "zh" else "Challenge complete!") + "\n" + PracticeChallenges.lesson(challenge_id)
+			text += "\n\n" + _t("挑战成功！", "Challenge complete!") + "\n" + PracticeChallenges.lesson(challenge_id)
 		else:
-			dialog.dialog_text += "\n\n" + PracticeChallenges.failure_reason(battle.game, challenge_id)
-	dialog.get_ok_button().text = "关闭" if Locale.language == "zh" else "Close"
-	var retry := dialog.add_button("重新挑战" if Locale.language == "zh" else "Retry", false, "retry")
-	UITheme.apply_button(retry, "secondary")
-	if not finished:
-		var hint_button := dialog.add_button("查看提示" if Locale.language == "zh" else "Hint", false, "hint")
-		UITheme.apply_button(hint_button, "secondary")
-	dialog.custom_action.connect(func(action: String):
-		if action == "retry":
-			_reset()
-		elif action == "hint":
-			dialog.dialog_text = PracticeChallenges.objective(challenge_id) + "\n\n" + PracticeChallenges.progress(battle.game, challenge_id) + "\n\n" + PracticeChallenges.hint(challenge_id)
-	)
-	dialog.confirmed.connect(dialog.queue_free)
-	dialog.canceled.connect(dialog.queue_free)
-	add_child(dialog)
-	UITheme.apply_dialog(dialog)
-	dialog.popup_centered(Vector2i(640, 240))
+			text += "\n\n" + PracticeChallenges.failure_reason(battle.game, challenge_id)
+	return text
+
+
+func _build_actions(row: HBoxContainer, include_hint: bool) -> void:
+	if finished and PracticeChallenges.succeeded(battle.game, challenge_id):
+		var next_id := PracticeChallenges.next_id(challenge_id)
+		if not next_id.is_empty():
+			_add_action(row, "NextChallengeButton", _t("下一关", "Next challenge"), "primary", _start_challenge.bind(next_id))
+		_add_action(row, "ChallengePickerButton", _t("返回关卡选择", "Choose challenge"), "secondary", _return_to_picker)
+	else:
+		if not include_hint and not finished:
+			_add_action(row, "ChallengeHintButton", _t("查看提示", "Show hint"), "secondary", _show.bind(true))
+		_add_action(row, "ChallengeRetryButton", _t("重新挑战", "Retry"), "secondary", _reset)
+		if finished:
+			_add_action(row, "ChallengePickerButton", _t("返回关卡选择", "Choose challenge"), "secondary", _return_to_picker)
+	_add_action(row, "ChallengeCloseButton", _t("关闭", "Close"), "secondary", _close_popup)
+
+
+func _add_action(row: HBoxContainer, node_name: String, text_value: String, variant: String, callback: Callable) -> void:
+	var button := Button.new()
+	button.name = node_name
+	button.text = text_value
+	button.custom_minimum_size = Vector2(120, 40)
+	UITheme.apply_button(button, variant)
+	button.pressed.connect(callback)
+	row.add_child(button)
+
+
+func _start_challenge(id: String) -> void:
+	_close_popup()
+	NetworkManager.close_connection()
+	PlayerData.configure_hotseat_battle(CardDatabase.beginner_deck(), CardDatabase.beginner_deck())
+	PlayerData.practice_challenge_id = id
+	UIMotion.replace_scene("res://Main.tscn")
+
+
+func _return_to_picker() -> void:
+	_close_popup()
+	NetworkManager.close_connection()
+	PlayerData.practice_challenge_id = ""
+	UIMotion.replace_scene("res://MainMenu.tscn", true, "challenge_picker")
+
+
+func _close_popup() -> void:
+	if is_instance_valid(popup_layer):
+		popup_layer.queue_free()
+	popup_layer = null
+	message_label = null
 
 
 func _process(delta: float) -> void:
-	if battle == null or finished: return
+	if battle == null or finished:
+		return
 	elapsed += delta
-	if elapsed < 0.25: return
+	if elapsed < 0.25:
+		return
 	elapsed = 0
 	if PracticeChallenges.succeeded(battle.game, challenge_id) or PracticeChallenges.failed(battle.game, challenge_id):
 		finished = true
