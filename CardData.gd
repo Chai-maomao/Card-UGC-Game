@@ -3,6 +3,7 @@ extends RefCounted
 
 const PARASITE_DAMAGE_ABSORB := "absorb"
 const PARASITE_DAMAGE_LINKED := "linked"
+const _GameplayLog = preload("res://GameplayLog.gd")
 
 # ============================================
 # Card data model
@@ -193,7 +194,7 @@ func take_damage(amount: int) -> int:
 	var reduction_pct := get_damage_reduction()
 	if reduction_pct > 0:
 		var reduced := int(floor(float(amount) * (1.0 - float(reduction_pct) / 100.0)))
-		print("  [DmgCut] %s reduces %d -> %d (%d%%)" % [card_name, amount, reduced, reduction_pct])
+		_GameplayLog.write("  [DmgCut] %s reduces %d -> %d (%d%%)" % [card_name, amount, reduced, reduction_pct])
 		amount = reduced
 
 	return take_damage_without_reduction(amount)
@@ -204,7 +205,7 @@ func take_damage_without_reduction(amount: int) -> int:
 		return 0
 	var talent_cap := single_damage_cap()
 	if talent_cap > 0 and amount > talent_cap:
-		print("  [Talent] %s caps single damage %d -> %d" % [card_name, amount, talent_cap])
+		_GameplayLog.write("  [Talent] %s caps single damage %d -> %d" % [card_name, amount, talent_cap])
 		amount = talent_cap
 
 	var hp_before := hp
@@ -214,7 +215,7 @@ func take_damage_without_reduction(amount: int) -> int:
 		var blocked: int = min(remaining, temp_hp)
 		temp_hp -= blocked
 		remaining -= blocked
-		print("  [TempHP] %s absorbs %d, temp left: %d" % [card_name, blocked, temp_hp])
+		_GameplayLog.write("  [TempHP] %s absorbs %d, temp left: %d" % [card_name, blocked, temp_hp])
 
 	if remaining > 0:
 		hp = max(0, hp - remaining)
@@ -223,7 +224,7 @@ func take_damage_without_reduction(amount: int) -> int:
 	if hp <= 0 and immune_lethal:
 		hp = 1
 		immune_lethal = false
-		print("  [Immune] %s survived lethal damage with 1 HP!" % card_name)
+		_GameplayLog.write("  [Immune] %s survived lethal damage with 1 HP!" % card_name)
 		# Check immunity from buff too
 		for eff in status_effects:
 			if eff.get("buff_id", "") == SkillEngine.BUFF_IMMUNE_LETHAL and eff.get("value", 0) > 0:
@@ -342,7 +343,7 @@ func consume_stun() -> bool:
 	for i in range(status_effects.size()):
 		if status_effects[i].get("buff_id", "") == SkillEngine.BUFF_STUN and status_effects[i].get("value", 0) > 0:
 			status_effects.remove_at(i)
-			print("  [Stun] %s is stunned and skips its turn" % card_name)
+			_GameplayLog.write("  [Stun] %s is stunned and skips its turn" % card_name)
 			return true
 	return false
 
@@ -355,7 +356,7 @@ func apply_buff(buff_id: String, value: int, duration: int, owner: int = 0) -> v
 	# Temp HP is not a buff — just add to scalar
 
 	status_effects.append({"buff_id": buff_id, "value": value, "duration": duration, "owner": owner})
-	print("  [Buff] %s gained %s: v=%d d=%d (owner P%d)" % [card_name, buff_id, value, duration, owner])
+	_GameplayLog.write("  [Buff] %s gained %s: v=%d d=%d (owner P%d)" % [card_name, buff_id, value, duration, owner])
 
 
 func process_mana_refund(owner_player: int) -> int:
@@ -370,7 +371,7 @@ func process_mana_refund(owner_player: int) -> int:
 		var refund_val: int = eff.get("value", 0)
 		if refund_val > 0:
 			total += refund_val
-			print("  [Mana+] %s refunds %d mana" % [card_name, refund_val])
+			_GameplayLog.write("  [Mana+] %s refunds %d mana" % [card_name, refund_val])
 		eff["duration"] = eff.get("duration", 0) - 1
 		if eff["duration"] <= 0 or refund_val <= 0:
 			to_remove.append(i)
@@ -378,7 +379,7 @@ func process_mana_refund(owner_player: int) -> int:
 	for j in range(to_remove.size() - 1, -1, -1):
 		var idx: int = to_remove[j]
 		var expired: Dictionary = status_effects[idx]
-		print("  [Buff] %s's %s expired" % [card_name, expired.get("buff_id", "")])
+		_GameplayLog.write("  [Buff] %s's %s expired" % [card_name, expired.get("buff_id", "")])
 		status_effects.remove_at(idx)
 
 	return total
@@ -399,12 +400,12 @@ func tick_buffs(owner_player: int) -> void:
 			var regen_val: int = eff.get("value", 0)
 			if regen_val > 0 and hp > 0:
 				heal(regen_val)
-				print("  [Regen] %s heals %d (HP: %d)" % [card_name, regen_val, hp])
+				_GameplayLog.write("  [Regen] %s heals %d (HP: %d)" % [card_name, regen_val, hp])
 		elif buff_id == SkillEngine.BUFF_POISON:
 			var poison_val: int = eff.get("value", 0)
 			if poison_val > 0 and hp > 0:
 				hp = max(0, hp - poison_val)
-				print("  [Poison] %s takes %d poison (HP: %d)" % [card_name, poison_val, hp])
+				_GameplayLog.write("  [Poison] %s takes %d poison (HP: %d)" % [card_name, poison_val, hp])
 
 		eff["duration"] = eff.get("duration", 0) - 1
 		if eff["duration"] <= 0:
@@ -413,7 +414,7 @@ func tick_buffs(owner_player: int) -> void:
 	for j in range(to_remove.size() - 1, -1, -1):
 		var idx: int = to_remove[j]
 		var expired: Dictionary = status_effects[idx]
-		print("  [Buff] %s's %s expired" % [card_name, expired.get("buff_id", "")])
+		_GameplayLog.write("  [Buff] %s's %s expired" % [card_name, expired.get("buff_id", "")])
 		status_effects.remove_at(idx)
 
 

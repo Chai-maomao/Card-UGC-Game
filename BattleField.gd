@@ -1,6 +1,8 @@
 class_name BattleField
 extends RefCounted
 
+const _GameplayLog = preload("res://GameplayLog.gd")
+
 # ============================================
 # 单侧战场 — 管理一方的血量、圣水、5个格子
 # ============================================
@@ -33,7 +35,7 @@ func _init(_owner_name: String = "", _player_hp: int = 30, _max_mana: int = 10):
 
 func _log(message: Variant) -> void:
 	if not quiet:
-		print(message)
+		_GameplayLog.write(message)
 
 
 # ========== 圣水系统 ==========

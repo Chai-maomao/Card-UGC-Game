@@ -1,6 +1,8 @@
 class_name ParasiteRules
 extends RefCounted
 
+const _GameplayLog = preload("res://GameplayLog.gd")
+
 const REASON_OK := "ok"
 const REASON_NOT_PARASITE := "not_parasite"
 const REASON_NO_MANA := "no_mana"
@@ -102,7 +104,7 @@ static func absorb_damage_detail(target: CardData, amount: int, discard_pile: Ar
 		var absorbed: int = before_hp - parasite.hp
 		var destroyed := parasite.hp <= 0
 		result = {"remaining": 0, "absorbed": absorbed, "parasite": parasite, "destroyed": destroyed}
-		print("  [Parasite] %s blocks %d for %s (HP: %d/%d)" % [parasite.card_name, amount, target.card_name, parasite.hp, parasite.max_hp])
+		_GameplayLog.write("  [Parasite] %s blocks %d for %s (HP: %d/%d)" % [parasite.card_name, amount, target.card_name, parasite.hp, parasite.max_hp])
 		if destroyed:
 			target.parasite_cards.remove_at(i)
 			parasite.reset_to_base()

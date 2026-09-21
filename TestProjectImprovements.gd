@@ -1,5 +1,7 @@
 extends Node
 
+const GameplayLogging = preload("res://GameplayLog.gd")
+
 var failures: Array[String] = []
 var event_count := 0
 
@@ -9,6 +11,7 @@ func _ready() -> void:
 	_test_search_and_challenges()
 	_test_trace()
 	_test_sharing_and_rules()
+	_test_gameplay_logging()
 	if failures.is_empty():
 		print("TEST_PROJECT_IMPROVEMENTS_OK")
 		get_tree().quit(0)
@@ -19,6 +22,13 @@ func _ready() -> void:
 
 func _check(ok: bool, message: String) -> void:
 	if not ok: failures.append(message)
+
+
+func _test_gameplay_logging() -> void:
+	_check(not GameplayLogging.is_enabled(), "high-frequency gameplay logging must be disabled by default")
+	for path in ["res://SkillEngine.gd", "res://SkillEffectApplier.gd", "res://CardData.gd", "res://ParasiteRules.gd"]:
+		var file := FileAccess.open(path, FileAccess.READ)
+		_check(file != null and not file.get_as_text().contains("\n\tprint("), "high-frequency gameplay print bypasses the log gate: " + path)
 
 
 func _score(effects: Array, extra: Dictionary = {}) -> float:

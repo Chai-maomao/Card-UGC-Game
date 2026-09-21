@@ -6,6 +6,7 @@ const _EffectApplier = preload("res://SkillEffectApplier.gd")
 const _TextFormatter = preload("res://SkillTextFormatter.gd")
 const _UgcSafety = preload("res://UgcSafety.gd")
 const _GameplayRng = preload("res://GameplayRng.gd")
+const _GameplayLog = preload("res://GameplayLog.gd")
 
 const MAX_HAND_SIZE = 6
 
@@ -39,7 +40,7 @@ static func _check_max_uses(card: CardData, skill: Dictionary, skill_index: int)
 	if has_uses_remaining(card, skill, skill_index):
 		return true
 	if max_uses > 0:
-		print("[SkillEngine] %s: max_uses (%d) reached for '%s'" % [card.card_name, max_uses, skill.get("skill_name", "???")])
+		_GameplayLog.write("[SkillEngine] %s: max_uses (%d) reached for '%s'" % [card.card_name, max_uses, skill.get("skill_name", "???")])
 	return false
 
 
@@ -317,7 +318,7 @@ static func _execute_effects(effects: Array, source_card: CardData, context: Dic
 		if str(eff_dict.get("effect", "")) == EFFECT_STOP:
 			# Stop block: halts the remaining effects of the current block
 			# (top-level skill, or the current then/else branch).
-			print("[SkillEngine] %s: stop — halting current block" % skill_name)
+			_GameplayLog.write("[SkillEngine] %s: stop — halting current block" % skill_name)
 			return
 		if not _passes_effect_roll(eff_dict, source_card, context):
 			_trace(context, source_card, "probability_failed")
@@ -344,7 +345,7 @@ static func _execute_effects(effects: Array, source_card: CardData, context: Dic
 			var value: int = _resolve_value(eff_dict, source_card, source_card, context)
 			if bool(_ensure_budget(context).get("aborted", false)):
 				return
-			print("[SkillEngine] %s: %s -> %s x%d (no battlefield target)" % [skill_name, effect_str, target_str, value])
+			_GameplayLog.write("[SkillEngine] %s: %s -> %s x%d (no battlefield target)" % [skill_name, effect_str, target_str, value])
 			_trace(context, source_card, "resolved", {"effect": effect_str, "target": source_card.card_name, "value": value})
 			_EffectApplier.apply_effect(effect_str, source_card, value, eff_dict, effect_context)
 			EventBus.skill_effect_resolved.emit(source_card, effect_str, source_card, depth)
@@ -382,7 +383,7 @@ static func _execute_effects(effects: Array, source_card: CardData, context: Dic
 			if bool(_ensure_budget(context).get("aborted", false)):
 				return
 			var target_name: String = target_card.owner_name if target_card is BattleField else target_card.card_name
-			print("[SkillEngine] %s: %s -> %s x%d on %s" % [skill_name, effect_str, target_str, value, target_name])
+			_GameplayLog.write("[SkillEngine] %s: %s -> %s x%d on %s" % [skill_name, effect_str, target_str, value, target_name])
 			_trace(context, source_card, "resolved", {"effect": effect_str, "target": target_name, "value": value})
 			_EffectApplier.apply_effect(effect_str, target_card, value, eff_dict, effect_context)
 			applied_any = true
@@ -404,7 +405,7 @@ static func _blocked_enemy_effect_on_first_turn(effect_id: String, effect: Dicti
 static func _execute_if_else(eff: Dictionary, source_card: CardData, context: Dictionary, skill_name: String, depth: int) -> void:
 	var cond := _condition_dict(eff)
 	var take_then: bool = _passes_effect_condition(cond, source_card, source_card, context)
-	print("[SkillEngine] %s: if -> %s" % [skill_name, "then" if take_then else "else"])
+	_GameplayLog.write("[SkillEngine] %s: if -> %s" % [skill_name, "then" if take_then else "else"])
 	_trace(context, source_card, "condition", {"passed": take_then})
 	context = context.duplicate()
 	context["trace_path"] = (context.get("trace_path", []) as Array) + ["then_effects" if take_then else "else_effects"]
@@ -420,7 +421,7 @@ static func _execute_if_else(eff: Dictionary, source_card: CardData, context: Di
 # iterations still run.
 static func _execute_repeat(eff: Dictionary, source_card: CardData, context: Dictionary, skill_name: String, depth: int) -> void:
 	var times: int = mini(_repeat_count(eff, source_card, context), _UgcSafety.MAX_REPEAT_COUNT)
-	print("[SkillEngine] %s: repeat x%d" % [skill_name, times])
+	_GameplayLog.write("[SkillEngine] %s: repeat x%d" % [skill_name, times])
 	_trace(context, source_card, "repeat", {"count": times})
 	context = context.duplicate()
 	context["trace_path"] = (context.get("trace_path", []) as Array) + ["then_effects"]
@@ -522,9 +523,9 @@ static func _passes_skill_roll(skill: Dictionary, source_card: CardData, context
 	var misfortune: int = source_card.get_misfortune()
 	if misfortune > 0:
 		prob = max(0, prob - misfortune)
-		print("[SkillEngine] %s: misfortune -%d%% (eff: %d%%)" % [skill.get("skill_name", "???"), misfortune, prob])
+		_GameplayLog.write("[SkillEngine] %s: misfortune -%d%% (eff: %d%%)" % [skill.get("skill_name", "???"), misfortune, prob])
 	if prob < 100 and _roll_percent(context) > float(prob):
-		print("[SkillEngine] %s: %d%% roll failed — skipped" % [skill.get("skill_name", "???"), prob])
+		_GameplayLog.write("[SkillEngine] %s: %d%% roll failed — skipped" % [skill.get("skill_name", "???"), prob])
 		EventBus.skill_roll_failed.emit(source_card, skill.get("skill_name", "技能"), misfortune, prob)
 		return false
 	return true
@@ -536,7 +537,7 @@ static func _passes_effect_roll(eff: Dictionary, source_card: CardData, context:
 	if misfortune > 0:
 		prob = max(0, prob - misfortune)
 	if prob < 100 and _roll_percent(context) > float(prob):
-		print("[SkillEngine] Effect skipped: %d%% roll failed" % prob)
+		_GameplayLog.write("[SkillEngine] Effect skipped: %d%% roll failed" % prob)
 		EventBus.skill_roll_failed.emit(source_card, source_card.card_name if source_card != null else "效果", misfortune, prob)
 		return false
 	return true

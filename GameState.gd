@@ -4,6 +4,7 @@ const SpellRules = preload("res://SpellRules.gd")
 const ParasiteRules = preload("res://ParasiteRules.gd")
 const GameplayRandom = preload("res://GameplayRng.gd")
 const Schema = preload("res://DataSchema.gd")
+const _GameplayLog = preload("res://GameplayLog.gd")
 
 var player_field: BattleField
 var player2_field: BattleField
@@ -44,7 +45,7 @@ func _new_stats() -> Dictionary:
 
 func _log(message: Variant) -> void:
 	if not quiet:
-		print(message)
+		_GameplayLog.write(message)
 
 
 func get_stats(player: int) -> Dictionary:
