@@ -130,10 +130,10 @@ static func to_csv(result: Dictionary) -> String:
 		lines.append("rounds,%s,%s" % [key, result["rounds"][key]])
 	lines.append("summary,mana_utilization,%s" % result.get("mana_utilization", 0.0))
 	lines.append("summary,stability_failures,%s" % result.get("stability_failures", 0))
-	lines.append("card,name,summons,skills,attacks,damage,healing")
+	lines.append("card,name,summons,casts,attaches,skills,attacks,damage,healing")
 	for card_name in result.get("card_metrics", {}).keys():
 		var metric: Dictionary = result["card_metrics"][card_name]
-		lines.append("card,%s,%d,%d,%d,%d,%d" % [card_name, metric.get("summons", 0), metric.get("skills", 0), metric.get("attacks", 0), metric.get("damage", 0), metric.get("healing", 0)])
+		lines.append("card,%s,%d,%d,%d,%d,%d,%d,%d" % [card_name, metric.get("summons", 0), metric.get("casts", 0), metric.get("attaches", 0), metric.get("skills", 0), metric.get("attacks", 0), metric.get("damage", 0), metric.get("healing", 0)])
 	return "\n".join(lines)
 
 
@@ -187,7 +187,7 @@ static func _record_action_metrics(metrics: Dictionary, game: RefCounted, action
 	if name.is_empty():
 		return
 	if not metrics.has(name):
-		metrics[name] = {"summons": 0, "skills": 0, "attacks": 0, "casts": 0, "damage": 0, "healing": 0}
+		metrics[name] = {"summons": 0, "skills": 0, "attacks": 0, "casts": 0, "attaches": 0, "damage": 0, "healing": 0}
 	var metric: Dictionary = metrics[name]
 	match str(action.get("type", "")):
 		"summon": metric["summons"] += 1
@@ -195,6 +195,7 @@ static func _record_action_metrics(metrics: Dictionary, game: RefCounted, action
 		"cast":
 			metric["casts"] += 1
 			metric["skills"] += 1
+		"attach": metric["attaches"] += 1
 		"attack": metric["attacks"] += 1
 	var enemy_damage := maxi(0, int(before.get("enemy_hp", 0)) - _total_hp(game.opponent_field()))
 	var ally_healing := maxi(0, _total_hp(game.active_field()) - int(before.get("ally_hp", 0)))
@@ -213,7 +214,7 @@ static func _total_hp(field: BattleField) -> int:
 static func _merge_card_metrics(target: Dictionary, source: Dictionary) -> void:
 	for card_name in source.keys():
 		if not target.has(card_name):
-			target[card_name] = {"summons": 0, "skills": 0, "attacks": 0, "casts": 0, "damage": 0, "healing": 0}
+			target[card_name] = {"summons": 0, "skills": 0, "attacks": 0, "casts": 0, "attaches": 0, "damage": 0, "healing": 0}
 		for key in target[card_name].keys():
 			target[card_name][key] += int(source[card_name].get(key, 0))
 

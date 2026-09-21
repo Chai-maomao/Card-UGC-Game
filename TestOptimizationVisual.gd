@@ -1,5 +1,7 @@
 extends Node
 
+const Simulation = preload("res://CardBalanceSimulation.gd")
+
 
 func _ready() -> void:
 	if DisplayServer.get_name() == "headless":
@@ -68,6 +70,25 @@ func _ready() -> void:
 	var editor_scroll := editor.get_node("Panel/MarginContainer/ScrollContainer") as ScrollContainer
 	editor_scroll.scroll_vertical = 10000
 	await _capture("optimization-balance.png")
+	var simulation_popup: CanvasLayer = editor._open_balance_simulation(card, false)
+	for index in range(Simulation.POOL_IDS.size()):
+		editor._add_balance_simulation_result({
+			"pool": Simulation.POOL_IDS[index],
+			"games": 16,
+			"average_rounds": 9.5 + index,
+			"draw_rate": 0.125 if index != 1 else 0.3125,
+			"first_player_win_rate": 0.54,
+			"mana_utilization": 0.82,
+			"stability_failures": 0,
+			"candidate": {"plays_per_game": 0.75, "actions_per_game": 0.44, "damage_per_game": 1.8, "healing_per_game": 0.3},
+			"warnings": [] if index != 1 else ["high_draw_rate"],
+		})
+	var simulation_panel: Panel = simulation_popup.get_node("CardSimulationPanel")
+	(simulation_panel.find_child("SimulationStatus", true, false) as Label).text = Locale.t("simulation.complete", [48])
+	(simulation_panel.find_child("SimulationProgress", true, false) as ProgressBar).value = 48
+	(simulation_panel.find_child("SimulationCancelButton", true, false) as Button).text = Locale.t("common.close")
+	await _capture("optimization-simulation.png")
+	simulation_popup.queue_free()
 	editor.queue_free()
 	await _settle()
 	SharePackage.edit_metadata(self, SharePackage.build([]), func(_data): pass)

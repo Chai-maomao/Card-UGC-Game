@@ -9,6 +9,8 @@ const UITheme = preload("res://UITheme.gd")
 const _TargetResolver = preload("res://SkillTargetResolver.gd")
 const _TextFormatter = preload("res://SkillTextFormatter.gd")
 const _BalanceEvaluator = preload("res://BalanceEvaluator.gd")
+const _BalanceSimulation = preload("res://CardBalanceSimulation.gd")
+const _BattleSimulator = preload("res://HeadlessBattleSimulator.gd")
 const _UsabilityAnalyzer = preload("res://CardUsabilityAnalyzer.gd")
 const _UgcSafety = preload("res://UgcSafety.gd")
 const _CardTutorialController = preload("res://CardEditorTutorialController.gd")
@@ -20,6 +22,9 @@ var pending_save_index: int = 0
 var pending_saved_card: CardData = null
 var pending_save_popup_layer: CanvasLayer = null
 var card_tutorial_controller
+var _simulation_generation := 0
+var _simulation_popup_layer: CanvasLayer = null
+var _simulation_ui := {}
 
 @onready var title_label = $Panel/MarginContainer/ScrollContainer/VBoxContainer/TitleLabel
 @onready var template_button = $Panel/MarginContainer/ScrollContainer/VBoxContainer/TemplateButton
@@ -41,6 +46,7 @@ var card_tutorial_controller
 @onready var balance_label = $Panel/MarginContainer/ScrollContainer/VBoxContainer/BalanceLabel
 @onready var balance_summary = $Panel/MarginContainer/ScrollContainer/VBoxContainer/BalanceSummary
 @onready var usability_summary = $Panel/MarginContainer/ScrollContainer/VBoxContainer/UsabilitySummary
+@onready var simulation_button = $Panel/MarginContainer/ScrollContainer/VBoxContainer/SimulationButton
 @onready var art_path_label = $Panel/MarginContainer/ScrollContainer/VBoxContainer/ArtRow/ArtPathLabel
 @onready var art_dialog = $ArtFileDialog
 @onready var card_preview_panel = $CardPreviewPanel
@@ -93,6 +99,8 @@ func _apply_texts() -> void:
 		hp_input.editable = true
 		atk_input.editable = true
 	balance_label.text = Locale.t("balance.title")
+	simulation_button.text = Locale.t("simulation.button")
+	simulation_button.tooltip_text = Locale.t("simulation.button_help")
 
 	if is_spell:
 		skill1_label.text = Locale.t("editor.card_effect_label")
@@ -181,7 +189,7 @@ func _apply_theme() -> void:
 		UITheme.apply_label(label, label in [balance_summary, usability_summary, skill1_summary, skill2_summary, skill3_summary, talent_summary])
 	for input in [name_input, cost_input, hp_input, atk_input, gender_select, parasite_damage_mode_select]:
 		UITheme.apply_input(input)
-	for btn in [template_button, browse_button, clear_art_button, edit_skill1_btn, edit_talent_btn, edit_skill2_btn, edit_skill3_btn, save_button, back_button]:
+	for btn in [template_button, browse_button, clear_art_button, simulation_button, edit_skill1_btn, edit_talent_btn, edit_skill2_btn, edit_skill3_btn, save_button, back_button]:
 		UITheme.apply_button(btn, "primary" if btn == save_button or btn == template_button else "secondary")
 	UITheme.apply_dialog(art_dialog, true)
 	UITheme.apply_label(art_path_label, true)
@@ -225,6 +233,7 @@ func _ready():
 	# Re-apply card-type restrictions AFTER form is restored so locked fields reflect the final values.
 	_apply_card_type_restrictions()
 	if PlayerData.skill_tutorial_active:
+		simulation_button.visible = false
 		card_tutorial_controller = _CardTutorialController.new()
 		add_child(card_tutorial_controller)
 		card_tutorial_controller.start(self)
@@ -390,6 +399,257 @@ func _balance_color(level: String) -> Color:
 		"weak":
 			return Color(0.55, 0.75, 1.0)
 	return Color(0.68, 0.95, 0.72)
+
+
+# ============================================
+# Draft simulation report
+# ============================================
+
+func _on_balance_simulation_pressed() -> void:
+	_save_form_to_draft()
+	var safety_issues := _UgcSafety.validate_draft_card(PlayerData.card_draft)
+	if not safety_issues.is_empty():
+		_show_message(Locale.t("editor.ugc_safety_blocked", [_UgcSafety.first_error_text(safety_issues)]))
+		return
+	var usability := _UsabilityAnalyzer.analyze(PlayerData.card_draft)
+	for issue in usability.get("issues", []):
+		if str(issue.get("severity", "")) == "error":
+			_show_message(Locale.t("simulation.invalid_card"))
+			return
+	_open_balance_simulation(PlayerData.build_card_from_draft(), true)
+
+
+func _open_balance_simulation(candidate: CardData, auto_start: bool = true, games_per_pool: int = _BalanceSimulation.DEFAULT_GAMES_PER_POOL) -> CanvasLayer:
+	games_per_pool = maxi(1, games_per_pool)
+	_simulation_generation += 1
+	var generation := _simulation_generation
+	if _simulation_popup_layer != null and is_instance_valid(_simulation_popup_layer):
+		_simulation_popup_layer.queue_free()
+	var popup := UITheme.make_popup_layer(self, 125)
+	var popup_layer: CanvasLayer = popup["layer"]
+	popup_layer.name = "CardSimulationPopup"
+	_simulation_popup_layer = popup_layer
+	var bg: ColorRect = popup["bg"]
+	bg.gui_input.connect(func(event: InputEvent):
+		if event is InputEventMouseButton and event.pressed:
+			_close_balance_simulation(generation)
+	)
+
+	var panel := Panel.new()
+	panel.name = "CardSimulationPanel"
+	panel.anchor_left = 0.5
+	panel.anchor_right = 0.5
+	panel.anchor_top = 0.5
+	panel.anchor_bottom = 0.5
+	panel.offset_left = -350
+	panel.offset_top = -260
+	panel.offset_right = 350
+	panel.offset_bottom = 260
+	panel.clip_contents = true
+	UITheme.apply_popup_frame(panel, "gold")
+	popup_layer.add_child(panel)
+
+	var margin := MarginContainer.new()
+	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	margin.add_theme_constant_override("margin_left", 22)
+	margin.add_theme_constant_override("margin_right", 22)
+	margin.add_theme_constant_override("margin_top", 18)
+	margin.add_theme_constant_override("margin_bottom", 18)
+	panel.add_child(margin)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 10)
+	margin.add_child(box)
+
+	var title := Label.new()
+	title.name = "SimulationTitle"
+	title.text = Locale.t("simulation.title", [candidate.card_name])
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UITheme.apply_title(title, 22)
+	box.add_child(title)
+	var note := Label.new()
+	note.name = "SimulationNote"
+	note.text = Locale.t("simulation.note", [games_per_pool])
+	note.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	note.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UITheme.apply_label(note, true)
+	box.add_child(note)
+
+	var progress := ProgressBar.new()
+	progress.name = "SimulationProgress"
+	progress.min_value = 0
+	progress.max_value = _BalanceSimulation.POOL_IDS.size() * games_per_pool
+	progress.value = 0
+	progress.show_percentage = false
+	progress.custom_minimum_size = Vector2(0, 14)
+	progress.add_theme_stylebox_override("background", UITheme.panel_style(Color(0.05, 0.06, 0.08, 0.9), Color(0.22, 0.25, 0.31), 1, 6))
+	progress.add_theme_stylebox_override("fill", UITheme.panel_style(Color(0.14, 0.48, 0.68, 0.92), UITheme.COLOR_GOLD, 1, 6))
+	box.add_child(progress)
+	var status := Label.new()
+	status.name = "SimulationStatus"
+	status.text = Locale.t("simulation.ready")
+	status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UITheme.apply_label(status, true)
+	box.add_child(status)
+
+	var scroll := ScrollContainer.new()
+	scroll.name = "SimulationScroll"
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	UITheme.apply_scrollbar(scroll.get_h_scroll_bar())
+	UITheme.apply_scrollbar(scroll.get_v_scroll_bar())
+	box.add_child(scroll)
+	var results := VBoxContainer.new()
+	results.name = "SimulationResults"
+	results.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	results.add_theme_constant_override("separation", 8)
+	scroll.add_child(results)
+	var placeholder := Label.new()
+	placeholder.name = "SimulationPlaceholder"
+	placeholder.text = Locale.t("simulation.waiting")
+	placeholder.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	placeholder.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	placeholder.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	UITheme.apply_label(placeholder, true)
+	results.add_child(placeholder)
+
+	var actions := HBoxContainer.new()
+	actions.alignment = BoxContainer.ALIGNMENT_END
+	actions.add_theme_constant_override("separation", 10)
+	box.add_child(actions)
+	var close_button := Button.new()
+	close_button.name = "SimulationCancelButton"
+	close_button.text = Locale.t("common.cancel") if auto_start else Locale.t("common.close")
+	close_button.custom_minimum_size = Vector2(124, 40)
+	UITheme.apply_button(close_button, "secondary")
+	close_button.pressed.connect(_close_balance_simulation.bind(generation))
+	actions.add_child(close_button)
+
+	_simulation_ui = {
+		"generation": generation,
+		"progress": progress,
+		"status": status,
+		"results": results,
+		"close": close_button,
+	}
+	UITheme.animate_popup_enter(panel)
+	if auto_start:
+		_run_balance_simulation.call_deferred(generation, candidate.duplicate_card(), games_per_pool)
+	return popup_layer
+
+
+func _run_balance_simulation(generation: int, candidate: CardData, games_per_pool: int) -> void:
+	var completed := 0
+	for kind in _BalanceSimulation.POOL_IDS:
+		if not _simulation_is_current(generation):
+			return
+		var accumulator := _BalanceSimulation.new_accumulator(kind, games_per_pool)
+		var pool := _BalanceSimulation.build_pool(kind, candidate)
+		var baseline_pool := _BalanceSimulation.build_baseline_pool(kind)
+		for game_index in range(games_per_pool):
+			if not _simulation_is_current(generation):
+				return
+			var result := _BattleSimulator.run_game(
+				baseline_pool,
+				pool,
+				_BalanceSimulation.seed_for_pool(kind) + game_index,
+				"normal",
+				"normal",
+				30
+			)
+			_BalanceSimulation.add_game(accumulator, result)
+			completed += 1
+			(_simulation_ui["progress"] as ProgressBar).value = completed
+			(_simulation_ui["status"] as Label).text = Locale.t("simulation.progress", [
+				Locale.t("simulation.pool.%s" % kind), game_index + 1, games_per_pool,
+			])
+			# One deterministic game per frame keeps the editor responsive and gives
+			# the cancel action a chance to take effect between simulations.
+			await get_tree().process_frame
+		_add_balance_simulation_result(_BalanceSimulation.finalize(accumulator))
+	if not _simulation_is_current(generation):
+		return
+	(_simulation_ui["status"] as Label).text = Locale.t("simulation.complete", [completed])
+	(_simulation_ui["close"] as Button).text = Locale.t("common.close")
+
+
+func _add_balance_simulation_result(result: Dictionary) -> void:
+	var results: VBoxContainer = _simulation_ui.get("results")
+	var placeholder := results.get_node_or_null("SimulationPlaceholder")
+	if placeholder != null:
+		placeholder.queue_free()
+	var panel := PanelContainer.new()
+	panel.name = "PoolResult_%s" % str(result.get("pool", ""))
+	UITheme.apply_panel(panel, "dark")
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 12)
+	margin.add_theme_constant_override("margin_right", 12)
+	margin.add_theme_constant_override("margin_top", 9)
+	margin.add_theme_constant_override("margin_bottom", 9)
+	panel.add_child(margin)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 4)
+	margin.add_child(box)
+	var heading := Label.new()
+	heading.text = Locale.t("simulation.pool_heading", [
+		Locale.t("simulation.pool.%s" % str(result.get("pool", "units"))),
+		int(result.get("games", 0)),
+	])
+	UITheme.apply_title(heading, 16)
+	box.add_child(heading)
+	var candidate: Dictionary = result.get("candidate", {})
+	var card_line := Label.new()
+	card_line.text = Locale.t("simulation.card_metrics", [
+		float(candidate.get("plays_per_game", 0.0)),
+		float(candidate.get("actions_per_game", 0.0)),
+		float(candidate.get("damage_per_game", 0.0)),
+		float(candidate.get("healing_per_game", 0.0)),
+	])
+	card_line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UITheme.apply_label(card_line)
+	box.add_child(card_line)
+	var match_line := Label.new()
+	match_line.text = Locale.t("simulation.match_metrics", [
+		float(result.get("average_rounds", 0.0)),
+		float(result.get("draw_rate", 0.0)) * 100.0,
+		float(result.get("first_player_win_rate", 0.0)) * 100.0,
+		float(result.get("mana_utilization", 0.0)) * 100.0,
+	])
+	match_line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UITheme.apply_label(match_line, true)
+	box.add_child(match_line)
+	var warnings: Array = result.get("warnings", [])
+	if warnings.is_empty():
+		var stable := Label.new()
+		stable.text = Locale.t("simulation.no_warning")
+		stable.add_theme_color_override("font_color", Color(0.48, 0.92, 0.63))
+		box.add_child(stable)
+	else:
+		var warning_lines: Array[String] = []
+		for warning in warnings:
+			warning_lines.append("△ %s" % Locale.t("simulation.warning.%s" % str(warning)))
+		var warning_label := Label.new()
+		warning_label.text = "\n".join(warning_lines)
+		warning_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		warning_label.add_theme_color_override("font_color", Color(0.95, 0.74, 0.34))
+		box.add_child(warning_label)
+	results.add_child(panel)
+
+
+func _simulation_is_current(generation: int) -> bool:
+	return generation == _simulation_generation \
+		and _simulation_popup_layer != null \
+		and is_instance_valid(_simulation_popup_layer) \
+		and not _simulation_popup_layer.is_queued_for_deletion()
+
+
+func _close_balance_simulation(generation: int) -> void:
+	if generation != _simulation_generation:
+		return
+	_simulation_generation += 1
+	if _simulation_popup_layer != null and is_instance_valid(_simulation_popup_layer):
+		_simulation_popup_layer.queue_free()
+	_simulation_popup_layer = null
+	_simulation_ui.clear()
 
 
 # ============================================
