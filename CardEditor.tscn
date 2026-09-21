@@ -138,9 +138,19 @@ layout_mode = 2
 text = "-"
 autowrap_mode = 3
 
-[node name="SimulationButton" type="Button" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
+[node name="AnalysisActionsRow" type="HBoxContainer" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
 layout_mode = 2
+theme_override_constants/separation = 8
+
+[node name="SimulationButton" type="Button" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/AnalysisActionsRow"]
+layout_mode = 2
+size_flags_horizontal = 3
 text = "Run Simulation"
+
+[node name="VersionHistoryButton" type="Button" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/AnalysisActionsRow"]
+layout_mode = 2
+size_flags_horizontal = 3
+text = "Version History"
 
 [node name="Separator1" type="HSeparator" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9360010]
 layout_mode = 2
@@ -265,7 +275,8 @@ filters = PackedStringArray("*.png ; PNG Image", "*.jpg ; JPEG Image", "*.jpeg ;
 [connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/EditSkill2Button" to="." method="_on_edit_skill2_pressed"]
 [connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/EditSkill3Button" to="." method="_on_edit_skill3_pressed"]
 [connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/TemplateButton" to="." method="_on_template_pressed"]
-[connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/SimulationButton" to="." method="_on_balance_simulation_pressed"]
+[connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/AnalysisActionsRow/SimulationButton" to="." method="_on_balance_simulation_pressed"]
+[connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/AnalysisActionsRow/VersionHistoryButton" to="." method="_on_version_history_pressed"]
 [connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/SaveButton" to="." method="_on_save_button_pressed"]
 [connection signal="pressed" from="BackButton" to="." method="_on_back_button_pressed"]
 [connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/ArtRow/BrowseButton" to="." method="_on_browse_art_pressed"]

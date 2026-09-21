@@ -25,6 +25,8 @@ var card_tutorial_controller
 var _simulation_generation := 0
 var _simulation_popup_layer: CanvasLayer = null
 var _simulation_ui := {}
+var _version_history_popup_layer: CanvasLayer = null
+var _suspend_form_updates := false
 
 @onready var title_label = $Panel/MarginContainer/ScrollContainer/VBoxContainer/TitleLabel
 @onready var template_button = $Panel/MarginContainer/ScrollContainer/VBoxContainer/TemplateButton
@@ -46,7 +48,9 @@ var _simulation_ui := {}
 @onready var balance_label = $Panel/MarginContainer/ScrollContainer/VBoxContainer/BalanceLabel
 @onready var balance_summary = $Panel/MarginContainer/ScrollContainer/VBoxContainer/BalanceSummary
 @onready var usability_summary = $Panel/MarginContainer/ScrollContainer/VBoxContainer/UsabilitySummary
-@onready var simulation_button = $Panel/MarginContainer/ScrollContainer/VBoxContainer/SimulationButton
+@onready var analysis_actions_row = $Panel/MarginContainer/ScrollContainer/VBoxContainer/AnalysisActionsRow
+@onready var simulation_button = $Panel/MarginContainer/ScrollContainer/VBoxContainer/AnalysisActionsRow/SimulationButton
+@onready var version_history_button = $Panel/MarginContainer/ScrollContainer/VBoxContainer/AnalysisActionsRow/VersionHistoryButton
 @onready var art_path_label = $Panel/MarginContainer/ScrollContainer/VBoxContainer/ArtRow/ArtPathLabel
 @onready var art_dialog = $ArtFileDialog
 @onready var card_preview_panel = $CardPreviewPanel
@@ -101,6 +105,8 @@ func _apply_texts() -> void:
 	balance_label.text = Locale.t("balance.title")
 	simulation_button.text = Locale.t("simulation.button")
 	simulation_button.tooltip_text = Locale.t("simulation.button_help")
+	version_history_button.text = Locale.t("revision.button")
+	version_history_button.tooltip_text = Locale.t("revision.button_help")
 
 	if is_spell:
 		skill1_label.text = Locale.t("editor.card_effect_label")
@@ -189,7 +195,7 @@ func _apply_theme() -> void:
 		UITheme.apply_label(label, label in [balance_summary, usability_summary, skill1_summary, skill2_summary, skill3_summary, talent_summary])
 	for input in [name_input, cost_input, hp_input, atk_input, gender_select, parasite_damage_mode_select]:
 		UITheme.apply_input(input)
-	for btn in [template_button, browse_button, clear_art_button, simulation_button, edit_skill1_btn, edit_talent_btn, edit_skill2_btn, edit_skill3_btn, save_button, back_button]:
+	for btn in [template_button, browse_button, clear_art_button, simulation_button, version_history_button, edit_skill1_btn, edit_talent_btn, edit_skill2_btn, edit_skill3_btn, save_button, back_button]:
 		UITheme.apply_button(btn, "primary" if btn == save_button or btn == template_button else "secondary")
 	UITheme.apply_dialog(art_dialog, true)
 	UITheme.apply_label(art_path_label, true)
@@ -232,8 +238,10 @@ func _ready():
 	get_viewport().size_changed.connect(_on_viewport_size_changed)
 	# Re-apply card-type restrictions AFTER form is restored so locked fields reflect the final values.
 	_apply_card_type_restrictions()
+	_capture_opening_revision()
+	_refresh_version_history_button()
 	if PlayerData.skill_tutorial_active:
-		simulation_button.visible = false
+		analysis_actions_row.visible = false
 		card_tutorial_controller = _CardTutorialController.new()
 		add_child(card_tutorial_controller)
 		card_tutorial_controller.start(self)
@@ -272,6 +280,7 @@ func _apply_card_type_restrictions() -> void:
 
 
 func _restore_form_from_draft():
+	_suspend_form_updates = true
 	name_input.text = PlayerData.card_draft.get("name", "")
 	cost_input.value = PlayerData.card_draft.get("cost", 0)
 	hp_input.value = PlayerData.card_draft.get("hp", 1)
@@ -285,6 +294,7 @@ func _restore_form_from_draft():
 		art_path_label.text = art.get_file()
 	else:
 		art_path_label.text = Locale.t("editor.none")
+	_suspend_form_updates = false
 
 
 func _save_form_to_draft():
@@ -317,6 +327,8 @@ func _connect_live_balance_updates() -> void:
 
 
 func _update_balance_from_form() -> void:
+	if _suspend_form_updates:
+		return
 	_save_form_to_draft()
 	_apply_card_type_restrictions()
 	_update_balance_summary()
@@ -650,6 +662,204 @@ func _close_balance_simulation(generation: int) -> void:
 		_simulation_popup_layer.queue_free()
 	_simulation_popup_layer = null
 	_simulation_ui.clear()
+
+
+# ============================================
+# Card version history
+# ============================================
+
+func _current_saved_card() -> CardData:
+	if PlayerData.editing_deck_id.is_empty() or PlayerData.editing_instance_id.is_empty():
+		return null
+	return PlayerData.find_deck_card(PlayerData.editing_deck_id, PlayerData.editing_instance_id)
+
+
+func _capture_opening_revision() -> void:
+	var card := _current_saved_card()
+	if card != null:
+		PlayerData.record_card_revision(card)
+
+
+func _record_before_update(deck_id: String, instance_id: String) -> void:
+	var card := PlayerData.find_deck_card(deck_id, instance_id)
+	if card != null:
+		PlayerData.record_card_revision(card)
+
+
+func _record_saved_revision(card: CardData) -> void:
+	if card != null:
+		PlayerData.record_card_revision(card)
+	_refresh_version_history_button()
+
+
+func _revision_card_id() -> String:
+	var card := _current_saved_card()
+	if card != null:
+		return card.card_id
+	return ""
+
+
+func _refresh_version_history_button() -> void:
+	if version_history_button == null:
+		return
+	var card_id := _revision_card_id()
+	var count := PlayerData.get_card_revisions(card_id).size()
+	version_history_button.disabled = count == 0
+	version_history_button.text = Locale.t("revision.button_count", [count]) if count > 0 else Locale.t("revision.button")
+	version_history_button.tooltip_text = Locale.t("revision.button_help") if count > 0 else Locale.t("revision.save_first")
+
+
+func _on_version_history_pressed() -> void:
+	_save_form_to_draft()
+	_open_version_history()
+
+
+func _open_version_history() -> CanvasLayer:
+	if _version_history_popup_layer != null and is_instance_valid(_version_history_popup_layer):
+		_version_history_popup_layer.queue_free()
+	var entries := PlayerData.get_card_revisions(_revision_card_id())
+	if entries.is_empty():
+		_show_message(Locale.t("revision.save_first"))
+		return null
+	var popup := UITheme.make_popup_layer(self, 106)
+	var popup_layer: CanvasLayer = popup["layer"]
+	_version_history_popup_layer = popup_layer
+	var panel := Panel.new()
+	panel.name = "CardRevisionPanel"
+	panel.anchor_left = 0.5
+	panel.anchor_right = 0.5
+	panel.anchor_top = 0.5
+	panel.anchor_bottom = 0.5
+	panel.offset_left = -340
+	panel.offset_top = -255
+	panel.offset_right = 340
+	panel.offset_bottom = 255
+	panel.clip_contents = true
+	UITheme.apply_popup_frame(panel, "gold")
+	popup_layer.add_child(panel)
+	var margin := MarginContainer.new()
+	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	for side in ["left", "right"]:
+		margin.add_theme_constant_override("margin_%s" % side, 22)
+	margin.add_theme_constant_override("margin_top", 18)
+	margin.add_theme_constant_override("margin_bottom", 18)
+	panel.add_child(margin)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 10)
+	margin.add_child(box)
+	var title := Label.new()
+	title.text = Locale.t("revision.title")
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UITheme.apply_title(title, 22)
+	box.add_child(title)
+	var hint := Label.new()
+	hint.name = "RevisionHint"
+	hint.text = Locale.t("revision.hint")
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UITheme.apply_label(hint, true)
+	box.add_child(hint)
+	var scroll := ScrollContainer.new()
+	scroll.name = "RevisionScroll"
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	UITheme.apply_scrollbar(scroll.get_h_scroll_bar())
+	UITheme.apply_scrollbar(scroll.get_v_scroll_bar())
+	box.add_child(scroll)
+	var list := VBoxContainer.new()
+	list.name = "RevisionList"
+	list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	list.add_theme_constant_override("separation", 8)
+	scroll.add_child(list)
+	for entry in entries:
+		list.add_child(_make_revision_row(entry))
+	var close := Button.new()
+	close.name = "RevisionCloseButton"
+	close.text = Locale.t("common.close")
+	close.custom_minimum_size = Vector2(124, 40)
+	UITheme.apply_button(close, "secondary")
+	close.pressed.connect(func():
+		popup_layer.queue_free()
+		_version_history_popup_layer = null
+	)
+	box.add_child(close)
+	UITheme.animate_popup_enter(panel)
+	return popup_layer
+
+
+func _make_revision_row(entry: Dictionary) -> PanelContainer:
+	var panel := PanelContainer.new()
+	panel.name = "Revision_%d" % int(entry.get("revision", 0))
+	UITheme.apply_panel(panel, "dark")
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 12)
+	margin.add_theme_constant_override("margin_right", 12)
+	margin.add_theme_constant_override("margin_top", 9)
+	margin.add_theme_constant_override("margin_bottom", 9)
+	panel.add_child(margin)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	margin.add_child(row)
+	var details := VBoxContainer.new()
+	details.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	details.add_theme_constant_override("separation", 3)
+	row.add_child(details)
+	var heading := Label.new()
+	heading.text = Locale.t("revision.entry", [int(entry.get("revision", 0)), _format_revision_time(int(entry.get("saved_at", 0)))])
+	UITheme.apply_title(heading, 16)
+	details.add_child(heading)
+	var summary := Label.new()
+	summary.text = _revision_change_summary(entry.get("card", {}))
+	summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UITheme.apply_label(summary, true)
+	details.add_child(summary)
+	var restore := Button.new()
+	restore.name = "RestoreRevisionButton"
+	restore.text = Locale.t("revision.restore")
+	restore.custom_minimum_size = Vector2(128, 38)
+	UITheme.apply_button(restore, "secondary")
+	restore.pressed.connect(_restore_revision_to_draft.bind(entry.get("card", {})))
+	row.add_child(restore)
+	return panel
+
+
+func _format_revision_time(timestamp: int) -> String:
+	var value := Time.get_datetime_dict_from_unix_time(timestamp)
+	return "%04d-%02d-%02d %02d:%02d" % [value.year, value.month, value.day, value.hour, value.minute]
+
+
+func _revision_change_summary(snapshot: Dictionary) -> String:
+	var current := PlayerData.build_card_from_draft()
+	var parts: Array[String] = []
+	if str(snapshot.get("name", "")) != current.card_name:
+		parts.append(Locale.t("revision.change_name", [str(snapshot.get("name", "")), current.card_name]))
+	for field in [["cost", current.cost, "revision.change_cost"], ["max_hp", current.max_hp, "revision.change_hp"], ["atk", current.atk, "revision.change_atk"]]:
+		if int(snapshot.get(field[0], 0)) != int(field[1]):
+			parts.append(Locale.t(field[2], [int(snapshot.get(field[0], 0)), int(field[1])]))
+	if str(snapshot.get("card_type", "minion")) != current.card_type:
+		parts.append(Locale.t("revision.change_type"))
+	if snapshot.get("skills", []) != current.skills:
+		parts.append(Locale.t("revision.change_skills"))
+	return Locale.t("revision.current") if parts.is_empty() else " · ".join(parts)
+
+
+func _restore_revision_to_draft(snapshot_value: Variant) -> void:
+	if not snapshot_value is Dictionary:
+		return
+	var card := PlayerData.deserialize_card(snapshot_value)
+	PlayerData.card_draft = PlayerData.card_to_draft(card)
+	PlayerData.queue_card_draft_recovery()
+	_restore_form_from_draft()
+	_apply_texts()
+	_update_skill_labels()
+	_apply_card_type_restrictions()
+	_update_balance_summary()
+	_update_usability_summary()
+	_refresh_card_preview()
+	if _version_history_popup_layer != null and is_instance_valid(_version_history_popup_layer):
+		_version_history_popup_layer.queue_free()
+	_version_history_popup_layer = null
+	_show_message(Locale.t("revision.restored"))
 
 
 # ============================================
@@ -1054,12 +1264,14 @@ func _apply_synced_edit(new_card: CardData, original_name: String, target_deck_i
 			if card.card_name == original_name:
 				matching_instance_ids.append(card.instance_id)
 		for instance_id in matching_instance_ids:
+			_record_before_update(deck_id, instance_id)
 			PlayerData.update_deck_card(deck_id, instance_id, new_card.duplicate_card())
 			if deck_id == PlayerData.editing_deck_id and instance_id == PlayerData.editing_instance_id:
 				saved_card = PlayerData.find_deck_card(deck_id, instance_id)
 	PlayerData.save_library()
 	if saved_card == null:
 		saved_card = new_card
+	_record_saved_revision(saved_card)
 	PlayerData.card_draft = PlayerData.card_to_draft(saved_card)
 	_show_after_save_popup(saved_card)
 
@@ -1166,6 +1378,7 @@ func _process_next_save_target() -> void:
 
 func _save_to_target_deck(deck_id: String) -> void:
 	if deck_id == PlayerData.editing_deck_id and PlayerData.editing_instance_id != "":
+		_record_before_update(deck_id, PlayerData.editing_instance_id)
 		PlayerData.update_deck_card(deck_id, PlayerData.editing_instance_id, pending_save_card)
 		pending_saved_card = PlayerData.find_deck_card(deck_id, PlayerData.editing_instance_id)
 	else:
@@ -1177,6 +1390,7 @@ func _save_to_target_deck(deck_id: String) -> void:
 
 func _finish_multi_deck_save() -> void:
 	var saved_card := pending_saved_card if pending_saved_card != null else pending_save_card
+	_record_saved_revision(saved_card)
 	PlayerData.card_draft = PlayerData.card_to_draft(saved_card)
 	_show_after_save_popup(saved_card)
 	pending_save_card = null
@@ -1187,6 +1401,7 @@ func _finish_multi_deck_save() -> void:
 
 func _save_card_without_conflict(new_card: CardData) -> void:
 	if PlayerData.editing_deck_id != "" and PlayerData.editing_instance_id != "":
+		_record_before_update(PlayerData.editing_deck_id, PlayerData.editing_instance_id)
 		PlayerData.update_deck_card(PlayerData.editing_deck_id, PlayerData.editing_instance_id, new_card)
 		var saved := PlayerData.find_deck_card(PlayerData.editing_deck_id, PlayerData.editing_instance_id)
 		if saved != null:
@@ -1196,6 +1411,7 @@ func _save_card_without_conflict(new_card: CardData) -> void:
 		if result.get("kind", "") == "added":
 			new_card = result.get("card")
 		PlayerData.save_library()
+	_record_saved_revision(new_card)
 	PlayerData.card_draft = PlayerData.card_to_draft(new_card)
 	_show_after_save_popup(new_card)
 
@@ -1281,6 +1497,7 @@ func _show_save_conflict_popup(deck_id: String, local_card: CardData, new_card: 
 	replace_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	UITheme.apply_button(replace_btn, "danger")
 	replace_btn.pressed.connect(func():
+		_record_before_update(deck_id, local_card.instance_id)
 		PlayerData.update_deck_card(deck_id, local_card.instance_id, new_card)
 		pending_saved_card = PlayerData.find_deck_card(deck_id, local_card.instance_id)
 		PlayerData.save_library()

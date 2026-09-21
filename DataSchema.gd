@@ -12,6 +12,7 @@ const KIND_DRAFT_RECOVERY := "draft_recovery"
 const KIND_SKILL_TEMPLATES := "skill_templates"
 const KIND_MATCH_HISTORY := "match_history"
 const KIND_MATCH_SNAPSHOT := "match_snapshot"
+const KIND_CARD_REVISIONS := "card_revisions"
 
 const CURRENT_VERSIONS := {
 	KIND_LIBRARY: 3,
@@ -20,6 +21,7 @@ const CURRENT_VERSIONS := {
 	KIND_SKILL_TEMPLATES: 1,
 	KIND_MATCH_HISTORY: 1,
 	KIND_MATCH_SNAPSHOT: 1,
+	KIND_CARD_REVISIONS: 1,
 }
 
 const MAX_DOCUMENT_BYTES := 16 * 1024 * 1024
@@ -28,6 +30,7 @@ const MAX_CARDS_PER_DECK := 200
 const MAX_LIBRARY_CARDS := 5000
 const MAX_TEMPLATES := 100
 const MAX_HISTORY := 100
+const MAX_CARD_REVISIONS := 2000
 const MAX_PARASITES_PER_CARD := 6
 const MAX_CARD_NAME_LENGTH := 80
 const MAX_SKILL_NAME_LENGTH := 80
@@ -88,6 +91,8 @@ static func validate(kind: String, value: Variant) -> Array:
 			_validate_history(value, errors)
 		KIND_MATCH_SNAPSHOT:
 			_validate_snapshot(value, errors)
+		KIND_CARD_REVISIONS:
+			_validate_card_revisions(value, errors)
 		_:
 			errors.append(_issue("unknown_schema", [], {"kind": kind}))
 	return errors
@@ -108,7 +113,7 @@ static func _migrate(kind: String, data: Dictionary, from_version: int) -> Dicti
 			if from_version not in [0, 1, 2]:
 				return _failure("unsupported_version", [], {"actual": from_version})
 			data["version"] = 2
-		KIND_DRAFT_RECOVERY, KIND_SKILL_TEMPLATES, KIND_MATCH_HISTORY:
+		KIND_DRAFT_RECOVERY, KIND_SKILL_TEMPLATES, KIND_MATCH_HISTORY, KIND_CARD_REVISIONS:
 			if from_version not in [0, 1]:
 				return _failure("unsupported_version", [], {"actual": from_version})
 			data["version"] = 1
@@ -424,6 +429,23 @@ static func _validate_snapshot(value: Variant, errors: Array) -> void:
 				for i in range(slots.size()):
 					if slots[i] is Dictionary and not slots[i].is_empty():
 						_validate_card(slots[i], ["state", field_key, "slots", i], errors)
+
+
+static func _validate_card_revisions(value: Variant, errors: Array) -> void:
+	if not _expect_dictionary(value, [], errors):
+		return
+	var revisions = value.get("revisions", null)
+	if not revisions is Array or revisions.size() > MAX_CARD_REVISIONS:
+		errors.append(_issue("revisions_type_or_limit", ["revisions"], {"limit": MAX_CARD_REVISIONS}))
+		return
+	for i in range(revisions.size()):
+		if not _expect_dictionary(revisions[i], ["revisions", i], errors):
+			continue
+		var entry: Dictionary = revisions[i]
+		_validate_string(entry.get("card_id", null), ["revisions", i, "card_id"], 1, MAX_ID_LENGTH, errors)
+		_validate_integer(entry.get("revision", null), ["revisions", i, "revision"], errors)
+		_validate_integer(entry.get("saved_at", null), ["revisions", i, "saved_at"], errors)
+		_validate_card(entry.get("card", null), ["revisions", i, "card"], errors)
 
 
 static func _expect_dictionary(value: Variant, path: Array, errors: Array) -> bool:

@@ -80,7 +80,7 @@ func _check_editor_ui(candidate: CardData) -> void:
 	add_child(editor)
 	await get_tree().process_frame
 	await get_tree().process_frame
-	var button: Button = editor.get_node("Panel/MarginContainer/ScrollContainer/VBoxContainer/SimulationButton")
+	var button: Button = editor.get_node("Panel/MarginContainer/ScrollContainer/VBoxContainer/AnalysisActionsRow/SimulationButton")
 	_assert(button.text == Locale.t("simulation.button"), "simulation entry is not localized")
 	_assert(button.get_meta("ui_button_variant", "") == "secondary", "simulation entry does not use the shared secondary style")
 	var popup: CanvasLayer = editor.call("_open_balance_simulation", candidate, false)

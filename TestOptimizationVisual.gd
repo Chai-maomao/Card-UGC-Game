@@ -14,6 +14,12 @@ func _ready() -> void:
 	var backup := PlayerData.battle_preparation_snapshot()
 	var old_draft := PlayerData.card_draft.duplicate(true)
 	var old_context := PlayerData.card_playtest_context.duplicate(true)
+	var old_decks := PlayerData.deck_library
+	var old_cards := PlayerData.card_library
+	var old_editing_deck_id := PlayerData.editing_deck_id
+	var old_editing_instance_id := PlayerData.editing_instance_id
+	var old_editing_index := PlayerData.editing_index
+	var old_revisions := PlayerData.card_revisions
 	var card := CardData.new("连锁练习", 2, 5, 2, [{"trigger": "on_activate", "skill_name": "重复打击", "effects": [{"effect": "__repeat__", "repeat_count": 2, "then_effects": [{"effect": "damage", "target": "target_single", "target_side": "enemy", "value": 1}]}]}])
 	PlayerData.configure_hotseat_battle(CardDatabase.playtest_deck(), CardDatabase.playtest_deck())
 	PlayerData.card_playtest_context = {"test_card": PlayerData.serialize_card(card)}
@@ -89,6 +95,29 @@ func _ready() -> void:
 	(simulation_panel.find_child("SimulationCancelButton", true, false) as Button).text = Locale.t("common.close")
 	await _capture("optimization-simulation.png")
 	simulation_popup.queue_free()
+	var current_version := CardData.new("连锁守卫", 4, 7, 3, card.skills.duplicate(true))
+	current_version.card_id = "visual_revision_card"
+	current_version.instance_id = "visual_revision_instance"
+	var old_version := CardData.new("连锁守卫", 2, 5, 2, [])
+	old_version.card_id = current_version.card_id
+	old_version.instance_id = current_version.instance_id
+	PlayerData.deck_library = [{"id": "visual_revision_deck", "name": "演示牌组", "cards": [current_version]}]
+	PlayerData.rebuild_card_library_cache()
+	PlayerData.editing_deck_id = "visual_revision_deck"
+	PlayerData.editing_instance_id = current_version.instance_id
+	PlayerData.editing_index = 0
+	PlayerData.card_draft = PlayerData.card_to_draft(current_version)
+	PlayerData.card_revisions = [
+		{"card_id": current_version.card_id, "revision": 2, "saved_at": 1789981200, "card": PlayerData._card_revision_snapshot(current_version)},
+		{"card_id": current_version.card_id, "revision": 1, "saved_at": 1789894800, "card": PlayerData._card_revision_snapshot(old_version)},
+	]
+	editor._restore_form_from_draft()
+	editor._apply_texts()
+	editor._update_skill_labels()
+	editor._refresh_version_history_button()
+	var revision_popup: CanvasLayer = editor._open_version_history()
+	await _capture("optimization-version-history.png")
+	revision_popup.queue_free()
 	editor.queue_free()
 	await _settle()
 	SharePackage.edit_metadata(self, SharePackage.build([]), func(_data): pass)
@@ -123,6 +152,12 @@ func _ready() -> void:
 	PlayerData._apply_battle_preparation(backup)
 	PlayerData.card_draft = old_draft
 	PlayerData.card_playtest_context = old_context
+	PlayerData.deck_library = old_decks
+	PlayerData.card_library = old_cards
+	PlayerData.editing_deck_id = old_editing_deck_id
+	PlayerData.editing_instance_id = old_editing_instance_id
+	PlayerData.editing_index = old_editing_index
+	PlayerData.card_revisions = old_revisions
 	print("TEST_OPTIMIZATION_VISUAL_OK")
 	get_tree().quit(0)
 

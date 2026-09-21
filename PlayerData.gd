@@ -18,11 +18,13 @@ const Schema = preload("res://DataSchema.gd")
 const LibraryRepo = preload("res://CardLibraryRepository.gd")
 const EditorRepo = preload("res://EditorDataRepository.gd")
 const HistoryRepo = preload("res://MatchHistoryRepository.gd")
+const RevisionRepo = preload("res://CardRevisionRepository.gd")
 const BattlePrep = preload("res://BattlePreparationState.gd")
 const SAFE_ART_EXTENSIONS := ["png", "jpg", "jpeg", "webp"]
 const DRAFT_RECOVERY_PATH := "user://card_draft_recovery.json"
 const SKILL_TEMPLATES_PATH := "user://skill_templates.json"
 const MATCH_HISTORY_PATH := "user://match_history.json"
+const CARD_REVISIONS_PATH := "user://card_revisions.json"
 const MAX_MATCH_HISTORY := 100
 const DRAFT_RECOVERY_VERSION := 1
 const BEGINNER_DEFAULT_DECK_NAME := "新手默认"
@@ -53,6 +55,7 @@ var pending_hotseat_p1_deck: Array = []
 var recovered_card_draft: Dictionary = {}
 var custom_skill_templates: Array = []
 var match_history: Array = []
+var card_revisions: Array = []
 var card_playtest_context: Dictionary = {}
 var skill_tutorial_active: bool = false
 var tutorial_editor_stage: String = ""
@@ -259,6 +262,7 @@ func _ready():
 	_load_card_draft_recovery()
 	_load_skill_templates()
 	_load_match_history()
+	_load_card_revisions()
 	clear_net_arts()
 
 
@@ -968,6 +972,42 @@ func _write_json_atomic(path: String, payload: Dictionary, schema_kind: String =
 		_remove_file_if_present(temp_path)
 		return false
 	return true
+
+
+func _load_card_revisions() -> void:
+	card_revisions = RevisionRepo.from_payload(_read_json_dictionary(CARD_REVISIONS_PATH, Schema.KIND_CARD_REVISIONS))
+
+
+func _card_revision_snapshot(card: CardData) -> Dictionary:
+	if card == null or card.card_id.is_empty():
+		return {}
+	var copy := CardData.new(card.card_name, card.base_cost, card.base_max_hp, card.base_atk, card.skills.duplicate(true))
+	copy.card_id = card.card_id
+	copy.instance_id = card.instance_id
+	copy.gender = card.gender
+	copy.art_path = card.art_path
+	copy.card_type = card.card_type
+	copy.parasite_damage_mode = card.parasite_damage_mode
+	return serialize_card(copy)
+
+
+func record_card_revision(card: CardData, saved_at: int = -1) -> bool:
+	var snapshot := _card_revision_snapshot(card)
+	if snapshot.is_empty():
+		return false
+	var timestamp := int(Time.get_unix_time_from_system()) if saved_at < 0 else saved_at
+	var result := RevisionRepo.add(card_revisions, snapshot, timestamp)
+	if not bool(result.get("changed", false)):
+		return false
+	var updated: Array = result.get("entries", [])
+	if not _write_json_atomic(CARD_REVISIONS_PATH, RevisionRepo.payload(updated), Schema.KIND_CARD_REVISIONS):
+		return false
+	card_revisions = updated
+	return true
+
+
+func get_card_revisions(card_id: String) -> Array:
+	return RevisionRepo.history(card_revisions, card_id)
 
 
 func save_library() -> bool:

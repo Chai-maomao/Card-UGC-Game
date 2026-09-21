@@ -41,6 +41,8 @@ func _test_all_schema_entry_points() -> void:
 	_assert(Schema.validate(Schema.KIND_SKILL_TEMPLATES, templates).is_empty(), "template schema rejected valid templates")
 	var history := {"version": 1, "matches": [{"id": "m", "timestamp": 1, "mode": "practice", "outcome": "win"}]}
 	_assert(Schema.validate(Schema.KIND_MATCH_HISTORY, history).is_empty(), "history schema rejected valid history")
+	var revisions := {"version": 1, "revisions": [{"card_id": "card_test", "revision": 1, "saved_at": 1, "card": card}]}
+	_assert(Schema.validate(Schema.KIND_CARD_REVISIONS, revisions).is_empty(), "card revision schema rejected valid history")
 	var snapshot := {"schema": 1, "room_code": "ROOM", "player": 1, "state": {"player_field": {}, "player2_field": {}, "player_hand": [], "player2_hand": [], "shared_deck": [], "state_revision": 1}}
 	_assert(Schema.validate(Schema.KIND_MATCH_SNAPSHOT, snapshot).is_empty(), "snapshot schema rejected valid snapshot")
 
