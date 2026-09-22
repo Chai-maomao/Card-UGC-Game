@@ -400,7 +400,7 @@ func _apply_authority_state(state: Dictionary, label: String = "authority") -> v
 			var source_meta: Dictionary = event.get("source_meta", {})
 			var batch_index := maxi(0, int(source_meta.get("batch_index", 0)))
 			var source := str(event.get("source", "generated"))
-			var reveal_delay := BattleFx.draw_card_arrival_delay(batch_index) if source == "deck" else 0.53 + batch_index * BattleFx.CARD_DRAW_STAGGER
+			var reveal_delay := BattleFx.draw_card_arrival_delay(batch_index) if source == "deck" else BattleFx.travel_card_arrival_delay(batch_index)
 			_pending_hand_entry_ids[str(event.get("instance_id", ""))] = {
 				"reveal_delay": reveal_delay,
 				"feedback": {

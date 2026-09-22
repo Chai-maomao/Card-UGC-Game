@@ -43,5 +43,7 @@ Scope: current working tree, preserving changes already present on 2026-09-09.
 - Defeated field cards remain face-up for a short break beat, follow a curved shrinking path into the discard pile, and pulse the pile on arrival. Gameplay state still resolves synchronously.
 - Draw batches carry presentation-only order metadata, leave the deck as staggered card backs, target the actual post-layout hand slots, and reveal each card face on arrival.
 - Local and replayed online feedback use the same timing metadata; animation lifetimes are owned by the battle UI so closing a battle cannot retain card resources.
+- Standard card-flow timing is 1.55x the previous duration; Settings > 加速模式 restores the previous timing and skips chained-effect pauses.
+- Overlapping discard-pile arrival pulses restart cleanly and restore the pile's stable color and scale.
 - `scripts/run_tests.ps1 -Suite logic` — **44/44 PASS**.
 - `scripts/run_tests.ps1 -Suite visual` — **5/5 PASS**, including `TestCardFlowAnimationVisual` screenshots for defeat-to-discard and ordered drawing.

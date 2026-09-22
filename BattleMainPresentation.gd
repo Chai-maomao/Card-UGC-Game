@@ -2,6 +2,10 @@ extends "res://BattleMainActions.gd"
 
 var _pending_hand_arrivals: Array = []
 var _hand_arrival_sort_connected := false
+var _discard_pile_feedback_tween: Tween = null
+var _discard_pile_feedback_target: Control = null
+var _discard_pile_rest_modulate := Color.WHITE
+var _discard_pile_rest_scale := Vector2.ONE
 
 # ============================================
 # Helpers
@@ -221,7 +225,7 @@ func _flush_pending_hand_arrivals() -> void:
 func _on_hand_entry_resolved(card: CardData, player: int, destination: String, source: String, source_meta: Dictionary) -> void:
 	var batch_index := maxi(0, int(source_meta.get("batch_index", 0)))
 	if destination == "hand" and player == _view_player():
-		var reveal_delay := BattleFx.draw_card_arrival_delay(batch_index) if source == "deck" else 0.53 + batch_index * BattleFx.CARD_DRAW_STAGGER
+		var reveal_delay := BattleFx.draw_card_arrival_delay(batch_index) if source == "deck" else BattleFx.travel_card_arrival_delay(batch_index)
 		_pending_hand_entry_ids[_hand_entry_key(card)] = {
 			"reveal_delay": reveal_delay,
 			"feedback": {
@@ -274,7 +278,7 @@ func _play_hand_resolution_feedback(card: CardData, player: int, destination: St
 	else:
 		BattleFx.spawn_draw_fly_card($CanvasLayer, start, target, batch_index, _ui_scale())
 	if destination == "discard":
-		get_tree().create_timer(0.53 + batch_index * BattleFx.CARD_DRAW_STAGGER).timeout.connect(_play_overflow_discard_feedback)
+		get_tree().create_timer(BattleFx.travel_card_arrival_delay(batch_index)).timeout.connect(_play_overflow_discard_feedback)
 
 
 func _hand_card_target(card: CardData, player: int) -> Vector2:
@@ -293,13 +297,31 @@ func _play_discard_pile_arrival(tint: Color) -> void:
 	var target: Control = discard_pile_btn if discard_pile_btn != null else discard_zone
 	if target == null or not is_instance_valid(target):
 		return
-	var base_modulate: Color = target.modulate
-	var base_scale: Vector2 = target.scale
-	var twn := create_tween().set_parallel(true)
-	twn.tween_property(target, "modulate", tint, 0.08)
-	twn.tween_property(target, "scale", base_scale * 1.04, 0.08)
-	twn.tween_property(target, "modulate", base_modulate, 0.18).set_delay(0.08)
-	twn.tween_property(target, "scale", base_scale, 0.18).set_delay(0.08)
+	# Several cards can arrive before the previous pulse finishes. Restart from
+	# one stable rest state so a tinted intermediate frame never becomes the
+	# next pulse's baseline and leaves the pile permanently red/orange.
+	if _discard_pile_feedback_target != target:
+		_discard_pile_feedback_target = target
+		_discard_pile_rest_modulate = target.modulate
+		_discard_pile_rest_scale = target.scale
+	if _discard_pile_feedback_tween != null and _discard_pile_feedback_tween.is_valid():
+		_discard_pile_feedback_tween.kill()
+	target.modulate = _discard_pile_rest_modulate
+	target.scale = _discard_pile_rest_scale
+	var duration_scale := GamePreferences.battle_animation_duration_scale()
+	_discard_pile_feedback_tween = create_tween().set_parallel(true)
+	_discard_pile_feedback_tween.tween_property(target, "modulate", tint, 0.08 * duration_scale)
+	_discard_pile_feedback_tween.tween_property(target, "scale", _discard_pile_rest_scale * 1.04, 0.08 * duration_scale)
+	_discard_pile_feedback_tween.tween_property(target, "modulate", _discard_pile_rest_modulate, 0.18 * duration_scale).set_delay(0.08 * duration_scale)
+	_discard_pile_feedback_tween.tween_property(target, "scale", _discard_pile_rest_scale, 0.18 * duration_scale).set_delay(0.08 * duration_scale)
+	_discard_pile_feedback_tween.chain().tween_callback(_finish_discard_pile_arrival.bind(target))
+
+
+func _finish_discard_pile_arrival(target: Control) -> void:
+	if target != null and is_instance_valid(target) and target == _discard_pile_feedback_target:
+		target.modulate = _discard_pile_rest_modulate
+		target.scale = _discard_pile_rest_scale
+	_discard_pile_feedback_tween = null
 
 
 func _set_ghost_mouse_filter(node: Node) -> void:
@@ -376,16 +398,9 @@ func _play_discard_feedback() -> void:
 	var target: Control = discard_pile_btn if discard_pile_btn != null else discard_zone
 	if target == null or not is_instance_valid(target):
 		return
-	var base_modulate: Color = target.modulate
-	var base_scale: Vector2 = target.scale
 	var center: Vector2 = target.global_position + target.size / 2
 	_spawn_combat_text(center + Vector2(0, -10), 1)
-	var twn := create_tween()
-	twn.set_parallel(true)
-	twn.tween_property(target, "modulate", Color(0.7, 1.0, 0.72, 1.0), 0.08)
-	twn.tween_property(target, "scale", base_scale * 1.04, 0.08)
-	twn.tween_property(target, "modulate", base_modulate, 0.18).set_delay(0.08)
-	twn.tween_property(target, "scale", base_scale, 0.18).set_delay(0.08)
+	_play_discard_pile_arrival(Color(0.7, 1.0, 0.72, 1.0))
 
 
 func _check_and_show_game_over() -> bool:

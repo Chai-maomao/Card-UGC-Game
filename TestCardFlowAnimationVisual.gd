@@ -8,6 +8,11 @@ func _ready() -> void:
 		push_error("Visual suite requires a renderer; run scripts/run_tests.ps1 -Suite visual")
 		get_tree().quit(1)
 		return
+	var prior_acceleration := GamePreferences.animation_acceleration_enabled()
+	GamePreferences.set_animation_acceleration(true)
+	_assert(is_equal_approx(BattleFx.draw_card_arrival_delay(2), 0.575), "accelerated mode must preserve the previous draw timing")
+	GamePreferences.set_animation_acceleration(false)
+	_assert(is_equal_approx(BattleFx.draw_card_arrival_delay(2), 0.575 * GamePreferences.STANDARD_ANIMATION_DURATION_SCALE), "standard mode must slow the complete draw sequence")
 	NetworkManager.close_connection()
 	PlayerData.practice_challenge_id = ""
 	PlayerData.configure_hotseat_battle(CardDatabase.playtest_deck(), CardDatabase.playtest_deck())
@@ -49,10 +54,23 @@ func _ready() -> void:
 	for child in battle.hand_container.get_children():
 		_assert(child.modulate.a < 0.01, "real hand cards must stay hidden until their travelling backs arrive")
 	await _capture("card-draw-flow.png")
-	await get_tree().create_timer(0.75).timeout
+	await get_tree().create_timer(1.15).timeout
 	_assert(battle.game.player_hand.size() == 3, "draw animation must not change resolved hand contents")
 	for child in battle.hand_container.get_children():
 		_assert(child.modulate.a > 0.99, "arriving hand cards must be fully visible after landing")
+
+	# Rapid overlapping arrival pulses must always restore the pile's stable
+	# style instead of capturing a red/orange in-flight tint as the next base.
+	var discard_button: Control = battle.discard_pile_btn
+	var rest_modulate := discard_button.modulate
+	var rest_scale := discard_button.scale
+	battle._play_discard_pile_arrival(Color(1.0, 0.25, 0.18, 1.0))
+	await get_tree().create_timer(0.06).timeout
+	battle._play_discard_pile_arrival(Color(1.0, 0.70, 0.42, 1.0))
+	await get_tree().create_timer(0.55).timeout
+	_assert(discard_button.modulate.is_equal_approx(rest_modulate), "overlapping discard pulses must restore the original color")
+	_assert(discard_button.scale.is_equal_approx(rest_scale), "overlapping discard pulses must restore the original scale")
+	GamePreferences.set_animation_acceleration(prior_acceleration)
 
 	if failures.is_empty():
 		print("TEST_CARD_FLOW_ANIMATION_VISUAL_OK")

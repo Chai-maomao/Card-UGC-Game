@@ -389,24 +389,36 @@ func spawn_draw_fly_card(layer: CanvasLayer, start: Vector2, target: Vector2, in
 	var lift: float = -64.0 * ui_scale - minf(index, 4) * 5.0 * ui_scale
 	var mid: Vector2 = (start + target) * 0.5 + Vector2(-18.0 * direction * ui_scale, lift)
 	var end_position := target - size / 2
-	var launch_time := CARD_DRAW_TRAVEL_TIME * 0.44
-	var settle_time := CARD_DRAW_TRAVEL_TIME * 0.56
+	var duration_scale := GamePreferences.battle_animation_duration_scale()
+	var launch_time := CARD_DRAW_TRAVEL_TIME * 0.44 * duration_scale
+	var settle_time := CARD_DRAW_TRAVEL_TIME * 0.56 * duration_scale
 	var twn := layer.create_tween()
 	twn.set_parallel(false)
-	twn.tween_interval(index * CARD_DRAW_STAGGER)
-	twn.tween_property(card_back, "modulate", Color.WHITE, 0.045)
+	twn.tween_interval(index * card_draw_stagger())
+	twn.tween_property(card_back, "modulate", Color.WHITE, 0.045 * duration_scale)
 	twn.parallel().tween_property(card_back, "scale", Vector2(1.06, 1.06), launch_time).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	twn.parallel().tween_property(card_back, "rotation", deg_to_rad(3.5) * direction, launch_time).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	twn.parallel().tween_property(card_back, "position", mid - size / 2, launch_time).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	twn.tween_property(card_back, "position", end_position, settle_time).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
 	twn.parallel().tween_property(card_back, "rotation", 0.0, settle_time).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
 	twn.parallel().tween_property(card_back, "scale", Vector2(0.90, 0.90), settle_time).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	twn.parallel().tween_property(card_back, "modulate:a", 0.0, 0.10).set_delay(maxf(0.0, settle_time - 0.10))
+	var fade_time := 0.10 * duration_scale
+	twn.parallel().tween_property(card_back, "modulate:a", 0.0, fade_time).set_delay(maxf(0.0, settle_time - fade_time))
 	twn.chain().tween_callback(_release.bind("card_back", card_back))
 
 
+func card_draw_stagger() -> float:
+	return CARD_DRAW_STAGGER * GamePreferences.battle_animation_duration_scale()
+
+
 func draw_card_arrival_delay(index: int) -> float:
-	return 0.045 + CARD_DRAW_TRAVEL_TIME + maxi(0, index) * CARD_DRAW_STAGGER
+	var duration_scale := GamePreferences.battle_animation_duration_scale()
+	return (0.045 + CARD_DRAW_TRAVEL_TIME) * duration_scale + maxi(0, index) * card_draw_stagger()
+
+
+func travel_card_arrival_delay(index: int) -> float:
+	var duration_scale := GamePreferences.battle_animation_duration_scale()
+	return 0.53 * duration_scale + maxi(0, index) * card_draw_stagger()
 
 
 # Move a face-up card preview between two UI locations. The caller owns the
@@ -423,15 +435,16 @@ func travel_card_control(layer: CanvasLayer, card_ghost: Control, start: Vector2
 	card_ghost.set_meta("battle_fx_kind", "travel_card")
 	var lift: float = -62.0 * ui_scale - index * 6.0
 	var mid: Vector2 = (start + target) * 0.5 + Vector2(0, lift)
-	var duration: float = 0.46
+	var duration_scale := GamePreferences.battle_animation_duration_scale()
+	var duration: float = 0.46 * duration_scale
 	var twn := layer.create_tween()
-	twn.tween_interval(index * CARD_DRAW_STAGGER)
-	twn.tween_property(card_ghost, "modulate:a", 1.0, 0.07)
-	twn.parallel().tween_property(card_ghost, "scale", card_ghost.scale * 1.05, 0.10).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	twn.tween_interval(index * card_draw_stagger())
+	twn.tween_property(card_ghost, "modulate:a", 1.0, 0.07 * duration_scale)
+	twn.parallel().tween_property(card_ghost, "scale", card_ghost.scale * 1.05, 0.10 * duration_scale).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	twn.tween_property(card_ghost, "position", mid - card_ghost.size / 2, duration * 0.45).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	twn.tween_property(card_ghost, "position", target - card_ghost.size / 2, duration * 0.55).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	twn.parallel().tween_property(card_ghost, "scale", card_ghost.scale * 0.78, duration * 0.55)
-	twn.parallel().tween_property(card_ghost, "modulate:a", 0.0, 0.14).set_delay(duration * 0.36)
+	twn.parallel().tween_property(card_ghost, "modulate:a", 0.0, 0.14 * duration_scale).set_delay(duration * 0.36)
 	twn.tween_callback(card_ghost.queue_free)
 
 
@@ -916,12 +929,13 @@ func death_fade(layer: CanvasLayer, card_ui, ui_scale: float = 1.0, discard_targ
 	ghost.set_meta("battle_fx_kind", "death_discard_card")
 	var base_position: Vector2 = ghost.position
 	var base_scale: Vector2 = ghost.scale
+	var duration_scale := GamePreferences.battle_animation_duration_scale()
 	ghost.pivot_offset = ghost.size * 0.5
 	if discard_target == Vector2.INF:
 		var fallback := layer.create_tween().set_parallel(true)
-		fallback.tween_property(ghost, "modulate:a", 0.0, 0.24)
-		fallback.tween_property(ghost, "position", base_position + Vector2(0, 18), 0.24).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-		fallback.tween_property(ghost, "scale", base_scale * 0.82, 0.24).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+		fallback.tween_property(ghost, "modulate:a", 0.0, 0.24 * duration_scale)
+		fallback.tween_property(ghost, "position", base_position + Vector2(0, 18), 0.24 * duration_scale).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		fallback.tween_property(ghost, "scale", base_scale * 0.82, 0.24 * duration_scale).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
 		fallback.chain().tween_callback(ghost.queue_free)
 		return
 	var start_center: Vector2 = base_position + ghost.size * 0.5
@@ -930,8 +944,8 @@ func death_fade(layer: CanvasLayer, card_ui, ui_scale: float = 1.0, discard_targ
 	var twn := layer.create_tween()
 	twn.set_parallel(false)
 	# First beat: the card loses its footing but remains identifiable.
-	twn.tween_property(ghost, "scale", Vector2(base_scale.x * 1.04, base_scale.y * 0.92), 0.085).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	twn.parallel().tween_property(ghost, "rotation", deg_to_rad(-3.0) * direction, 0.085)
+	twn.tween_property(ghost, "scale", Vector2(base_scale.x * 1.04, base_scale.y * 0.92), 0.085 * duration_scale).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	twn.parallel().tween_property(ghost, "rotation", deg_to_rad(-3.0) * direction, 0.085 * duration_scale)
 	# Second beat: a compact curved flight makes the pile destination explicit.
 	twn.tween_method(func(t: float):
 		if not is_instance_valid(ghost):
@@ -939,10 +953,10 @@ func death_fade(layer: CanvasLayer, card_ui, ui_scale: float = 1.0, discard_targ
 		var a := start_center.lerp(control_center, t)
 		var b := control_center.lerp(discard_target, t)
 		ghost.position = a.lerp(b, t) - ghost.size * 0.5
-	, 0.0, 1.0, 0.36).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
-	twn.parallel().tween_property(ghost, "scale", base_scale * 0.46, 0.36).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	twn.parallel().tween_property(ghost, "rotation", deg_to_rad(9.0) * direction, 0.36).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	twn.parallel().tween_property(ghost, "modulate:a", 0.0, 0.12).set_delay(0.24)
+	, 0.0, 1.0, 0.36 * duration_scale).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+	twn.parallel().tween_property(ghost, "scale", base_scale * 0.46, 0.36 * duration_scale).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	twn.parallel().tween_property(ghost, "rotation", deg_to_rad(9.0) * direction, 0.36 * duration_scale).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	twn.parallel().tween_property(ghost, "modulate:a", 0.0, 0.12 * duration_scale).set_delay(0.24 * duration_scale)
 	twn.tween_callback(_finish_death_discard.bind(ghost, layer, discard_target, ui_scale, on_arrival))
 
 
@@ -965,10 +979,11 @@ func hand_card_enter(layer: CanvasLayer, card_ui: Control, ui_scale: float = 1.0
 	card_ui.pivot_offset = Vector2(card_ui.size.x * 0.5, card_ui.size.y)
 	card_ui.modulate.a = 0.0
 	card_ui.scale = base_scale * 0.92
+	var duration_scale := GamePreferences.battle_animation_duration_scale()
 	var twn := create_tween()
 	twn.set_parallel(true)
-	twn.tween_property(card_ui, "modulate:a", 1.0, 0.18)
-	twn.tween_property(card_ui, "scale", base_scale, 0.22).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	twn.tween_property(card_ui, "modulate:a", 1.0, 0.18 * duration_scale)
+	twn.tween_property(card_ui, "scale", base_scale, 0.22 * duration_scale).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
 # Hit flash + jitter on a card when it takes damage (or heals). Multiple hits
