@@ -35,3 +35,13 @@ Scope: current working tree, preserving changes already present on 2026-09-09.
 - Godot editor import/parse completed without errors; `git diff --check` is clean.
 - Online ready flow now uses protocol v6: both players review the same validated rules and submitted deck names, then confirm the canonical offer hash before the authority starts the match.
 - CI determinism: `.github/workflows/tests.yml` installs `fonts-noto-cjk` before the test run — card-layout scenes render Chinese skill names, and a runner without any CJK font measures degenerate fallback line metrics (chip rows inflate to a constant ~16px and the column overflows its fixed bounds). With a real CJK font the chips scale like the Windows reference build.
+
+## Card flow polish evidence
+
+2026-09-22, Godot 4.6.3 stable:
+
+- Defeated field cards remain face-up for a short break beat, follow a curved shrinking path into the discard pile, and pulse the pile on arrival. Gameplay state still resolves synchronously.
+- Draw batches carry presentation-only order metadata, leave the deck as staggered card backs, target the actual post-layout hand slots, and reveal each card face on arrival.
+- Local and replayed online feedback use the same timing metadata; animation lifetimes are owned by the battle UI so closing a battle cannot retain card resources.
+- `scripts/run_tests.ps1 -Suite logic` — **44/44 PASS**.
+- `scripts/run_tests.ps1 -Suite visual` — **5/5 PASS**, including `TestCardFlowAnimationVisual` screenshots for defeat-to-discard and ordered drawing.

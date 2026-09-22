@@ -1,5 +1,8 @@
 extends "res://BattleMainActions.gd"
 
+var _pending_hand_arrivals: Array = []
+var _hand_arrival_sort_connected := false
+
 # ============================================
 # Helpers
 # ============================================
@@ -36,8 +39,18 @@ func _play_death_feedback(slot_ui: Control) -> void:
 	if card_ui == null or not is_instance_valid(card_ui):
 		slot_ui.set_card(null)
 		return
-	BattleFx.death_fade($CanvasLayer, card_ui, _ui_scale())
+	BattleFx.death_fade(
+		$CanvasLayer,
+		card_ui,
+		_ui_scale(),
+		_discard_fly_target(),
+		Callable(self, "_play_death_discard_feedback")
+	)
 	slot_ui.set_card(null)
+
+
+func _play_death_discard_feedback() -> void:
+	_play_discard_pile_arrival(Color(0.82, 0.52, 0.30, 1.0))
 
 
 # Incremental hand refresh: hand mutations preserve order (plays remove a
@@ -112,6 +125,10 @@ func reset_hand_ui_from_game_state() -> void:
 		hand_container.remove_child(child)
 		child.queue_free()
 	_pending_hand_entry_ids.clear()
+	_pending_hand_arrivals.clear()
+	if hand_container.sort_children.is_connected(_flush_pending_hand_arrivals):
+		hand_container.sort_children.disconnect(_flush_pending_hand_arrivals)
+	_hand_arrival_sort_connected = false
 	_refresh_hand_ui()
 
 
@@ -150,10 +167,25 @@ func _play_hand_card_enter_feedback(card_ui: Control) -> void:
 
 
 func _prepare_hand_entry_ui(card_ui: Control, card_data: CardData) -> void:
-	if card_data != null and _pending_hand_entry_ids.has(card_data.instance_id):
-		_pending_hand_entry_ids.erase(card_data.instance_id)
+	var entry_key := _hand_entry_key(card_data)
+	if card_data != null and _pending_hand_entry_ids.has(entry_key):
+		var pending = _pending_hand_entry_ids.get(entry_key, {})
+		_pending_hand_entry_ids.erase(entry_key)
 		card_ui.modulate.a = 0.0
-		get_tree().create_timer(0.58).timeout.connect(_reveal_arriving_hand_card.bind(weakref(card_ui)))
+		var reveal_delay := 0.50
+		if pending is Dictionary:
+			reveal_delay = float(pending.get("reveal_delay", reveal_delay))
+		get_tree().create_timer(reveal_delay).timeout.connect(_reveal_arriving_hand_card.bind(weakref(card_ui)))
+		if pending is Dictionary and pending.has("feedback"):
+			_pending_hand_arrivals.append({
+				"reference": weakref(card_ui),
+				"card": card_data,
+				"feedback": pending["feedback"],
+			})
+			if not _hand_arrival_sort_connected:
+				_hand_arrival_sort_connected = true
+				hand_container.sort_children.connect(_flush_pending_hand_arrivals, CONNECT_ONE_SHOT)
+			hand_container.queue_sort()
 		return
 	_play_hand_card_enter_feedback(card_ui)
 
@@ -164,10 +196,42 @@ func _reveal_arriving_hand_card(reference: WeakRef) -> void:
 		_play_hand_card_enter_feedback(card_ui)
 
 
+func _start_arriving_hand_card(reference: WeakRef, card: CardData, feedback: Dictionary) -> void:
+	var card_ui: Control = reference.get_ref()
+	if card_ui == null or not is_instance_valid(card_ui):
+		return
+	_play_hand_resolution_feedback(
+		card,
+		int(feedback.get("player", _view_player())),
+		"hand",
+		str(feedback.get("source", "generated")),
+		feedback.get("source_meta", {}),
+		card_ui.global_position + card_ui.size * 0.5
+	)
+
+
+func _flush_pending_hand_arrivals() -> void:
+	_hand_arrival_sort_connected = false
+	var arrivals := _pending_hand_arrivals.duplicate()
+	_pending_hand_arrivals.clear()
+	for arrival: Dictionary in arrivals:
+		_start_arriving_hand_card(arrival["reference"], arrival["card"], arrival["feedback"])
+
+
 func _on_hand_entry_resolved(card: CardData, player: int, destination: String, source: String, source_meta: Dictionary) -> void:
+	var batch_index := maxi(0, int(source_meta.get("batch_index", 0)))
 	if destination == "hand" and player == _view_player():
-		_pending_hand_entry_ids[card.instance_id] = true
-	_play_hand_resolution_feedback(card, player, destination, source, source_meta)
+		var reveal_delay := BattleFx.draw_card_arrival_delay(batch_index) if source == "deck" else 0.53 + batch_index * BattleFx.CARD_DRAW_STAGGER
+		_pending_hand_entry_ids[_hand_entry_key(card)] = {
+			"reveal_delay": reveal_delay,
+			"feedback": {
+				"player": player,
+				"source": source,
+				"source_meta": source_meta.duplicate(true),
+			},
+		}
+	else:
+		_play_hand_resolution_feedback(card, player, destination, source, source_meta)
 	if destination == "discard":
 		_spawn_toast(Locale.t("tip.hand_overflow", [card.card_name]), "warn", 2.0)
 	var network_meta := source_meta.duplicate(true)
@@ -183,9 +247,21 @@ func _on_hand_entry_resolved(card: CardData, player: int, destination: String, s
 	})
 
 
-func _play_hand_resolution_feedback(card: CardData, player: int, destination: String, source: String, source_meta: Dictionary) -> void:
+func _hand_entry_key(card: CardData) -> String:
+	if card == null:
+		return ""
+	if not card.instance_id.is_empty():
+		return card.instance_id
+	# Hand-authored tests and transient generated cards can exist before a
+	# persistent instance id is assigned. Object identity keeps their pending
+	# arrival timing independent within the same local draw batch.
+	return "runtime:%d" % card.get_instance_id()
+
+
+func _play_hand_resolution_feedback(card: CardData, player: int, destination: String, source: String, source_meta: Dictionary, target_override: Vector2 = Vector2.INF) -> void:
 	var start := _hand_resolution_source_position(player, source, source_meta)
-	var target := _draw_fly_target_for_player(player) if destination == "hand" else _discard_fly_target()
+	var target := target_override if target_override != Vector2.INF else (_hand_card_target(card, player) if destination == "hand" else _discard_fly_target())
+	var batch_index := maxi(0, int(source_meta.get("batch_index", 0)))
 	var can_show_face := card != null and (destination == "discard" or player == _view_player()) and (source != "deck" or source_meta.has("source_position"))
 	if can_show_face:
 		var ghost = card_ui_scene.instantiate()
@@ -194,21 +270,33 @@ func _play_hand_resolution_feedback(card: CardData, player: int, destination: St
 		ghost.is_hand_card = false
 		ghost.apply_ui_scale(0.52 * _ui_scale())
 		_set_ghost_mouse_filter(ghost)
-		BattleFx.travel_card_control($CanvasLayer, ghost, start, target, 0, _ui_scale())
+		BattleFx.travel_card_control($CanvasLayer, ghost, start, target, batch_index, _ui_scale())
 	else:
-		BattleFx.spawn_draw_fly_card($CanvasLayer, start, target, 0, _ui_scale())
+		BattleFx.spawn_draw_fly_card($CanvasLayer, start, target, batch_index, _ui_scale())
 	if destination == "discard":
-		get_tree().create_timer(0.46).timeout.connect(_play_overflow_discard_feedback)
+		get_tree().create_timer(0.53 + batch_index * BattleFx.CARD_DRAW_STAGGER).timeout.connect(_play_overflow_discard_feedback)
+
+
+func _hand_card_target(card: CardData, player: int) -> Vector2:
+	if player == _view_player() and card != null:
+		for child in hand_container.get_children():
+			if child.get("current_card_data") == card:
+				return child.global_position + child.size * 0.5
+	return _draw_fly_target_for_player(player)
 
 
 func _play_overflow_discard_feedback() -> void:
+	_play_discard_pile_arrival(Color(1.0, 0.70, 0.42, 1.0))
+
+
+func _play_discard_pile_arrival(tint: Color) -> void:
 	var target: Control = discard_pile_btn if discard_pile_btn != null else discard_zone
 	if target == null or not is_instance_valid(target):
 		return
 	var base_modulate: Color = target.modulate
 	var base_scale: Vector2 = target.scale
 	var twn := create_tween().set_parallel(true)
-	twn.tween_property(target, "modulate", Color(1.0, 0.70, 0.42, 1.0), 0.08)
+	twn.tween_property(target, "modulate", tint, 0.08)
 	twn.tween_property(target, "scale", base_scale * 1.04, 0.08)
 	twn.tween_property(target, "modulate", base_modulate, 0.18).set_delay(0.08)
 	twn.tween_property(target, "scale", base_scale, 0.18).set_delay(0.08)

@@ -357,8 +357,15 @@ func draw_cards(amount: int, hand: Array = active_hand(), player: int = 0) -> Ar
 		candidates.append(shared_deck.pop_front())
 
 	var drawn: Array = []
-	for card_data: CardData in candidates:
-		var destination := resolve_hand_entry_for_player(card_data, "deck", {}, player)
+	for candidate_index in range(candidates.size()):
+		var card_data: CardData = candidates[candidate_index]
+		# Presentation uses the batch position to stagger cards without delaying
+		# authoritative draw resolution. Keep this metadata cosmetic: rules and
+		# networking still resolve the whole batch immediately.
+		var destination := resolve_hand_entry_for_player(card_data, "deck", {
+			"batch_index": candidate_index,
+			"batch_size": candidates.size(),
+		}, player)
 		if destination == "hand":
 			drawn.append(card_data)
 			_log("Drew: %s" % card_data.card_name)

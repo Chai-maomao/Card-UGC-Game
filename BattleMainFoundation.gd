@@ -397,7 +397,18 @@ func _apply_authority_state(state: Dictionary, label: String = "authority") -> v
 		if str(event.get("kind", "")) == "hand_entry" \
 				and str(event.get("destination", "")) == "hand" \
 				and int(event.get("player", 0)) == _view_player():
-			_pending_hand_entry_ids[str(event.get("instance_id", ""))] = true
+			var source_meta: Dictionary = event.get("source_meta", {})
+			var batch_index := maxi(0, int(source_meta.get("batch_index", 0)))
+			var source := str(event.get("source", "generated"))
+			var reveal_delay := BattleFx.draw_card_arrival_delay(batch_index) if source == "deck" else 0.53 + batch_index * BattleFx.CARD_DRAW_STAGGER
+			_pending_hand_entry_ids[str(event.get("instance_id", ""))] = {
+				"reveal_delay": reveal_delay,
+				"feedback": {
+					"player": int(event.get("player", 0)),
+					"source": source,
+					"source_meta": source_meta.duplicate(true),
+				},
+			}
 	game.apply_initial_state(state)
 	NetworkManager.save_match_snapshot(game.export_initial_state())
 	_restore_local_art_paths()
@@ -1025,14 +1036,19 @@ func _replay_feedback_event(event: Dictionary) -> void:
 		_play_discard_feedback()
 	elif kind == "hand_entry":
 		var meta: Dictionary = event.get("source_meta", {}).duplicate(true)
-		_play_hand_resolution_feedback(
-			_find_feedback_card(str(event.get("instance_id", ""))),
-			player,
-			str(event.get("destination", "")),
-			str(event.get("source", "generated")),
-			meta
-		)
-		if str(event.get("destination", "")) == "discard":
+		var destination := str(event.get("destination", ""))
+		# The local hand card starts its flight from the container's post-sort
+		# callback, which provides an exact landing slot and owns the connection's
+		# lifetime. Other destinations can replay immediately.
+		if destination != "hand" or player != _view_player():
+			_play_hand_resolution_feedback(
+				_find_feedback_card(str(event.get("instance_id", ""))),
+				player,
+				destination,
+				str(event.get("source", "generated")),
+				meta
+			)
+		if destination == "discard":
 			_spawn_toast(Locale.t("tip.hand_overflow", [str(event.get("card_name", Locale.t("battle.card")))]), "warn", 2.0)
 
 

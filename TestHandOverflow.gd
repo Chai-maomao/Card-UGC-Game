@@ -61,6 +61,10 @@ func _test_split_draw_and_reset() -> void:
 		"overflow must restore HP, max HP, attack, shield and turn cost before discard")
 	_assert(resolution_events.size() == 2 and resolution_events[0]["destination"] == "hand" and resolution_events[1]["destination"] == "discard",
 		"multi-card hand entry must emit ordered per-card destinations")
+	_assert(resolution_events[0]["source_meta"].get("batch_index", -1) == 0 \
+		and resolution_events[1]["source_meta"].get("batch_index", -1) == 1 \
+		and resolution_events[1]["source_meta"].get("batch_size", -1) == 2,
+		"draw batch metadata must preserve animation order for admitted and overflow cards")
 
 
 func _test_no_same_batch_redraw() -> void:
@@ -122,8 +126,14 @@ func _test_battle_stat_bonuses_reset_on_defeat() -> void:
 		"defeat must restore printed max HP, current HP and attack before discard")
 
 
-func _on_hand_entry_resolved(card: CardData, player: int, destination: String, source: String, _source_meta: Dictionary) -> void:
-	resolution_events.append({"card": card, "player": player, "destination": destination, "source": source})
+func _on_hand_entry_resolved(card: CardData, player: int, destination: String, source: String, source_meta: Dictionary) -> void:
+	resolution_events.append({
+		"card": card,
+		"player": player,
+		"destination": destination,
+		"source": source,
+		"source_meta": source_meta.duplicate(true),
+	})
 
 
 func _assert(condition: bool, message: String) -> void:

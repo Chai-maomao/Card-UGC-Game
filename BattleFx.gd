@@ -13,6 +13,8 @@ const CARD_BACK_SIZE := Vector2(52, 72)
 const COMBAT_TEXT_RISE_TIME := 0.82
 const PROJECTILE_TIME := 0.35
 const BANNER_HOLD := 0.9
+const CARD_DRAW_STAGGER := 0.065
+const CARD_DRAW_TRAVEL_TIME := 0.40
 
 # --- Procedural FX textures (generated once) ---
 var _glow_dot: Texture2D = null
@@ -376,22 +378,35 @@ func spawn_draw_fly_card(layer: CanvasLayer, start: Vector2, target: Vector2, in
 	card_back.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	card_back.size = size
 	card_back.pivot_offset = size / 2
-	card_back.position = start - size / 2 + Vector2(index * 7, -index * 5)
-	card_back.modulate.a = 0.0
+	card_back.position = start - size / 2
+	card_back.scale = Vector2(0.78, 0.78)
+	card_back.rotation = deg_to_rad(-5.0)
+	card_back.modulate = Color(0.84, 0.90, 1.0, 0.0)
+	card_back.set_meta("battle_fx_kind", "draw_card")
 	layer.add_child(card_back)
 	layer.move_child(card_back, layer.get_child_count() - 1)
-	var lift: float = -78.0 * ui_scale - index * 8.0
-	var mid: Vector2 = (start + target) * 0.5 + Vector2(0, lift)
-	var duration: float = 0.58 + index * 0.07
-	var twn := create_tween()
+	var direction := signf(target.x - start.x) if absf(target.x - start.x) > 1.0 else 1.0
+	var lift: float = -64.0 * ui_scale - minf(index, 4) * 5.0 * ui_scale
+	var mid: Vector2 = (start + target) * 0.5 + Vector2(-18.0 * direction * ui_scale, lift)
+	var end_position := target - size / 2
+	var launch_time := CARD_DRAW_TRAVEL_TIME * 0.44
+	var settle_time := CARD_DRAW_TRAVEL_TIME * 0.56
+	var twn := layer.create_tween()
 	twn.set_parallel(false)
-	twn.tween_property(card_back, "modulate:a", 1.0, 0.08)
-	twn.parallel().tween_property(card_back, "scale", Vector2(1.08, 1.08), 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	twn.tween_property(card_back, "position", mid - card_back.size / 2, duration * 0.45).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	twn.tween_property(card_back, "position", target - card_back.size / 2 + Vector2(index * 5, 0), duration * 0.55).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	twn.parallel().tween_property(card_back, "scale", Vector2(0.82, 0.82), duration * 0.55)
-	twn.parallel().tween_property(card_back, "modulate:a", 0.0, 0.16).set_delay(duration * 0.35)
+	twn.tween_interval(index * CARD_DRAW_STAGGER)
+	twn.tween_property(card_back, "modulate", Color.WHITE, 0.045)
+	twn.parallel().tween_property(card_back, "scale", Vector2(1.06, 1.06), launch_time).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	twn.parallel().tween_property(card_back, "rotation", deg_to_rad(3.5) * direction, launch_time).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	twn.parallel().tween_property(card_back, "position", mid - size / 2, launch_time).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	twn.tween_property(card_back, "position", end_position, settle_time).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+	twn.parallel().tween_property(card_back, "rotation", 0.0, settle_time).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	twn.parallel().tween_property(card_back, "scale", Vector2(0.90, 0.90), settle_time).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	twn.parallel().tween_property(card_back, "modulate:a", 0.0, 0.10).set_delay(maxf(0.0, settle_time - 0.10))
 	twn.chain().tween_callback(_release.bind("card_back", card_back))
+
+
+func draw_card_arrival_delay(index: int) -> float:
+	return 0.045 + CARD_DRAW_TRAVEL_TIME + maxi(0, index) * CARD_DRAW_STAGGER
 
 
 # Move a face-up card preview between two UI locations. The caller owns the
@@ -403,16 +418,18 @@ func travel_card_control(layer: CanvasLayer, card_ghost: Control, start: Vector2
 	layer.add_child(card_ghost)
 	layer.move_child(card_ghost, layer.get_child_count() - 1)
 	card_ghost.pivot_offset = card_ghost.size / 2
-	card_ghost.position = start - card_ghost.size / 2 + Vector2(index * 6, -index * 4)
+	card_ghost.position = start - card_ghost.size / 2
 	card_ghost.modulate.a = 0.0
+	card_ghost.set_meta("battle_fx_kind", "travel_card")
 	var lift: float = -62.0 * ui_scale - index * 6.0
 	var mid: Vector2 = (start + target) * 0.5 + Vector2(0, lift)
-	var duration: float = 0.52 + index * 0.06
-	var twn := create_tween()
+	var duration: float = 0.46
+	var twn := layer.create_tween()
+	twn.tween_interval(index * CARD_DRAW_STAGGER)
 	twn.tween_property(card_ghost, "modulate:a", 1.0, 0.07)
 	twn.parallel().tween_property(card_ghost, "scale", card_ghost.scale * 1.05, 0.10).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	twn.tween_property(card_ghost, "position", mid - card_ghost.size / 2, duration * 0.45).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	twn.tween_property(card_ghost, "position", target - card_ghost.size / 2 + Vector2(index * 4, 0), duration * 0.55).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	twn.tween_property(card_ghost, "position", target - card_ghost.size / 2, duration * 0.55).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	twn.parallel().tween_property(card_ghost, "scale", card_ghost.scale * 0.78, duration * 0.55)
 	twn.parallel().tween_property(card_ghost, "modulate:a", 0.0, 0.14).set_delay(duration * 0.36)
 	twn.tween_callback(card_ghost.queue_free)
@@ -886,23 +903,55 @@ func _finish_move_ghost(ghost, target_slot, layer: CanvasLayer, end_position: Ve
 		ghost.queue_free()
 
 
-# Card death: a ghost copy sinks and fades while the real card is removed,
-# plus a dark arcane burst.
-func death_fade(layer: CanvasLayer, card_ui, ui_scale: float = 1.0) -> void:
+# Card defeat: preserve the readable break beat, then send a face-up ghost to
+# the discard pile. Rules already moved the CardData synchronously; this is a
+# presentation-only echo and therefore never blocks chained death effects.
+func death_fade(layer: CanvasLayer, card_ui, ui_scale: float = 1.0, discard_target: Vector2 = Vector2.INF, on_arrival: Callable = Callable()) -> void:
 	if layer == null or card_ui == null or not is_instance_valid(card_ui):
 		return
 	death_burst(layer, card_ui.global_position + card_ui.size / 2, ui_scale)
 	var ghost := spawn_card_ghost(layer, card_ui, ui_scale)
 	if ghost == null:
 		return
+	ghost.set_meta("battle_fx_kind", "death_discard_card")
 	var base_position: Vector2 = ghost.position
 	var base_scale: Vector2 = ghost.scale
-	var twn := create_tween()
-	twn.set_parallel(true)
-	twn.tween_property(ghost, "modulate:a", 0.0, 0.24)
-	twn.tween_property(ghost, "position", base_position + Vector2(0, 18), 0.24).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	twn.tween_property(ghost, "scale", base_scale * 0.82, 0.24).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
-	twn.chain().tween_callback(ghost.queue_free)
+	ghost.pivot_offset = ghost.size * 0.5
+	if discard_target == Vector2.INF:
+		var fallback := layer.create_tween().set_parallel(true)
+		fallback.tween_property(ghost, "modulate:a", 0.0, 0.24)
+		fallback.tween_property(ghost, "position", base_position + Vector2(0, 18), 0.24).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		fallback.tween_property(ghost, "scale", base_scale * 0.82, 0.24).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_IN)
+		fallback.chain().tween_callback(ghost.queue_free)
+		return
+	var start_center: Vector2 = base_position + ghost.size * 0.5
+	var direction := signf(discard_target.x - start_center.x) if absf(discard_target.x - start_center.x) > 1.0 else 1.0
+	var control_center := (start_center + discard_target) * 0.5 + Vector2(28.0 * direction, -72.0) * ui_scale
+	var twn := layer.create_tween()
+	twn.set_parallel(false)
+	# First beat: the card loses its footing but remains identifiable.
+	twn.tween_property(ghost, "scale", Vector2(base_scale.x * 1.04, base_scale.y * 0.92), 0.085).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	twn.parallel().tween_property(ghost, "rotation", deg_to_rad(-3.0) * direction, 0.085)
+	# Second beat: a compact curved flight makes the pile destination explicit.
+	twn.tween_method(func(t: float):
+		if not is_instance_valid(ghost):
+			return
+		var a := start_center.lerp(control_center, t)
+		var b := control_center.lerp(discard_target, t)
+		ghost.position = a.lerp(b, t) - ghost.size * 0.5
+	, 0.0, 1.0, 0.36).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN_OUT)
+	twn.parallel().tween_property(ghost, "scale", base_scale * 0.46, 0.36).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	twn.parallel().tween_property(ghost, "rotation", deg_to_rad(9.0) * direction, 0.36).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	twn.parallel().tween_property(ghost, "modulate:a", 0.0, 0.12).set_delay(0.24)
+	twn.tween_callback(_finish_death_discard.bind(ghost, layer, discard_target, ui_scale, on_arrival))
+
+
+func _finish_death_discard(ghost: Control, layer: CanvasLayer, target: Vector2, ui_scale: float, on_arrival: Callable) -> void:
+	if ghost != null and is_instance_valid(ghost):
+		ghost.queue_free()
+	card_drop_particles(layer, target, 6, ui_scale)
+	if on_arrival.is_valid():
+		on_arrival.call()
 
 
 # Hand card entry: fade in while springing to full size. Position is left to
