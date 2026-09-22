@@ -52,35 +52,46 @@ func _test_input_controls() -> void:
 func _test_battle_log_copy() -> void:
 	var event := {
 		"kind": "attack", "player": 1, "source": "先锋", "target": "守卫",
-		"target_player": 2, "target_slot": 0, "base_damage": 5, "effective_damage": 5,
-		"damage_events": [{
-			"player": 2, "slot": 0, "target": "守卫", "declared": 5, "actual": 2,
-			"reduction_pct": 20, "temp_hp_before": 2, "temp_hp_after": 0,
-			"hp_after": 3, "max_hp": 5, "reason": "attack",
-		}],
-		"hp_events": [{"player": 2, "slot": 0, "card": "守卫", "delta": -2, "new_hp": 3, "max_hp": 5}],
-		"parasite_events": [], "failed_events": [], "effect_ids": [],
-		"before_state": {"p1_hp": 30, "p2_hp": 30, "p1_mana": 2, "p2_mana": 2},
-		"after_state": {"p1_hp": 30, "p2_hp": 30, "p1_mana": 3, "p2_mana": 2},
+		"target_player": 2, "target_slot": 0,
+		"before_state": {"p1_hp": 30, "p2_hp": 30, "cards": {
+			"1:0": {"player": 1, "instance_id": "vanguard", "name": "先锋", "hp": 5, "max_hp": 5, "shield": 0, "attack": 5, "statuses": [], "parasites": []},
+			"2:0": {"player": 2, "instance_id": "guard", "name": "守卫", "hp": 5, "max_hp": 5, "shield": 2, "attack": 1, "statuses": [], "parasites": []},
+		}},
+		"after_state": {"p1_hp": 30, "p2_hp": 30, "cards": {
+			"1:0": {"player": 1, "instance_id": "vanguard", "name": "先锋", "hp": 5, "max_hp": 5, "shield": 0, "attack": 5, "statuses": [], "parasites": []},
+			"2:0": {"player": 2, "instance_id": "guard", "name": "守卫", "hp": 3, "max_hp": 5, "shield": 0, "attack": 1, "statuses": [{"buff_id": "taunt", "value": 1, "duration": 2}], "parasites": []},
+		}},
 	}
 	var prior_language := Locale.language
 	Locale.language = "zh"
 	var zh := BattleLogFormatter.format_event(event, 1)
 	_check("己方·先锋 → 敌方·守卫" in zh, "Chinese attack copy must lead with actor and target")
-	_check("2点生命伤害" in zh and "生命 3/5" in zh, "Chinese attack copy must include actual damage and remaining HP")
-	_check("减伤20%" in zh and "护盾吸收2点" in zh and "圣水 +1" in zh, "Chinese attack copy must explain mitigation and resource changes")
-	_check(BattleLogFormatter.summary(zh).ends_with("生命 3/5）"), "broadcast summary must keep the primary outcome and omit secondary details")
+	_check("生命 5/5 → 3/5" in zh and "护盾 2 → 0" in zh and "状态 无 → 嘲讽（2回合）" in zh, "Chinese battle copy must show before/after HP and status values")
+	_check(not "伤害结算" in zh and not "减伤" in zh and not "吸收" in zh and not "圣水" in zh, "battle copy must not explain the causes of state changes")
+	_check("生命 5/5 → 3/5" in BattleLogFormatter.summary(zh), "broadcast summary must keep the first state change")
 	var utility_event := event.duplicate(true)
-	utility_event.merge({"kind": "skill", "skill": "守护", "damage_events": [], "hp_events": [], "effect_ids": ["shield"], "before_state": {}, "after_state": {}}, true)
+	utility_event.merge({"kind": "skill", "skill": "洞察", "before_state": {"p1_hp": 30, "p2_hp": 30, "cards": {}}, "after_state": {"p1_hp": 30, "p2_hp": 30, "cards": {}}}, true)
 	var utility_summary := BattleLogFormatter.summary(BattleLogFormatter.format_event(utility_event, 1))
-	_check("其他效果" in utility_summary and not "效果已结算" in utility_summary, "utility-only skills must name their resolved effect in the broadcast summary")
+	_check("生命与状态无变化" in utility_summary, "actions without HP or status changes must say so without naming their effects")
+	var parasite_event := utility_event.duplicate(true)
+	parasite_event.merge({"kind": "parasite", "source": "护命虫", "target": "先锋", "before_state": {"p1_hp": 30, "p2_hp": 30, "cards": {
+		"1:0": {"player": 1, "instance_id": "vanguard", "name": "先锋", "hp": 5, "max_hp": 5, "shield": 0, "attack": 5, "statuses": [], "parasites": []},
+	}}, "after_state": {"p1_hp": 30, "p2_hp": 30, "cards": {
+		"1:0": {"player": 1, "instance_id": "vanguard", "name": "先锋", "hp": 5, "max_hp": 5, "shield": 0, "attack": 5, "statuses": [], "parasites": [{"name": "护命虫", "hp": 2, "max_hp": 2}]},
+	}}}, true)
+	var parasite_copy := BattleLogFormatter.format_event(parasite_event, 1)
+	_check("寄生 无 → 护命虫（生命 2/2）" in parasite_copy and not "承受" in parasite_copy, "parasite broadcasts must show only attachment state changes")
 	event["source"] = "Vanguard"
 	event["target"] = "Guard"
-	event["damage_events"][0]["target"] = "Guard"
+	event["before_state"]["cards"]["1:0"]["name"] = "Vanguard"
+	event["after_state"]["cards"]["1:0"]["name"] = "Vanguard"
+	event["before_state"]["cards"]["2:0"]["name"] = "Guard"
+	event["after_state"]["cards"]["2:0"]["name"] = "Guard"
 	Locale.language = "en"
 	var en := BattleLogFormatter.format_event(event, 1)
 	_check("Friendly · Vanguard → Enemy · Guard" in en, "English attack copy must lead with actor and target")
-	_check("Guard took 2 HP damage" in en and "Damage resolution: 5 → 2" in en, "English attack copy must use natural result ordering")
+	_check("HP 5/5 → 3/5" in en and "Status None → Taunt (2 turns)" in en, "English battle copy must describe only before/after values")
+	_check(not "damage" in en.to_lower() and not "chance" in en.to_lower(), "English battle copy must omit causal explanations")
 	_check(not "；" in en and en.ends_with("."), "English battle copy must use English punctuation")
 	Locale.language = prior_language
 

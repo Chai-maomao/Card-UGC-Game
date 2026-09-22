@@ -185,12 +185,14 @@ func _feed_event(kind: String) -> Dictionary:
 	var event := {
 		"kind": kind, "player": 1, "source": "连锁练习", "target": "目标守卫",
 		"target_player": 2, "target_slot": 0, "skill": "重复打击",
-		"base_damage": 4, "effective_damage": 4,
-		"damage_events": [{"player": 2, "slot": 0, "target": "目标守卫", "declared": 4, "actual": 2, "reduction_pct": 25, "temp_hp_before": 1, "temp_hp_after": 0, "hp_after": 6, "max_hp": 8, "reason": kind}],
-		"hp_events": [{"player": 2, "slot": 0, "card": "目标守卫", "delta": -2, "new_hp": 6, "max_hp": 8}],
-		"parasite_events": [], "failed_events": [], "effect_ids": ["damage"] if kind == "attack" else ["damage", "draw_cards"],
-		"before_state": {"p1_hp": 30, "p2_hp": 30, "p1_mana": 2, "p2_mana": 2},
-		"after_state": {"p1_hp": 30, "p2_hp": 30, "p1_mana": 3 if kind == "attack" else 2, "p2_mana": 2},
+		"before_state": {"p1_hp": 30, "p2_hp": 30, "cards": {
+			"1:0": {"player": 1, "instance_id": "practice", "name": "连锁练习", "hp": 5, "max_hp": 5, "shield": 0, "attack": 4, "statuses": [], "parasites": []},
+			"2:0": {"player": 2, "instance_id": "guard", "name": "目标守卫", "hp": 8, "max_hp": 8, "shield": 1, "attack": 1, "statuses": [], "parasites": []},
+		}},
+		"after_state": {"p1_hp": 30, "p2_hp": 30, "cards": {
+			"1:0": {"player": 1, "instance_id": "practice", "name": "连锁练习", "hp": 5, "max_hp": 5, "shield": 0, "attack": 4, "statuses": [], "parasites": []},
+			"2:0": {"player": 2, "instance_id": "guard", "name": "目标守卫", "hp": 6, "max_hp": 8, "shield": 0, "attack": 1, "statuses": [{"buff_id": "stun", "value": 1, "duration": 1}] if kind == "skill" else [], "parasites": []},
+		}},
 	}
 	return event
 

@@ -579,12 +579,7 @@ func is_resolution_locked() -> bool:
 	return _resolution_running or _resolution_pending_steps > 1
 
 
-func _on_skill_effect_resolved(_source: CardData, effect_id: String, _target: Variant, _chain_depth: int) -> void:
-	if not _action_broadcast.is_empty():
-		var effect_ids: Array = _action_broadcast.get("effect_ids", [])
-		if not effect_id in effect_ids:
-			effect_ids.append(effect_id)
-		_action_broadcast["effect_ids"] = effect_ids
+func _on_skill_effect_resolved(_source: CardData, _effect_id: String, _target: Variant, _chain_depth: int) -> void:
 	if GamePreferences.animation_acceleration_enabled() or battle_finished:
 		return
 	_resolution_pending_steps += 1
@@ -919,7 +914,7 @@ func _refresh_action_log_text() -> void:
 # Combat feedback
 # ============================================
 
-func _on_hp_changed(target: CardData, delta: int, new_hp: int):
+func _on_hp_changed(target: CardData, delta: int, _new_hp: int):
 	if delta == 0:
 		return
 	# Authority records the change (as player+slot) so it can be replayed as
@@ -927,7 +922,7 @@ func _on_hp_changed(target: CardData, delta: int, new_hp: int):
 	# and therefore never emits hp_changed itself.
 	var loc := _locate_card_player_slot(target)
 	if loc.slot >= 0 and not _action_broadcast.is_empty():
-		_action_hp_events.append({"player": loc.player, "slot": loc.slot, "delta": delta, "card": target.card_name, "new_hp": new_hp, "max_hp": target.max_hp})
+		_action_hp_events.append({"player": loc.player, "slot": loc.slot, "delta": delta, "card": target.card_name})
 	if NetworkManager.is_online and NetworkManager.is_authority():
 		if loc.slot >= 0:
 			_pending_hp_events.append({"player": loc.player, "slot": loc.slot, "delta": delta})
@@ -949,9 +944,6 @@ func _on_damage_resolved(source: CardData, target: CardData, declared: int, actu
 		"actual": actual,
 		"reduction_pct": reduction_pct,
 		"temp_hp_before": temp_hp_before,
-		"temp_hp_after": target.temp_hp,
-		"hp_after": target.hp,
-		"max_hp": target.max_hp,
 		"reason": reason,
 	})
 
@@ -1297,9 +1289,39 @@ func _format_action_broadcast(event: Dictionary) -> String:
 
 
 func _battle_log_state() -> Dictionary:
+	var cards := {}
+	for player in [1, 2]:
+		var field: BattleField = game.player_field if player == 1 else game.player2_field
+		for slot in range(field.slots.size()):
+			var card: CardData = field.slots[slot]
+			if card == null:
+				continue
+			var parasites: Array = []
+			for value in card.parasite_cards:
+				if value is CardData:
+					var parasite: CardData = value
+					parasites.append({
+						"instance_id": parasite.instance_id,
+						"name": parasite.card_name,
+						"hp": parasite.hp,
+						"max_hp": parasite.max_hp,
+					})
+			cards["%d:%d" % [player, slot]] = {
+				"player": player,
+				"slot": slot,
+				"instance_id": card.instance_id,
+				"name": card.card_name,
+				"hp": card.hp,
+				"max_hp": card.max_hp,
+				"shield": card.temp_hp,
+				"attack": card.effective_atk(),
+				"statuses": card.status_effects.duplicate(true),
+				"immune_lethal": card.immune_lethal,
+				"parasites": parasites,
+			}
 	return {
 		"p1_hp": game.player_field.player_hp, "p2_hp": game.player2_field.player_hp,
-		"p1_mana": game.player_field.get_total_mana(), "p2_mana": game.player2_field.get_total_mana(),
+		"cards": cards,
 	}
 
 
