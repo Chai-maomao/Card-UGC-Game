@@ -109,6 +109,7 @@ func _check_battle_2d_layout(scene: Node, bounds: Rect2, tag: String) -> void:
 	var hand_container := scene.get("hand_container") as Control
 	var discard_zone := scene.get("discard_zone") as Control
 	var draw_button := scene.get("draw_pile_btn") as Control
+	var broadcast_strip := scene.get("combat_broadcast_panel") as Control
 	for toolbar_name in ["abandon_battle_button", "action_log_button", "help_btn"]:
 		var toolbar_button := scene.get(toolbar_name) as Control
 		_assert(not _controls_overlap(enemy_hud, toolbar_button), "%s enemy HUD overlaps %s" % [tag, toolbar_name])
@@ -117,6 +118,11 @@ func _check_battle_2d_layout(scene: Node, bounds: Rect2, tag: String) -> void:
 	_assert(not _controls_overlap(player_hud, hand_area), "%s player HUD overlaps the hand dock" % tag)
 	_assert(not _controls_overlap(hand_area, discard_zone), "%s discard target overlaps the hand dock" % tag)
 	_assert(not _controls_overlap(hand_area, draw_button), "%s draw pile overlaps the hand dock" % tag)
+	_assert(not _controls_overlap(enemy_row, broadcast_strip), "%s combat broadcast overlaps the enemy field" % tag)
+	var log_panel := scene.get("action_log_panel") as Control
+	log_panel.visible = true
+	_assert(not _controls_overlap(enemy_row, log_panel), "%s opened battle log overlaps the enemy field" % tag)
+	log_panel.visible = false
 	_assert(_rect_inside(hand_area.get_global_rect(), bounds, 2.0), "%s hand dock exceeds viewport" % tag)
 	for card in hand_container.get_children():
 		_assert(_rect_inside((card as Control).get_global_rect(), hand_area.get_global_rect(), 2.0), "%s hand card exceeds its dock" % tag)

@@ -26,6 +26,12 @@ func _ready() -> void:
 	var battle := preload("res://Main.tscn").instantiate()
 	add_child(battle)
 	await _settle()
+	battle._show_combat_broadcast("连锁练习使用重复打击，对目标守卫造成2点伤害", "skill")
+	battle._show_combat_broadcast("目标守卫的护盾吸收了1点伤害", "system")
+	battle.action_log_panel.visible = true
+	battle._apply_responsive_layout()
+	await _capture("optimization-battle-feed.png")
+	battle.action_log_panel.visible = false
 	battle.game.turn_number = 2
 	battle.game.player_field.slots[0] = card
 	battle.game.player2_field.slots[0] = CardData.new("目标守卫", 2, 8, 2)
@@ -43,6 +49,13 @@ func _ready() -> void:
 	PracticeChallenges.show_picker(battle)
 	await _capture("optimization-challenges.png")
 	battle.queue_free()
+	await _settle()
+	var deck_select := preload("res://BattleDeckSelect.tscn").instantiate()
+	add_child(deck_select)
+	await _settle()
+	deck_select._show_battle_config_popup([])
+	await _capture("optimization-battle-config.png")
+	deck_select.queue_free()
 	await _settle()
 	PlayerData.card_playtest_context = {}
 	PlayerData.practice_challenge_id = "parasite"

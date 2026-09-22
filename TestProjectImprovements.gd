@@ -12,6 +12,7 @@ func _ready() -> void:
 	_test_trace()
 	_test_sharing_and_rules()
 	_test_gameplay_logging()
+	_test_input_controls()
 	if failures.is_empty():
 		print("TEST_PROJECT_IMPROVEMENTS_OK")
 		get_tree().quit(0)
@@ -29,6 +30,22 @@ func _test_gameplay_logging() -> void:
 	for path in ["res://SkillEngine.gd", "res://SkillEffectApplier.gd", "res://CardData.gd", "res://ParasiteRules.gd"]:
 		var file := FileAccess.open(path, FileAccess.READ)
 		_check(file != null and not file.get_as_text().contains("\n\tprint("), "high-frequency gameplay print bypasses the log gate: " + path)
+
+
+func _test_input_controls() -> void:
+	var selector := preload("res://BattleDeckSelect.tscn").instantiate()
+	var rows := VBoxContainer.new()
+	selector.add_child(rows)
+	var result: Dictionary = selector._make_config_check_row(rows, "测试开关", false)
+	var toggle = result.get("check")
+	_check(toggle is CheckButton, "battle parameter booleans must use visible sliding switches")
+	_check(toggle.has_theme_stylebox_override("normal"), "battle parameter switch must use the shared interaction outline")
+	var input := LineEdit.new()
+	UITheme.apply_input(input)
+	var style := input.get_theme_stylebox("normal") as StyleBoxFlat
+	_check(style != null and style.get_border_width(SIDE_LEFT) > 0 and style.border_color.a > 0.5, "player text inputs need a visible soft outline")
+	input.free()
+	selector.free()
 
 
 func _score(effects: Array, extra: Dictionary = {}) -> float:

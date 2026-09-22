@@ -40,6 +40,16 @@ func _ready() -> void:
 	_assert(not _overlap(player_hud, hand_area), "player HUD overlaps the hand dock")
 	_assert(not _overlap(hand_area, discard_zone), "discard zone overlaps the hand dock")
 	_assert(not _overlap(hand_area, draw_button), "draw pile overlaps the hand dock")
+	var broadcast_strip := battle.get("combat_broadcast_panel") as Control
+	_assert(broadcast_strip != null and not _overlap(enemy_row, broadcast_strip), "combat broadcast must stay outside the enemy field")
+	battle.call("_show_combat_broadcast", "先锋攻击守卫，造成2点伤害", "attack")
+	var broadcast_label := battle.get("combat_broadcast_label") as Label
+	_assert(broadcast_label != null and "先锋攻击守卫" in broadcast_label.text, "latest action must remain readable in the centre strip")
+	var log_panel := battle.get("action_log_panel") as Control
+	log_panel.visible = true
+	_assert(not _overlap(enemy_row, log_panel), "opened battle log must not cover the enemy field")
+	var log_text := battle.get("action_log_text") as RichTextLabel
+	_assert(log_text != null and log_text.selection_enabled and "回合" in log_text.get_parsed_text(), "battle log must group selectable entries by turn")
 	_assert(hand_container.get_child_count() == SkillEngine.MAX_HAND_SIZE, "the legal six-card hand must remain fully represented")
 	for card in hand_container.get_children():
 		_assert(_inside((card as Control).get_global_rect(), hand_area.get_global_rect(), 2.0), "a legal hand card exceeds the hand dock")

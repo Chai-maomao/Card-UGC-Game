@@ -187,13 +187,18 @@ static func apply_label(label: Label, muted: bool = false) -> void:
 static func apply_input(control: Control) -> void:
 	if control == null:
 		return
-	var normal_style := panel_style(Color(0.075, 0.085, 0.11), Color(0.30, 0.35, 0.45), 1, 6)
-	var focus_style := panel_style(Color(0.075, 0.085, 0.11), COLOR_ACCENT, 1, 6, Color(COLOR_ACCENT.r, COLOR_ACCENT.g, COLOR_ACCENT.b, 0.35), 3)
-	control.add_theme_stylebox_override("normal", normal_style)
-	control.add_theme_stylebox_override("focus", focus_style)
-	control.add_theme_stylebox_override("read_only", normal_style)
-	control.add_theme_color_override("font_color", COLOR_TEXT)
-	control.add_theme_color_override("font_placeholder_color", COLOR_TEXT_MUTED)
+	var targets: Array[Control] = [control]
+	if control is SpinBox:
+		targets.append((control as SpinBox).get_line_edit())
+	var outline := Color(0.48, 0.56, 0.68, 0.72)
+	var normal_style := panel_style(Color(0.075, 0.085, 0.11), outline, 1, 6)
+	var focus_style := panel_style(Color(0.075, 0.085, 0.11), COLOR_ACCENT.lightened(0.18), 2, 6, Color(COLOR_ACCENT.r, COLOR_ACCENT.g, COLOR_ACCENT.b, 0.30), 3)
+	for target in targets:
+		target.add_theme_stylebox_override("normal", normal_style)
+		target.add_theme_stylebox_override("focus", focus_style)
+		target.add_theme_stylebox_override("read_only", normal_style)
+		target.add_theme_color_override("font_color", COLOR_TEXT)
+		target.add_theme_color_override("font_placeholder_color", COLOR_TEXT_MUTED)
 
 
 static func apply_item_list(list: ItemList) -> void:
@@ -322,6 +327,8 @@ static func theme_tree(root: Node, include_internal: bool = false) -> void:
 		elif child is OptionButton:
 			apply_button(child, str(child.get_meta("ui_button_variant", "secondary")))
 			apply_popup_menu(child.get_popup())
+		elif child is CheckButton:
+			apply_button(child, str(child.get_meta("ui_button_variant", "secondary")), false)
 		elif child is CheckBox:
 			apply_button(child, str(child.get_meta("ui_button_variant", "secondary")))
 		elif child is Button:

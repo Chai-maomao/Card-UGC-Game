@@ -276,12 +276,15 @@ func _make_config_check_row(parent: VBoxContainer, label_text: String, default_v
 	var lbl := Label.new()
 	lbl.text = label_text
 	lbl.custom_minimum_size = Vector2(220, 0)
+	lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	lbl.add_theme_font_size_override("font_size", 13)
 	UITheme.apply_label(lbl)
 	row.add_child(lbl)
-	var check := CheckBox.new()
+	var check := CheckButton.new()
 	check.button_pressed = default_value
-	check.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	check.custom_minimum_size = Vector2(84, 36)
+	check.size_flags_horizontal = Control.SIZE_SHRINK_END
+	UITheme.apply_button(check, "secondary", false)
 	row.add_child(check)
 	parent.add_child(row)
 	return {"check": check, "row": row}

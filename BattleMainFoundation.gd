@@ -188,6 +188,8 @@ func _apply_responsive_layout() -> void:
 		end_turn_button.add_theme_font_size_override("font_size", max(10, int(14 * s)))
 	var info_hbox := $CanvasLayer/MainBackground/MainLayout/MiddleInfoBar/InfoHBox
 	info_hbox.add_theme_constant_override("separation", int(20 * s))
+	var broadcast_strip := info_hbox.get_node_or_null("CombatBroadcastStrip") as Control
+	if broadcast_strip: broadcast_strip.custom_minimum_size = Vector2(300, 34) * s
 
 	# Spacers
 	$CanvasLayer/MainBackground/MainLayout/TopSpacer.custom_minimum_size = Vector2(0, 4 * s)
@@ -246,6 +248,7 @@ func _apply_responsive_layout() -> void:
 	if action_log_panel:
 		action_log_panel.position = Vector2(viewport_size.x - 404.0 * s, 56.0 * s)
 		action_log_panel.size = Vector2(388, 268) * s
+		action_log_panel.position.y = maxf(56.0 * s, viewport_size.y - action_log_panel.size.y - 168.0 * s)
 	_update_wait_hint_layout()
 
 	# Discard drop target lives in the right dock column.

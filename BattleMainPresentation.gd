@@ -6,10 +6,194 @@ var _discard_pile_feedback_tween: Tween = null
 var _discard_pile_feedback_target: Control = null
 var _discard_pile_rest_modulate := Color.WHITE
 var _discard_pile_rest_scale := Vector2.ONE
+var combat_broadcast_panel: PanelContainer = null
+var combat_broadcast_label: Label = null
+var _combat_broadcast_tween: Tween = null
+var _action_log_unread := 0
+
+const FEED_KIND_COLOR := {
+	"attack": Color(0.90, 0.40, 0.36),
+	"skill": Color(0.26, 0.72, 0.88),
+	"cast": Color(0.26, 0.72, 0.88),
+	"summon_skill": Color(0.36, 0.76, 0.68),
+	"warn": Color(0.95, 0.58, 0.25),
+	"system": Color(0.62, 0.50, 0.28),
+}
 
 # ============================================
 # Helpers
 # ============================================
+
+# The latest action lives in the centre information bar, between both lanes.
+# Full wording remains in the log, while the persistent one-line summary never
+# covers an enemy card or disappears before the player has read it.
+func _show_combat_broadcast(text: String, kind: String = "system") -> void:
+	if text.strip_edges().is_empty():
+		return
+	_append_action_log(text, kind)
+	if combat_broadcast_label == null or not is_instance_valid(combat_broadcast_label):
+		return
+	var tint: Color = FEED_KIND_COLOR.get(kind, FEED_KIND_COLOR["system"])
+	combat_broadcast_label.text = text.strip_edges().replace("\n", " ")
+	combat_broadcast_label.tooltip_text = text.strip_edges()
+	combat_broadcast_label.add_theme_color_override("font_color", tint.lightened(0.28))
+	combat_broadcast_panel.add_theme_stylebox_override("panel", UITheme.panel_style(
+		Color(0.045, 0.055, 0.08, 0.96), tint.darkened(0.12), 1, 7,
+		Color(tint.r, tint.g, tint.b, 0.18), 3
+	))
+	if _combat_broadcast_tween != null and _combat_broadcast_tween.is_valid():
+		_combat_broadcast_tween.kill()
+	combat_broadcast_panel.modulate.a = 0.55
+	_combat_broadcast_tween = combat_broadcast_panel.create_tween()
+	_combat_broadcast_tween.tween_property(combat_broadcast_panel, "modulate:a", 1.0, 0.18).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+
+
+func _build_action_log() -> void:
+	abandon_battle_button = Button.new()
+	abandon_battle_button.text = Locale.t("battle.abandon_battle")
+	UITheme.apply_button(abandon_battle_button, "danger")
+	abandon_battle_button.pressed.connect(_show_abandon_confirmation)
+	$CanvasLayer.add_child(abandon_battle_button)
+	action_log_button = Button.new()
+	action_log_button.text = Locale.t("battle.action_log")
+	UITheme.apply_button(action_log_button, "secondary")
+	$CanvasLayer.add_child(action_log_button)
+
+	_build_combat_broadcast_strip()
+	action_log_panel = PanelContainer.new()
+	action_log_panel.name = "ActionLogPanel"
+	action_log_panel.visible = false
+	action_log_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	UITheme.apply_panel(action_log_panel, "dark")
+	var margin := MarginContainer.new()
+	for side in ["margin_left", "margin_top", "margin_right", "margin_bottom"]:
+		margin.add_theme_constant_override(side, 10)
+	action_log_panel.add_child(margin)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 8)
+	margin.add_child(box)
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 10)
+	box.add_child(header)
+	var title := Label.new()
+	title.text = Locale.t("battle.action_log_hint")
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UITheme.apply_title(title, 16)
+	header.add_child(title)
+	if PlayerData.is_card_playtest_active():
+		var inspector := PlaytestInspector.new()
+		add_child(inspector)
+		inspector.setup(self, header)
+	if not _active_challenge_id.is_empty():
+		var challenge := ChallengeController.new()
+		add_child(challenge)
+		challenge.setup(self, header, _active_challenge_id)
+	var clear_btn := Button.new()
+	clear_btn.text = Locale.t("battle.clear_log")
+	clear_btn.custom_minimum_size = Vector2(64, 26)
+	UITheme.apply_button(clear_btn, "secondary")
+	clear_btn.pressed.connect(_clear_action_log)
+	header.add_child(clear_btn)
+	var close_btn := Button.new()
+	close_btn.text = "X"
+	close_btn.custom_minimum_size = Vector2(30, 26)
+	UITheme.apply_button(close_btn, "danger")
+	close_btn.pressed.connect(_close_action_log)
+	header.add_child(close_btn)
+	action_log_text = RichTextLabel.new()
+	action_log_text.bbcode_enabled = true
+	action_log_text.fit_content = false
+	action_log_text.scroll_active = true
+	action_log_text.selection_enabled = true
+	action_log_text.context_menu_enabled = true
+	action_log_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	action_log_text.add_theme_font_size_override("normal_font_size", 13)
+	box.add_child(action_log_text)
+	$CanvasLayer.add_child(action_log_panel)
+	action_log_button.pressed.connect(_toggle_action_log)
+
+
+func _build_combat_broadcast_strip() -> void:
+	var info_hbox := $CanvasLayer/MainBackground/MainLayout/MiddleInfoBar/InfoHBox as HBoxContainer
+	combat_broadcast_panel = PanelContainer.new()
+	combat_broadcast_panel.name = "CombatBroadcastStrip"
+	combat_broadcast_panel.custom_minimum_size = Vector2(300, 34) * _ui_scale()
+	combat_broadcast_panel.mouse_filter = Control.MOUSE_FILTER_PASS
+	UITheme.apply_panel(combat_broadcast_panel, "dark")
+	combat_broadcast_label = Label.new()
+	combat_broadcast_label.text = Locale.t("battle.broadcast_idle")
+	combat_broadcast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	combat_broadcast_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	combat_broadcast_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	combat_broadcast_label.clip_text = true
+	combat_broadcast_label.mouse_filter = Control.MOUSE_FILTER_PASS
+	UITheme.apply_label(combat_broadcast_label, true)
+	combat_broadcast_panel.add_child(combat_broadcast_label)
+	info_hbox.add_child(combat_broadcast_panel)
+	var right_spacer := info_hbox.get_node("RightSpacer")
+	info_hbox.move_child(combat_broadcast_panel, right_spacer.get_index())
+
+
+func _toggle_action_log() -> void:
+	action_log_panel.visible = not action_log_panel.visible
+	if action_log_panel.visible:
+		_action_log_unread = 0
+		_refresh_action_log_button()
+		action_log_text.scroll_to_line(0)
+
+
+func _close_action_log() -> void:
+	action_log_panel.visible = false
+
+
+func _clear_action_log() -> void:
+	_action_log_entries.clear()
+	_action_log_unread = 0
+	_refresh_action_log_text()
+
+
+func _append_action_log(text: String, kind: String = "system") -> void:
+	if action_log_text == null:
+		return
+	var turn: int = int(game.turn_number) if game != null else 1
+	_action_log_entries.push_front({"turn": turn, "kind": kind, "text": text.strip_edges()})
+	if _action_log_entries.size() > ACTION_LOG_MAX:
+		_action_log_entries.resize(ACTION_LOG_MAX)
+	if not action_log_panel.visible:
+		_action_log_unread += 1
+	_refresh_action_log_text()
+
+
+func _refresh_action_log_text() -> void:
+	if action_log_text == null:
+		return
+	var parts: Array[String] = []
+	var previous_turn := -1
+	for entry in _action_log_entries:
+		var turn := int(entry.get("turn", 1))
+		if turn != previous_turn:
+			parts.append("[color=#c9a965]%s[/color]" % Locale.t("battle.log.turn_header", [turn]))
+			previous_turn = turn
+		var kind := str(entry.get("kind", "system"))
+		var color: Color = FEED_KIND_COLOR.get(kind, FEED_KIND_COLOR["system"])
+		var body := str(entry.get("text", "")).replace("[", "[lb]").replace("]", "[rb]")
+		var kind_label := Locale.t("battle.log.kind_%s" % kind)
+		if kind_label == "battle.log.kind_%s" % kind:
+			kind_label = Locale.t("battle.log.kind_system")
+		parts.append("  [color=#%s]● %s[/color]  %s" % [color.to_html(false), kind_label, body])
+	action_log_text.clear()
+	action_log_text.append_text("\n".join(parts))
+	action_log_text.scroll_to_line(0)
+	_refresh_action_log_button()
+
+
+func _refresh_action_log_button() -> void:
+	if action_log_button == null:
+		return
+	if _action_log_unread > 0:
+		action_log_button.text = Locale.t("battle.action_log_unread", [_action_log_unread])
+	else:
+		action_log_button.text = Locale.t("battle.action_log_count", [_action_log_entries.size()])
 
 func _show_direct_damage(result: Dictionary):
 	if not result.get("triggered", false):
