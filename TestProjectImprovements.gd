@@ -13,6 +13,7 @@ func _ready() -> void:
 	_test_sharing_and_rules()
 	_test_gameplay_logging()
 	_test_input_controls()
+	_test_battle_log_copy()
 	if failures.is_empty():
 		print("TEST_PROJECT_IMPROVEMENTS_OK")
 		get_tree().quit(0)
@@ -46,6 +47,42 @@ func _test_input_controls() -> void:
 	_check(style != null and style.get_border_width(SIDE_LEFT) > 0 and style.border_color.a > 0.5, "player text inputs need a visible soft outline")
 	input.free()
 	selector.free()
+
+
+func _test_battle_log_copy() -> void:
+	var event := {
+		"kind": "attack", "player": 1, "source": "先锋", "target": "守卫",
+		"target_player": 2, "target_slot": 0, "base_damage": 5, "effective_damage": 5,
+		"damage_events": [{
+			"player": 2, "slot": 0, "target": "守卫", "declared": 5, "actual": 2,
+			"reduction_pct": 20, "temp_hp_before": 2, "temp_hp_after": 0,
+			"hp_after": 3, "max_hp": 5, "reason": "attack",
+		}],
+		"hp_events": [{"player": 2, "slot": 0, "card": "守卫", "delta": -2, "new_hp": 3, "max_hp": 5}],
+		"parasite_events": [], "failed_events": [], "effect_ids": [],
+		"before_state": {"p1_hp": 30, "p2_hp": 30, "p1_mana": 2, "p2_mana": 2},
+		"after_state": {"p1_hp": 30, "p2_hp": 30, "p1_mana": 3, "p2_mana": 2},
+	}
+	var prior_language := Locale.language
+	Locale.language = "zh"
+	var zh := BattleLogFormatter.format_event(event, 1)
+	_check("己方·先锋 → 敌方·守卫" in zh, "Chinese attack copy must lead with actor and target")
+	_check("2点生命伤害" in zh and "生命 3/5" in zh, "Chinese attack copy must include actual damage and remaining HP")
+	_check("减伤20%" in zh and "护盾吸收2点" in zh and "圣水 +1" in zh, "Chinese attack copy must explain mitigation and resource changes")
+	_check(BattleLogFormatter.summary(zh).ends_with("生命 3/5）"), "broadcast summary must keep the primary outcome and omit secondary details")
+	var utility_event := event.duplicate(true)
+	utility_event.merge({"kind": "skill", "skill": "守护", "damage_events": [], "hp_events": [], "effect_ids": ["shield"], "before_state": {}, "after_state": {}}, true)
+	var utility_summary := BattleLogFormatter.summary(BattleLogFormatter.format_event(utility_event, 1))
+	_check("其他效果" in utility_summary and not "效果已结算" in utility_summary, "utility-only skills must name their resolved effect in the broadcast summary")
+	event["source"] = "Vanguard"
+	event["target"] = "Guard"
+	event["damage_events"][0]["target"] = "Guard"
+	Locale.language = "en"
+	var en := BattleLogFormatter.format_event(event, 1)
+	_check("Friendly · Vanguard → Enemy · Guard" in en, "English attack copy must lead with actor and target")
+	_check("Guard took 2 HP damage" in en and "Damage resolution: 5 → 2" in en, "English attack copy must use natural result ordering")
+	_check(not "；" in en and en.ends_with("."), "English battle copy must use English punctuation")
+	Locale.language = prior_language
 
 
 func _score(effects: Array, extra: Dictionary = {}) -> float:

@@ -47,5 +47,7 @@ Scope: current working tree, preserving changes already present on 2026-09-09.
 - Overlapping discard-pile arrival pulses restart cleanly and restore the pile's stable color and scale.
 - Battle feedback: the latest action persists in the centre information bar, while the selectable full log groups entries by turn and type and opens below the enemy lane.
 - Player input clarity: battle-parameter booleans use the same sliding switch as accelerated mode; text and numeric inputs retain a soft outline before focus.
+- Battle copy now follows one stable reading order: actor and action, target and primary outcome, then resolution details. Damage entries show actual health loss and remaining health (or defeat); relevant details include declared-to-actual damage, mitigation, exact shield absorption, Parasite interception, healing, leader health, net mana, attack changes, other resolved effects, and final failure probability.
+- The centre information bar uses only the primary clause so it remains readable during play. The grouped battle log and the strip tooltip retain the complete structured report, and utility-only skills name their resolved effects instead of falling back to a vague success sentence.
 - `scripts/run_tests.ps1 -Suite logic` — **44/44 PASS**.
 - `scripts/run_tests.ps1 -Suite visual` — **5/5 PASS**, including `TestCardFlowAnimationVisual` screenshots for defeat-to-discard and ordered drawing.

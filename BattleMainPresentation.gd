@@ -34,7 +34,7 @@ func _show_combat_broadcast(text: String, kind: String = "system") -> void:
 	if combat_broadcast_label == null or not is_instance_valid(combat_broadcast_label):
 		return
 	var tint: Color = FEED_KIND_COLOR.get(kind, FEED_KIND_COLOR["system"])
-	combat_broadcast_label.text = text.strip_edges().replace("\n", " ")
+	combat_broadcast_label.text = BattleLogFormatter.summary(text.strip_edges().replace("\n", " "))
 	combat_broadcast_label.tooltip_text = text.strip_edges()
 	combat_broadcast_label.add_theme_color_override("font_color", tint.lightened(0.28))
 	combat_broadcast_panel.add_theme_stylebox_override("panel", UITheme.panel_style(

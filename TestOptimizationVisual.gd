@@ -26,8 +26,10 @@ func _ready() -> void:
 	var battle := preload("res://Main.tscn").instantiate()
 	add_child(battle)
 	await _settle()
-	battle._show_combat_broadcast("连锁练习使用重复打击，对目标守卫造成2点伤害", "skill")
-	battle._show_combat_broadcast("目标守卫的护盾吸收了1点伤害", "system")
+	var attack_copy := BattleLogFormatter.format_event(_feed_event("attack"), 1)
+	var skill_copy := BattleLogFormatter.format_event(_feed_event("skill"), 1)
+	battle._show_combat_broadcast(attack_copy, "attack")
+	battle._show_combat_broadcast(skill_copy, "skill")
 	battle.action_log_panel.visible = true
 	battle._apply_responsive_layout()
 	await _capture("optimization-battle-feed.png")
@@ -177,6 +179,20 @@ func _ready() -> void:
 
 func _on_back_pressed() -> void:
 	pass
+
+
+func _feed_event(kind: String) -> Dictionary:
+	var event := {
+		"kind": kind, "player": 1, "source": "连锁练习", "target": "目标守卫",
+		"target_player": 2, "target_slot": 0, "skill": "重复打击",
+		"base_damage": 4, "effective_damage": 4,
+		"damage_events": [{"player": 2, "slot": 0, "target": "目标守卫", "declared": 4, "actual": 2, "reduction_pct": 25, "temp_hp_before": 1, "temp_hp_after": 0, "hp_after": 6, "max_hp": 8, "reason": kind}],
+		"hp_events": [{"player": 2, "slot": 0, "card": "目标守卫", "delta": -2, "new_hp": 6, "max_hp": 8}],
+		"parasite_events": [], "failed_events": [], "effect_ids": ["damage"] if kind == "attack" else ["damage", "draw_cards"],
+		"before_state": {"p1_hp": 30, "p2_hp": 30, "p1_mana": 2, "p2_mana": 2},
+		"after_state": {"p1_hp": 30, "p2_hp": 30, "p1_mana": 3 if kind == "attack" else 2, "p2_mana": 2},
+	}
+	return event
 
 
 func _settle() -> void:

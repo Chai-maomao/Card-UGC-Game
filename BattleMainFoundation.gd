@@ -23,6 +23,7 @@ const SpellRules = preload("res://SpellRules.gd")
 const ParasiteRules = preload("res://ParasiteRules.gd")
 const _TargetResolver = preload("res://SkillTargetResolver.gd")
 const TutorialController = preload("res://BattleTutorialController.gd")
+const BattleLogFormatter = preload("res://BattleLogFormatter.gd")
 
 @onready var enemy_side_ui = $CanvasLayer/MainBackground/MainLayout/EnemySide
 @onready var player_side_ui = $CanvasLayer/MainBackground/MainLayout/PlayerSide
@@ -578,7 +579,12 @@ func is_resolution_locked() -> bool:
 	return _resolution_running or _resolution_pending_steps > 1
 
 
-func _on_skill_effect_resolved(_source: CardData, _effect_id: String, _target: Variant, _chain_depth: int) -> void:
+func _on_skill_effect_resolved(_source: CardData, effect_id: String, _target: Variant, _chain_depth: int) -> void:
+	if not _action_broadcast.is_empty():
+		var effect_ids: Array = _action_broadcast.get("effect_ids", [])
+		if not effect_id in effect_ids:
+			effect_ids.append(effect_id)
+		_action_broadcast["effect_ids"] = effect_ids
 	if GamePreferences.animation_acceleration_enabled() or battle_finished:
 		return
 	_resolution_pending_steps += 1
@@ -913,7 +919,7 @@ func _refresh_action_log_text() -> void:
 # Combat feedback
 # ============================================
 
-func _on_hp_changed(target: CardData, delta: int, _new_hp: int):
+func _on_hp_changed(target: CardData, delta: int, new_hp: int):
 	if delta == 0:
 		return
 	# Authority records the change (as player+slot) so it can be replayed as
@@ -921,7 +927,7 @@ func _on_hp_changed(target: CardData, delta: int, _new_hp: int):
 	# and therefore never emits hp_changed itself.
 	var loc := _locate_card_player_slot(target)
 	if loc.slot >= 0 and not _action_broadcast.is_empty():
-		_action_hp_events.append({"player": loc.player, "slot": loc.slot, "delta": delta, "card": target.card_name})
+		_action_hp_events.append({"player": loc.player, "slot": loc.slot, "delta": delta, "card": target.card_name, "new_hp": new_hp, "max_hp": target.max_hp})
 	if NetworkManager.is_online and NetworkManager.is_authority():
 		if loc.slot >= 0:
 			_pending_hp_events.append({"player": loc.player, "slot": loc.slot, "delta": delta})
@@ -943,6 +949,9 @@ func _on_damage_resolved(source: CardData, target: CardData, declared: int, actu
 		"actual": actual,
 		"reduction_pct": reduction_pct,
 		"temp_hp_before": temp_hp_before,
+		"temp_hp_after": target.temp_hp,
+		"hp_after": target.hp,
+		"max_hp": target.max_hp,
 		"reason": reason,
 	})
 
@@ -1250,6 +1259,7 @@ func _find_card_slot_pos(card: CardData) -> Vector2:
 
 func _begin_action_broadcast(kind: String, player: int, source_name: String, target_name: String = "", extra: Dictionary = {}) -> void:
 	_action_broadcast = {"kind": kind, "player": player, "source": source_name, "target": target_name}
+	_action_broadcast["before_state"] = _battle_log_state()
 	for key in extra.keys():
 		_action_broadcast[key] = extra[key]
 	_action_hp_events.clear()
@@ -1270,6 +1280,7 @@ func _finish_action_broadcast() -> void:
 	event["damage_events"] = _action_damage_events.duplicate(true)
 	event["parasite_events"] = _action_parasite_events.duplicate(true)
 	event["failed_events"] = _action_failed_events.duplicate(true)
+	event["after_state"] = _battle_log_state()
 	var text := _format_action_broadcast(event)
 	_show_combat_broadcast(text, str(event.get("kind", "system")))
 	if NetworkManager.is_online and NetworkManager.is_authority():
@@ -1282,159 +1293,14 @@ func _finish_action_broadcast() -> void:
 
 
 func _format_action_broadcast(event: Dictionary) -> String:
-	var kind: String = event.get("kind", "")
-	var player: int = int(event.get("player", 0))
-	var source: String = event.get("source", "")
-	var target: String = event.get("target", "")
-	var subject := "%s%s" % [_side_text(player), source]
-	var hp_events: Array = event.get("hp_events", [])
-	var damage_events: Array = event.get("damage_events", [])
-	var parasite_events: Array = event.get("parasite_events", [])
-	var failed_events: Array = event.get("failed_events", [])
-	match kind:
-		"attack":
-			return _format_attack_broadcast(subject, target, hp_events, damage_events, parasite_events, int(event.get("base_damage", 0)), int(event.get("effective_damage", event.get("base_damage", 0))), int(event.get("target_player", _opponent_of_player(player))), int(event.get("target_slot", -1)), bool(event.get("kill_mana", false)))
-		"skill", "summon_skill":
-			var skill_name: String = event.get("skill", Locale.t("battle.log.skill_word"))
-			return _format_skill_broadcast(subject, skill_name, hp_events, damage_events, parasite_events, failed_events)
-		"cast":
-			return _format_skill_broadcast(subject, Locale.t("battle.log.cast_word"), hp_events, damage_events, parasite_events, failed_events)
-	return ""
+	return BattleLogFormatter.format_event(event, _view_player())
 
 
-# Joins battle-broadcast segments with the punctuation of the active language
-# (CJK uses ，。; English uses ", ."). Avoids hardcoded Chinese separators
-# leaking into English builds.
-func _join_broadcast(parts: Array, with_period: bool = true) -> String:
-	var sep: String = ", " if Locale.language == "en" else "，"
-	var text := sep.join(parts)
-	if with_period:
-		text += "." if Locale.language == "en" else "。"
-	return text
-
-
-func _format_attack_broadcast(subject: String, target: String, hp_events: Array, damage_events: Array, parasite_events: Array, base_damage: int, effective_damage: int, target_player: int, target_slot: int, kill_mana: bool = false) -> String:
-	var target_damage := 0
-	var extra_target_damage := 0
-	var adjacent_damage := 0
-	var adjacent_count := 0
-	var other_damage := 0
-	var other_count := 0
-	var heals := []
-	for ev in hp_events:
-		var delta: int = int(ev.get("delta", 0))
-		if delta < 0:
-			var damage := -delta
-			var ev_player: int = int(ev.get("player", 0))
-			var ev_slot: int = int(ev.get("slot", -1))
-			if ev_player == target_player and ev_slot == target_slot:
-				target_damage += damage
-			elif ev_player == target_player and abs(ev_slot - target_slot) == 1:
-				adjacent_damage += damage
-				adjacent_count += 1
-			else:
-				other_damage += damage
-				other_count += 1
-		elif delta > 0:
-			heals.append(Locale.t("battle.log.heal", [ev.get("card", Locale.t("battle.log.unit")), delta]))
-	var target_detail := _damage_detail_for(damage_events, target_player, target_slot)
-	if target_damage == 0 and not target_detail.is_empty():
-		target_damage = int(target_detail.get("actual", 0))
-	var target_declared: int = base_damage if effective_damage != base_damage else int(target_detail.get("declared", effective_damage))
-	var parts := []
-	var intro := Locale.t("battle.log.attack_intro", [subject, _side_text(target_player), target])
-	if target_declared > 0 and (target_damage > 0 or target_declared != target_damage):
-		if target_declared != target_damage:
-			parts.append(Locale.t("battle.log.damage_reduced", [intro, target_declared, target_damage]))
-		else:
-			parts.append(Locale.t("battle.log.damage_plain", [intro, target_damage]))
-	else:
-		parts.append(intro)
-	if adjacent_damage > 0:
-		parts.append(Locale.t("battle.log.splash", [target, adjacent_count, adjacent_damage]))
-	if other_damage > 0:
-		parts.append(Locale.t("battle.log.other_damage", [other_count, other_damage]))
-	if kill_mana:
-		parts.append(Locale.t("battle.log.kill_mana"))
-	parts.append_array(_format_parasite_broadcast_parts(parasite_events))
-	parts.append_array(heals)
-	return _join_broadcast(parts)
-
-
-func _format_skill_broadcast(subject: String, action_name: String, hp_events: Array, damage_events: Array, parasite_events: Array, failed_events: Array) -> String:
-	var parts := [Locale.t("battle.log.skill_use", [subject, action_name])]
-	var has_result := not damage_events.is_empty()
-	for ev in hp_events:
-		if int(ev.get("delta", 0)) > 0:
-			has_result = true
-	for fail in failed_events:
-		var misfortune: int = int(fail.get("misfortune", 0))
-		if misfortune > 0 and not has_result:
-			parts.append(Locale.t("battle.log.skill_misfortune", [misfortune]))
-		elif has_result:
-			parts.append(Locale.t("battle.log.skill_partial"))
-		else:
-			parts.append(Locale.t("battle.log.skill_failed"))
-	for dmg in damage_events:
-		var actual: int = int(dmg.get("actual", 0))
-		var declared: int = int(dmg.get("declared", actual))
-		if declared <= 0:
-			continue
-		var target_name: String = dmg.get("target", Locale.t("battle.log.unit"))
-		var player: int = int(dmg.get("player", 0))
-		if declared != actual:
-			parts.append(Locale.t("battle.log.damage_target_reduced", [_side_text(player), target_name, declared, actual]))
-		else:
-			parts.append(Locale.t("battle.log.damage_target_plain", [_side_text(player), target_name, actual]))
-	var heal_by_card := {}
-	for ev in hp_events:
-		var card_name: String = ev.get("card", Locale.t("battle.log.unit"))
-		var delta: int = int(ev.get("delta", 0))
-		if delta > 0:
-			heal_by_card[card_name] = int(heal_by_card.get(card_name, 0)) + delta
-	for card_name in heal_by_card.keys():
-		parts.append(Locale.t("battle.log.heal_target", [_side_text(_player_for_event_card(hp_events, card_name)), card_name, int(heal_by_card[card_name])]))
-	parts.append_array(_format_parasite_broadcast_parts(parasite_events))
-	return _join_broadcast(parts)
-
-
-func _format_parasite_broadcast_parts(parasite_events: Array) -> Array:
-	var parts := []
-	for ev in parasite_events:
-		var declared: int = int(ev.get("declared", 0))
-		var actual: int = int(ev.get("actual", 0))
-		if declared <= 0:
-			continue
-		var parasite_name: String = ev.get("parasite", Locale.t("battle.log.parasite"))
-		if declared != actual:
-			parts.append(Locale.t("battle.log.parasite_reduced", [parasite_name, declared, actual]))
-		else:
-			parts.append(Locale.t("battle.log.parasite_plain", [parasite_name, actual]))
-		if bool(ev.get("destroyed", false)):
-			parts.append(Locale.t("battle.log.parasite_gone", [parasite_name]))
-	return parts
-
-
-func _damage_detail_for(damage_events: Array, player: int, slot: int) -> Dictionary:
-	for ev in damage_events:
-		if int(ev.get("player", 0)) == player and int(ev.get("slot", -1)) == slot:
-			return ev
-	return {}
-
-
-func _player_for_event_card(events: Array, card_name: String) -> int:
-	for ev in events:
-		if ev.get("card", "") == card_name:
-			return int(ev.get("player", 0))
-	return 0
-
-
-func _side_text(player: int) -> String:
-	if player == _view_player():
-		return Locale.t("battle.log.friendly")
-	if player == _opponent_player():
-		return Locale.t("battle.log.enemy")
-	return ""
+func _battle_log_state() -> Dictionary:
+	return {
+		"p1_hp": game.player_field.player_hp, "p2_hp": game.player2_field.player_hp,
+		"p1_mana": game.player_field.get_total_mana(), "p2_mana": game.player2_field.get_total_mana(),
+	}
 
 
 # Cross-layer interface implemented by the action, presentation, and network components.

@@ -44,7 +44,7 @@ func _ready() -> void:
 	_assert(broadcast_strip != null and not _overlap(enemy_row, broadcast_strip), "combat broadcast must stay outside the enemy field")
 	battle.call("_show_combat_broadcast", "先锋攻击守卫，造成2点伤害", "attack")
 	var broadcast_label := battle.get("combat_broadcast_label") as Label
-	_assert(broadcast_label != null and "先锋攻击守卫" in broadcast_label.text, "latest action must remain readable in the centre strip")
+	_assert(broadcast_label != null and "先锋" in broadcast_label.text and "守卫" in broadcast_label.text, "latest action must retain actor and target in the centre strip")
 	var log_panel := battle.get("action_log_panel") as Control
 	log_panel.visible = true
 	_assert(not _overlap(enemy_row, log_panel), "opened battle log must not cover the enemy field")
