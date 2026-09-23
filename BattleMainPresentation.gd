@@ -501,6 +501,8 @@ func _queue_presentation_feedback(events: Array) -> void:
 		for value in events:
 			_play_presentation_event(value)
 		return
+	if not _hp_feedback_running and _hp_feedback_batches.is_empty():
+		_prime_hp_presentation(events)
 	_hp_feedback_batches.append(events.duplicate(true))
 	if stage_span > 1:
 		_ensure_resolution_blocker()
@@ -525,6 +527,7 @@ func _drain_hp_feedback() -> void:
 	_hp_feedback_running = true
 	while not _hp_feedback_batches.is_empty() and is_inside_tree():
 		var events: Array = _hp_feedback_batches.pop_front()
+		_prime_hp_presentation(events)
 		var previous_group := -1
 		var played_stage := false
 		for value in events:
@@ -535,6 +538,7 @@ func _drain_hp_feedback() -> void:
 			_play_presentation_event(event)
 			previous_group = group
 			played_stage = true
+		_clear_hp_presentation(events)
 	_hp_feedback_running = false
 	if not _resolution_running and _resolution_pending_steps <= 0 and _resolution_blocker != null and is_instance_valid(_resolution_blocker):
 		_resolution_blocker.visible = false
@@ -544,6 +548,7 @@ func _play_presentation_event(event: Dictionary) -> void:
 	var kind := str(event.get("kind", "hp" if event.has("delta") else "stage"))
 	match kind:
 		"hp":
+			_update_hp_presentation(event)
 			_show_floating_for(int(event.get("player", 0)), int(event.get("slot", -1)), int(event.get("delta", 0)))
 		"hand_entry":
 			_play_staged_hand_entry(event)
@@ -554,6 +559,79 @@ func _play_presentation_event(event: Dictionary) -> void:
 				var target := _card_feedback_target(slot_ui)
 				if target != null and is_instance_valid(target):
 					BattleFx.skill_cast_pulse($CanvasLayer, target, slot_ui.global_position + slot_ui.size / 2, _ui_scale())
+
+
+func _hp_presentation_key(player: int, slot: int) -> String:
+	return "%d:%d" % [player, slot]
+
+
+func _prime_hp_presentation(events: Array) -> void:
+	for value in events:
+		var event: Dictionary = value
+		if str(event.get("kind", "")) != "hp" or not event.has("before_hp"):
+			continue
+		var player := int(event.get("player", 0))
+		var slot := int(event.get("slot", -1))
+		var key := _hp_presentation_key(player, slot)
+		if _hp_presentation_overrides.has(key):
+			continue
+		_hp_presentation_overrides[key] = {
+			"player": player,
+			"slot": slot,
+			"hp": int(event.get("before_hp", 0)),
+			"max_hp": int(event.get("max_hp", -1)),
+		}
+	_apply_hp_presentation_overrides()
+
+
+func _update_hp_presentation(event: Dictionary) -> void:
+	var player := int(event.get("player", 0))
+	var slot := int(event.get("slot", -1))
+	var key := _hp_presentation_key(player, slot)
+	if not _hp_presentation_overrides.has(key) or not event.has("new_hp"):
+		return
+	_hp_presentation_overrides[key] = {
+		"player": player,
+		"slot": slot,
+		"hp": int(event.get("new_hp", 0)),
+		"max_hp": int(event.get("max_hp", -1)),
+	}
+	_apply_hp_presentation_override(_hp_presentation_overrides[key])
+
+
+func _apply_hp_presentation_overrides() -> void:
+	for value in _hp_presentation_overrides.values():
+		_apply_hp_presentation_override(value)
+
+
+func _apply_hp_presentation_override(value: Dictionary) -> void:
+	var slot_ui := _slot_ui_for_player(int(value.get("player", 0)), int(value.get("slot", -1)))
+	if slot_ui == null:
+		return
+	var card_ui = slot_ui.get("current_card_ui")
+	if card_ui != null and is_instance_valid(card_ui) and card_ui.has_method("set_presentation_hp"):
+		card_ui.set_presentation_hp(int(value.get("hp", 0)), int(value.get("max_hp", -1)))
+
+
+func _clear_hp_presentation(events: Array) -> void:
+	var cleared := {}
+	for value in events:
+		var event: Dictionary = value
+		if str(event.get("kind", "")) != "hp":
+			continue
+		var player := int(event.get("player", 0))
+		var slot := int(event.get("slot", -1))
+		var key := _hp_presentation_key(player, slot)
+		if cleared.has(key):
+			continue
+		cleared[key] = true
+		_hp_presentation_overrides.erase(key)
+		var slot_ui := _slot_ui_for_player(player, slot)
+		if slot_ui == null:
+			continue
+		var card_ui = slot_ui.get("current_card_ui")
+		if card_ui != null and is_instance_valid(card_ui) and card_ui.has_method("clear_presentation_hp"):
+			card_ui.clear_presentation_hp()
 
 
 func _hand_entry_key(card: CardData) -> String:
@@ -1215,6 +1293,7 @@ func _do_update_entire_screen() -> void:
 	_update_action_glows()
 	_update_ui_state_motion()
 	_refresh_hand_castability()
+	_apply_hp_presentation_overrides()
 
 
 # Re-applies green/red cost tinting to every hand card so the affordance stays

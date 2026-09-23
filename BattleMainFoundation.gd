@@ -103,6 +103,7 @@ var _action_feedback_group_stack: Array[int] = []
 var _action_feedback_next_group: int = 0
 var _hp_feedback_batches: Array = []
 var _hp_feedback_running: bool = false
+var _hp_presentation_overrides: Dictionary = {}
 var _network_command_phase: String = ""
 var tutorial_controller: BattleTutorialController
 var _active_challenge_id: String = ""
@@ -972,7 +973,7 @@ func _refresh_action_log_text() -> void:
 # Combat feedback
 # ============================================
 
-func _on_hp_changed(target: CardData, delta: int, _new_hp: int):
+func _on_hp_changed(target: CardData, delta: int, new_hp: int):
 	if delta == 0:
 		return
 	# Authority records the change (as player+slot) so it can be replayed as
@@ -983,6 +984,7 @@ func _on_hp_changed(target: CardData, delta: int, _new_hp: int):
 	var feedback_origin_group := 0 if str(_action_broadcast.get("kind", "")) == "attack" else 1
 	var feedback_event := {
 		"player": loc.player, "slot": loc.slot, "delta": delta, "card": target.card_name,
+		"before_hp": new_hp - delta, "new_hp": new_hp, "max_hp": target.max_hp,
 		"kind": "hp",
 		"feedback_group": feedback_group, "feedback_origin_group": feedback_origin_group,
 	}

@@ -57,6 +57,8 @@ var _last_layout_type: String = ""
 # changes when the (symbol, color, tooltip) content changes, so cache its
 # signature and keep the existing nodes when it matches.
 var _last_status_signature: String = ""
+var _presentation_hp: int = -1
+var _presentation_max_hp: int = -1
 # Cost tint cache: _apply_hand_castability re-applies the same theme override
 # on every refresh; skip it when the color is unchanged (invalid marker forces
 # a re-apply after set_card resets the label color).
@@ -310,6 +312,8 @@ func set_card(card_data: CardData):
 	current_card_data = card_data
 
 	if card_data == null:
+		_presentation_hp = -1
+		_presentation_max_hp = -1
 		tooltip_text = ""
 		if name_label: name_label.text = ""
 		if cost_label: cost_label.text = ""
@@ -336,32 +340,13 @@ func set_card(card_data: CardData):
 	# set_card resets the label color, so the castability tint cache is stale.
 	_last_cost_color = Color(-1.0, -1.0, -1.0, -1.0)
 
-	# HP: absorbing parasites are shown as a parenthesized secondary health
-	# pool. It mirrors the exact attachment that will intercept the next hit.
-	var absorber: CardData = ParasiteRules.active_damage_absorber(card_data)
-	if card_data.temp_hp > 0 and absorber != null:
-		if hp_label:
-			hp_label.text = Locale.t("card.hp_temp_parasite", [card_data.hp, card_data.max_hp, card_data.temp_hp, absorber.hp])
-	elif card_data.temp_hp > 0:
-		if hp_label:
-			hp_label.text = Locale.t("card.hp_temp", [card_data.hp, card_data.max_hp, card_data.temp_hp])
-	elif absorber != null:
-		if hp_label:
-			hp_label.text = Locale.t("card.hp_parasite", [card_data.hp, card_data.max_hp, absorber.hp])
-	else:
-		if hp_label:
-			hp_label.text = Locale.t("card.hp", [card_data.hp, card_data.max_hp])
+	_refresh_hp_display(card_data)
 
 	# ATK: show effective, plus bonus — hidden for spell cards (no body)
 	if card_data.is_spell():
-		if hp_label:
-			hp_label.text = ""
 		if atk_label:
 			atk_label.text = ""
 	elif card_data.is_parasite():
-		if hp_label:
-			hp_label.text = Locale.t("card.parasite_hp", [card_data.hp, card_data.max_hp]) if card_data.parasite_absorbs_host_damage() else Locale.t("card.parasite_linked")
-			hp_label.tooltip_text = Locale.t("card.parasite_absorb_help") if card_data.parasite_absorbs_host_damage() else Locale.t("card.parasite_linked_help")
 		if atk_label:
 			atk_label.text = Locale.t("card.parasite_atk", [card_data.atk])
 	else:
@@ -375,8 +360,6 @@ func set_card(card_data: CardData):
 		else:
 			if atk_label:
 				atk_label.text = Locale.t("card.atk", [eff_atk])
-	if absorber != null and hp_label:
-		hp_label.tooltip_text = Locale.t("card.host_parasite_hp_tooltip", [absorber.card_name, absorber.hp, absorber.max_hp])
 
 	_update_status_icons()
 	_update_skill_buttons()
@@ -390,6 +373,46 @@ func set_card(card_data: CardData):
 		action_buttons.visible = _actions_visible and not card_data.is_silenced() and _has_visible_action_buttons()
 	self.modulate = Color(0.5, 0.5, 0.5) if card_data.is_silenced() else Color.WHITE
 	_auto_hide_if_enemy()
+
+
+func set_presentation_hp(value: int, max_value: int = -1) -> void:
+	_presentation_hp = value
+	_presentation_max_hp = max_value
+	if current_card_data != null:
+		_refresh_hp_display(current_card_data)
+
+
+func clear_presentation_hp() -> void:
+	_presentation_hp = -1
+	_presentation_max_hp = -1
+	if current_card_data != null:
+		_refresh_hp_display(current_card_data)
+
+
+func _refresh_hp_display(card_data: CardData) -> void:
+	if hp_label == null or card_data == null:
+		return
+	hp_label.tooltip_text = ""
+	var shown_hp := _presentation_hp if _presentation_hp >= 0 else card_data.hp
+	var shown_max_hp := _presentation_max_hp if _presentation_max_hp >= 0 else card_data.max_hp
+	# HP: absorbing parasites are shown as a parenthesized secondary health
+	# pool. It mirrors the exact attachment that will intercept the next hit.
+	var absorber: CardData = ParasiteRules.active_damage_absorber(card_data)
+	if card_data.temp_hp > 0 and absorber != null:
+		hp_label.text = Locale.t("card.hp_temp_parasite", [shown_hp, shown_max_hp, card_data.temp_hp, absorber.hp])
+	elif card_data.temp_hp > 0:
+		hp_label.text = Locale.t("card.hp_temp", [shown_hp, shown_max_hp, card_data.temp_hp])
+	elif absorber != null:
+		hp_label.text = Locale.t("card.hp_parasite", [shown_hp, shown_max_hp, absorber.hp])
+	else:
+		hp_label.text = Locale.t("card.hp", [shown_hp, shown_max_hp])
+	if card_data.is_spell():
+		hp_label.text = ""
+	elif card_data.is_parasite():
+		hp_label.text = Locale.t("card.parasite_hp", [shown_hp, shown_max_hp]) if card_data.parasite_absorbs_host_damage() else Locale.t("card.parasite_linked")
+		hp_label.tooltip_text = Locale.t("card.parasite_absorb_help") if card_data.parasite_absorbs_host_damage() else Locale.t("card.parasite_linked_help")
+	elif absorber != null:
+		hp_label.tooltip_text = Locale.t("card.host_parasite_hp_tooltip", [absorber.card_name, absorber.hp, absorber.max_hp])
 
 
 func refresh_cost_display() -> void:
