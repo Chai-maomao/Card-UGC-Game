@@ -14,7 +14,7 @@ func _ready() -> void:
 	await _capture_card_editor()
 	await _capture_talent_editor()
 	await _capture_picker()
-	await _capture_resolution_lock()
+	await _verify_silent_resolution_lock()
 	print("TEST_TALENT_UI_VISUAL_OK")
 	get_tree().quit(0)
 
@@ -67,7 +67,7 @@ func _capture_picker() -> void:
 	await _settle()
 
 
-func _capture_resolution_lock() -> void:
+func _verify_silent_resolution_lock() -> void:
 	var prior := GamePreferences.animation_acceleration_enabled()
 	GamePreferences.set_animation_acceleration(false)
 	PlayerData.configure_hotseat_battle(CardDatabase.playtest_deck(), CardDatabase.playtest_deck())
@@ -77,7 +77,11 @@ func _capture_resolution_lock() -> void:
 	battle._on_skill_effect_resolved(null, SkillEngine.EFFECT_DAMAGE, null, 1)
 	battle._on_skill_effect_resolved(null, SkillEngine.EFFECT_HEAL, null, 1)
 	await get_tree().process_frame
-	await _save_view("resolution_input_lock.png")
+	var blocker := battle.get("_resolution_blocker") as Control
+	if blocker == null or not blocker.visible or blocker.get_child_count() != 0:
+		push_error("Resolution input lock must stay active without displaying a resolving panel")
+		get_tree().quit(1)
+		return
 	GamePreferences.set_animation_acceleration(prior)
 	battle.queue_free()
 	await _settle()

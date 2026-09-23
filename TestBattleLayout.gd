@@ -83,6 +83,9 @@ func _ready() -> void:
 	var initial_minus_one := _count_label_text(layer, "-1")
 	battle.call("_queue_hp_feedback", staged_events)
 	await get_tree().process_frame
+	var silent_blocker := battle.get("_resolution_blocker") as Control
+	_assert(silent_blocker != null and silent_blocker.visible and silent_blocker.get_child_count() == 0,
+			"multi-stage feedback must block input without displaying a resolving panel")
 	_assert(_count_label_text(layer, "-2") > initial_minus_two, "the direct attack result must play immediately")
 	_assert(_count_label_text(layer, "-1") == initial_minus_one, "the triggered effect must not play in the attack frame")
 	await get_tree().create_timer(0.1).timeout
@@ -94,6 +97,29 @@ func _ready() -> void:
 	battle.call("_queue_hp_feedback", staged_events)
 	_assert(_count_label_text(layer, "-1") > accelerated_minus_one and (battle.get("_hp_feedback_batches") as Array).is_empty(),
 			"accelerated mode must play every feedback stage immediately")
+	GamePreferences.set_animation_acceleration(false)
+	var double_effect := {
+		"skill_name": "Double Effect", "trigger": SkillEngine.TRIGGER_ON_ACTIVATE, "probability": 100,
+		"effects": [
+			{"effect": SkillEngine.EFFECT_DAMAGE, "target": SkillEngine.TARGET_SINGLE, "target_side": SkillEngine.TARGET_SIDE_ENEMY, "value": 1, "probability": 100},
+			{"effect": SkillEngine.EFFECT_DAMAGE, "target": SkillEngine.TARGET_SINGLE, "target_side": SkillEngine.TARGET_SIDE_ENEMY, "value": 1, "probability": 100},
+		],
+	}
+	var skill_source := CardData.new("Double Caster", 1, 5, 1, [double_effect])
+	var skill_target := CardData.new("Double Target", 1, 5, 1)
+	game.player_field.slots[0] = skill_source
+	game.player2_field.slots[0] = skill_target
+	battle.call("_begin_action_broadcast", "skill", 1, skill_source.card_name, skill_target.card_name, {"skill": "Double Effect", "target_player": 2, "target_slot": 0})
+	game.trigger_activate_skills(0, 0, 0, 2)
+	var double_events: Array = battle.get("_action_hp_events")
+	_assert(double_events.size() == 2 and int(double_events[0].get("feedback_group", -1)) == 1 \
+		and int(double_events[1].get("feedback_group", -1)) == 2 \
+		and int(double_events[0].get("feedback_origin_group", -1)) == 1 \
+		and int(battle.call("_feedback_stage_span", double_events)) == 2,
+			"separate effects inside one skill must receive separate presentation stages")
+	battle.set("_action_broadcast", {})
+	battle.set("_action_hp_events", [])
+	battle.set("_action_feedback_group_stack", [])
 	GamePreferences.set_animation_acceleration(prior_acceleration)
 
 	print("TEST_BATTLE_LAYOUT_OK")

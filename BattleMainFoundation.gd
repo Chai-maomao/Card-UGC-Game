@@ -618,24 +618,6 @@ func _ensure_resolution_blocker() -> void:
 	_resolution_blocker.mouse_filter = Control.MOUSE_FILTER_STOP
 	_resolution_blocker.z_index = 900
 	$CanvasLayer.add_child(_resolution_blocker)
-	var badge := PanelContainer.new()
-	badge.name = "Badge"
-	badge.anchor_left = 0.5
-	badge.anchor_right = 0.5
-	badge.anchor_top = 0.36
-	badge.anchor_bottom = 0.36
-	badge.offset_left = -150
-	badge.offset_right = 150
-	badge.offset_top = -24
-	badge.offset_bottom = 24
-	UITheme.apply_panel(badge, "gold")
-	_resolution_blocker.add_child(badge)
-	var label := Label.new()
-	label.text = Locale.t("battle.resolving")
-	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	UITheme.apply_label(label)
-	badge.add_child(label)
 
 
 func _drain_resolution_steps() -> void:
@@ -937,7 +919,11 @@ func _on_hp_changed(target: CardData, delta: int, _new_hp: int):
 	# and therefore never emits hp_changed itself.
 	var loc := _locate_card_player_slot(target)
 	var feedback_group: int = int(_action_feedback_group_stack.back()) if not _action_feedback_group_stack.is_empty() else 0
-	var feedback_event := {"player": loc.player, "slot": loc.slot, "delta": delta, "card": target.card_name, "feedback_group": feedback_group}
+	var feedback_origin_group := 0 if str(_action_broadcast.get("kind", "")) == "attack" else 1
+	var feedback_event := {
+		"player": loc.player, "slot": loc.slot, "delta": delta, "card": target.card_name,
+		"feedback_group": feedback_group, "feedback_origin_group": feedback_origin_group,
+	}
 	if loc.slot >= 0 and not _action_broadcast.is_empty():
 		_action_hp_events.append(feedback_event)
 	if NetworkManager.is_online and NetworkManager.is_authority():
@@ -1259,8 +1245,8 @@ func _show_floating_for(player: int, slot: int, delta: int) -> void:
 func _queue_hp_feedback(events: Array) -> void:
 	if events.is_empty() or battle_finished:
 		return
-	var group_count := _feedback_group_count(events)
-	if GamePreferences.animation_acceleration_enabled() or group_count <= 1:
+	var stage_span := _feedback_stage_span(events)
+	if GamePreferences.animation_acceleration_enabled() or stage_span <= 1:
 		for value in events:
 			var event: Dictionary = value
 			_show_floating_for(int(event.get("player", 0)), int(event.get("slot", -1)), int(event.get("delta", 0)))
@@ -1272,12 +1258,15 @@ func _queue_hp_feedback(events: Array) -> void:
 		_drain_hp_feedback.call_deferred()
 
 
-func _feedback_group_count(events: Array) -> int:
-	var groups := {}
+func _feedback_stage_span(events: Array) -> int:
+	if events.is_empty():
+		return 0
+	var origin := int((events[0] as Dictionary).get("feedback_origin_group", (events[0] as Dictionary).get("feedback_group", 0)))
+	var last_group := origin
 	for value in events:
 		var event: Dictionary = value
-		groups[int(event.get("feedback_group", 0))] = true
-	return groups.size()
+		last_group = maxi(last_group, int(event.get("feedback_group", origin)))
+	return last_group - origin + 1
 
 
 func _drain_hp_feedback() -> void:
@@ -1286,14 +1275,25 @@ func _drain_hp_feedback() -> void:
 	_hp_feedback_running = true
 	while not _hp_feedback_batches.is_empty() and is_inside_tree():
 		var events: Array = _hp_feedback_batches.pop_front()
-		var prior_group := -1
+		if events.is_empty():
+			continue
+		var first_event: Dictionary = events[0]
+		var origin := int(first_event.get("feedback_origin_group", first_event.get("feedback_group", 0)))
+		var last_group := origin
+		var grouped := {}
 		for value in events:
 			var event: Dictionary = value
-			var group := int(event.get("feedback_group", 0))
-			if prior_group >= 0 and group != prior_group:
+			var group := int(event.get("feedback_group", origin))
+			last_group = maxi(last_group, group)
+			if not grouped.has(group):
+				grouped[group] = []
+			(grouped[group] as Array).append(event)
+		for group in range(origin, last_group + 1):
+			if group > origin:
 				await get_tree().create_timer(EFFECT_PRESENTATION_GAP).timeout
-			prior_group = group
-			_show_floating_for(int(event.get("player", 0)), int(event.get("slot", -1)), int(event.get("delta", 0)))
+			for value in grouped.get(group, []):
+				var event: Dictionary = value
+				_show_floating_for(int(event.get("player", 0)), int(event.get("slot", -1)), int(event.get("delta", 0)))
 	_hp_feedback_running = false
 	if not _resolution_running and _resolution_pending_steps <= 0 and _resolution_blocker != null and is_instance_valid(_resolution_blocker):
 		_resolution_blocker.visible = false

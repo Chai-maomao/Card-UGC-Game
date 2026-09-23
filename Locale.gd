@@ -335,7 +335,6 @@ const STRINGS := {
 		# Tutorial toasts (contextual tips)
 		"tip.no_attack_turn1": "第一回合不能攻击",
 		"tip.no_enemy_hp_effect_turn1": "第一回合不能使敌方卡牌生命变化或减员",
-		"battle.resolving": "技能结算中…",
 		"tip.no_enemy_skill_turn1": "第一回合不能对敌方使用法术",
 		"tip.command_pending": "上一项操作正在结算，请稍候",
 		"tip.command_resynced": "操作未完成，请重试",
@@ -1145,7 +1144,6 @@ const STRINGS := {
 		"battle.clear_log": "Clear",
 		"tip.no_attack_turn1": "No attacking on turn 1",
 		"tip.no_enemy_hp_effect_turn1": "Enemy card HP and removal effects are disabled on turn 1",
-		"battle.resolving": "Resolving effects…",
 		"tip.no_enemy_skill_turn1": "Can't target enemies with spells on turn 1",
 		"tip.spell_drop_target": "Drag the spell onto a valid target on the specified side",
 		"tip.command_pending": "The previous action is still resolving",
