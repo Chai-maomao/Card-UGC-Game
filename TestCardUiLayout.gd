@@ -60,6 +60,7 @@ func _ready() -> void:
 	await _check_slot_has_no_card_shadow(card2)
 	await _check_limited_skill_disabled()
 	await _check_slot_arrival_motion(card2)
+	await _check_feedback_does_not_restore_arrival_scale(card2)
 	await _check_swap_motion(card2, card)
 	if OS.get_cmdline_user_args().has("--visual-motion"):
 		_show_motion_preview(card2, card)
@@ -395,6 +396,31 @@ func _check_slot_arrival_motion(card_data: CardData) -> void:
 		fx_layer.queue_free()
 		return
 	print("CARD_ARRIVAL summon_started=true white_particles=12 four_edges=true settled=true")
+	slot.queue_free()
+	fx_layer.queue_free()
+
+
+func _check_feedback_does_not_restore_arrival_scale(card_data: CardData) -> void:
+	var fx_layer := CanvasLayer.new()
+	add_child(fx_layer)
+	var slot = preload("res://SlotUI.tscn").instantiate()
+	add_child(slot)
+	await get_tree().process_frame
+	slot.set_card(card_data)
+	var card: Control = slot.current_card_ui
+	BattleFx.summon_landing(fx_layer, slot, 1.0)
+	# This is the overlap seen on cards whose summon skill immediately emits a
+	# skill pulse: the pulse records the in-flight landing scale.
+	await get_tree().create_timer(0.04).timeout
+	BattleFx.skill_cast_pulse(fx_layer, card, slot.global_position + slot.size * 0.5)
+	await get_tree().create_timer(0.48).timeout
+	if not card.position.is_equal_approx(Vector2.ZERO) or not card.scale.is_equal_approx(Vector2.ONE) or card.modulate.a < 0.99:
+		push_error("CARD_ARRIVAL_FEEDBACK_FAIL overlapping skill pulse restored a transient landing transform")
+		get_tree().quit(1)
+		slot.queue_free()
+		fx_layer.queue_free()
+		return
+	print("CARD_ARRIVAL_FEEDBACK restored_slot_transform=true")
 	slot.queue_free()
 	fx_layer.queue_free()
 

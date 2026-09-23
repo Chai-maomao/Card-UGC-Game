@@ -789,6 +789,10 @@ func set_embedded_in_slot(embedded: bool) -> void:
 	_sync_card_shadow_visibility()
 
 
+func is_embedded_in_slot() -> bool:
+	return _embedded_in_slot
+
+
 func set_battle_drag_enabled(enabled: bool) -> void:
 	_battle_drag_enabled = enabled
 

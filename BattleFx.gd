@@ -1045,10 +1045,23 @@ func _prepare_card_feedback(target: CanvasItem) -> Dictionary:
 func _finish_hit_flash(key: int, base_position: Vector2, base_scale: Vector2, base_modulate: Color) -> void:
 	var target := instance_from_id(key) as CanvasItem
 	if target != null and is_instance_valid(target):
+		var resting_modulate := base_modulate
 		if target is Control:
-			target.position = base_position
-			target.scale = base_scale
-		target.modulate = base_modulate
+			# A summon/move landing can overlap a hit or skill pulse. The feedback
+			# tween may have captured the card while it was still at its 0.90
+			# landing scale, then finish after SlotUI has already seated the card.
+			# Battlefield cards have one canonical resting transform; restore that
+			# transform instead of replaying the transient landing snapshot.
+			if target.has_method("is_embedded_in_slot") and target.call("is_embedded_in_slot"):
+				target.position = Vector2.ZERO
+				target.scale = Vector2.ONE
+				# The landing animation also fades the face in. Never let a
+				# feedback callback restore that transient alpha.
+				resting_modulate = Color(base_modulate.r, base_modulate.g, base_modulate.b, 1.0)
+			else:
+				target.position = base_position
+				target.scale = base_scale
+		target.modulate = resting_modulate
 	_hit_targets.erase(key)
 
 
