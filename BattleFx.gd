@@ -25,7 +25,10 @@ var _slash_tex: Texture2D = null
 # --- Object pools: key -> Array[Control] ---
 var _pool: Dictionary = {}
 
-# --- Card-hit flash state (per target instance) ---
+# --- Shared card-feedback state (per target instance) ---
+# Hit flashes and skill pulses can interrupt each other. Keeping one baseline
+# prevents an in-progress red/green/blue tint from becoming the next effect's
+# permanent resting color.
 var _hit_targets: Dictionary = {}
 
 const _card_ui_scene = preload("res://CardUI.tscn")
@@ -992,21 +995,7 @@ func card_hit_flash(target: CanvasItem, delta: int) -> void:
 	if target == null or not is_instance_valid(target) or delta == 0:
 		return
 	var key: int = target.get_instance_id()
-	if not _hit_targets.has(key):
-		_hit_targets[key] = {
-			"position": target.position if target is Control else Vector2.ZERO,
-			"scale": target.scale if target is Control else Vector2.ONE,
-			"modulate": target.modulate,
-			"tween": null,
-		}
-	var data: Dictionary = _hit_targets[key]
-	var old_tween: Tween = data.get("tween")
-	if old_tween != null and old_tween.is_valid():
-		old_tween.kill()
-	if target is Control:
-		target.position = data["position"]
-		target.scale = data["scale"]
-	target.modulate = data["modulate"]
+	var data := _prepare_card_feedback(target)
 	var base_modulate: Color = data["modulate"]
 	var base_position: Vector2 = data["position"]
 	var base_scale: Vector2 = data["scale"]
@@ -1033,6 +1022,26 @@ func card_hit_flash(target: CanvasItem, delta: int) -> void:
 	twn.finished.connect(_finish_hit_flash.bind(key, base_position, base_scale, base_modulate))
 
 
+func _prepare_card_feedback(target: CanvasItem) -> Dictionary:
+	var key := target.get_instance_id()
+	if not _hit_targets.has(key):
+		_hit_targets[key] = {
+			"position": target.position if target is Control else Vector2.ZERO,
+			"scale": target.scale if target is Control else Vector2.ONE,
+			"modulate": target.modulate,
+			"tween": null,
+		}
+	var data: Dictionary = _hit_targets[key]
+	var old_tween: Tween = data.get("tween")
+	if old_tween != null and old_tween.is_valid():
+		old_tween.kill()
+	if target is Control:
+		target.position = data["position"]
+		target.scale = data["scale"]
+	target.modulate = data["modulate"]
+	return data
+
+
 func _finish_hit_flash(key: int, base_position: Vector2, base_scale: Vector2, base_modulate: Color) -> void:
 	var target := instance_from_id(key) as CanvasItem
 	if target != null and is_instance_valid(target):
@@ -1047,14 +1056,20 @@ func _finish_hit_flash(key: int, base_position: Vector2, base_scale: Vector2, ba
 func skill_cast_pulse(layer: CanvasLayer, target: CanvasItem, center: Vector2, ui_scale: float = 1.0) -> void:
 	if layer == null or target == null or not is_instance_valid(target):
 		return
-	var base_scale: Vector2 = target.scale if target is Control else Vector2.ONE
-	var base_modulate: Color = target.modulate
+	var key := target.get_instance_id()
+	var data := _prepare_card_feedback(target)
+	var base_position: Vector2 = data["position"]
+	var base_scale: Vector2 = data["scale"]
+	var base_modulate: Color = data["modulate"]
 	target.modulate = Color(0.72, 0.9, 1.35, 1.0)
 	impact_ring(layer, center, false, Color(0.45, 0.7, 1.0, 0.5), ui_scale)
 	skill_cast_beam(layer, center, ui_scale)
 	var twn := create_tween()
+	data["tween"] = twn
+	_hit_targets[key] = data
 	twn.set_parallel(true)
 	if target is Control:
 		twn.tween_property(target, "scale", base_scale * 1.08, 0.12).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 		twn.tween_property(target, "scale", base_scale, 0.18).set_delay(0.12).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	twn.tween_property(target, "modulate", base_modulate, 0.26)
+	twn.finished.connect(_finish_hit_flash.bind(key, base_position, base_scale, base_modulate))

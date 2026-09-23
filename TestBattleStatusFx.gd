@@ -58,6 +58,8 @@ func _ready() -> void:
 	_assert(not _has_named(layer, "StatusFx_Damage"), "recovery-state application must not fabricate damage feedback")
 	_assert(is_equal_approx(hp_bar.value, float(game.player_field.player_hp)), "suppressed state refresh must snap to the authoritative HP")
 
+	await _verify_card_feedback_restoration(layer)
+
 	if failures.is_empty():
 		print("TEST_BATTLE_STATUS_FX_OK")
 		get_tree().quit(0)
@@ -65,6 +67,31 @@ func _ready() -> void:
 		for failure in failures:
 			push_error("TEST_BATTLE_STATUS_FX_FAILED: %s" % failure)
 		get_tree().quit(1)
+
+
+func _verify_card_feedback_restoration(layer: CanvasLayer) -> void:
+	var target := Control.new()
+	target.size = Vector2(120, 160)
+	layer.add_child(target)
+	var center := Vector2(320, 240)
+
+	# The second pulse starts while the first card is still blue. It must reuse
+	# the original white baseline instead of treating blue as the resting tint.
+	BattleFx.skill_cast_pulse(layer, target, center)
+	BattleFx.skill_cast_pulse(layer, target, center)
+	await get_tree().create_timer(0.36).timeout
+	_assert(target.modulate.is_equal_approx(Color.WHITE), "overlapping skill pulses must restore the card's stable color")
+	_assert(target.scale.is_equal_approx(Vector2.ONE), "overlapping skill pulses must restore the card's stable scale")
+
+	# Damage/heal flashes and skill pulses share the same transform and tint.
+	# Either animation may interrupt the other without preserving an FX frame.
+	BattleFx.skill_cast_pulse(layer, target, center)
+	await get_tree().create_timer(0.03).timeout
+	BattleFx.card_hit_flash(target, -1)
+	await get_tree().create_timer(0.55).timeout
+	_assert(target.modulate.is_equal_approx(Color.WHITE), "a hit interrupting a skill pulse must restore the stable color")
+	_assert(target.scale.is_equal_approx(Vector2.ONE), "a hit interrupting a skill pulse must restore the stable scale")
+	target.queue_free()
 
 
 func _has_named(root: Node, node_name: String) -> bool:
