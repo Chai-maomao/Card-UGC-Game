@@ -54,5 +54,6 @@ Scope: current working tree, preserving changes already present on 2026-09-09.
 - After discarding the first, middle or last card, the remaining hand keeps its relative order and reuses the same card controls. If a discard lifecycle or authority update supplies a different legal order, the UI mirrors that array exactly rather than appending moved controls out of sequence.
 - Repeated skill pulses, and a damage/heal flash interrupting a skill pulse, always restore the card's original tint, position and scale. No pale-blue overlay remains after the feedback tween finishes.
 - Gameplay resolves every effect synchronously, while the presentation timeline stores each HP transition. A final authoritative `1/4` state produced by attack `-2` followed by skill `-1` displays `4/4 -> 2/4`, waits 0.2 seconds, then displays `1/4`; a full-screen refresh or online state replacement cannot reveal `1/4` before its stage.
+- Damage that resolves with zero actual HP loss still produces a red `-0` floating number in its causal stage. Zero healing or an ordinary no-op does not produce `+0`.
 - `scripts/run_tests.ps1 -Suite logic` — **44/44 PASS**.
 - `scripts/run_tests.ps1 -Suite visual` — **5/5 PASS**, including `TestCardFlowAnimationVisual` screenshots for defeat-to-discard and ordered drawing.

@@ -192,6 +192,26 @@ func _ready() -> void:
 	battle.set("_action_presentation_events", [])
 	battle.set("_action_feedback_group_stack", [])
 	battle.get("_pending_hand_entry_ids").clear()
+
+	var blocked_attacker := CardData.new("零伤攻击者", 1, 4, 2)
+	var blocked_target := CardData.new("完全减伤目标", 1, 4, 0)
+	blocked_target.apply_buff(SkillEngine.BUFF_DAMAGE_REDUCTION, 100, 1, 2)
+	game.player_field.slots[4] = blocked_attacker
+	game.player2_field.slots[4] = blocked_target
+	battle.call("_begin_action_broadcast", "attack", 1, blocked_attacker.card_name, blocked_target.card_name, {"target_player": 2, "target_slot": 4})
+	game.execute_attack(4, 4)
+	var zero_timeline: Array = battle.get("_action_presentation_events").duplicate(true)
+	var zero_damage_ok := zero_timeline.size() == 1 \
+		and int(zero_timeline[0].get("delta", -1)) == 0 \
+		and bool(zero_timeline[0].get("zero_damage", false))
+	_assert(zero_damage_ok and blocked_target.hp == 4, "fully prevented damage must remain a staged -0 event")
+	battle.set("_action_broadcast", {})
+	battle.set("_action_hp_events", [])
+	battle.set("_action_presentation_events", [])
+	battle.set("_action_feedback_group_stack", [])
+	var zero_text_before := _count_label_text(layer, "-0")
+	battle.call("_queue_presentation_feedback", zero_timeline)
+	_assert(_count_label_text(layer, "-0") > zero_text_before, "prevented damage must display a red -0 floating number")
 	GamePreferences.set_animation_acceleration(prior_acceleration)
 
 	print("TEST_BATTLE_LAYOUT_OK")

@@ -70,6 +70,7 @@ var _action_broadcast: Dictionary = {}
 var _action_hp_events: Array = []
 var _action_presentation_events: Array = []
 var _action_damage_events: Array = []
+var _pending_zero_damage_targets: Dictionary = {}
 var _action_parasite_events: Array = []
 var _action_failed_events: Array = []
 var _end_turn_pulse: Tween = null
@@ -974,7 +975,10 @@ func _refresh_action_log_text() -> void:
 # ============================================
 
 func _on_hp_changed(target: CardData, delta: int, new_hp: int):
-	if delta == 0:
+	var target_key := target.get_instance_id() if target != null else 0
+	var zero_damage := delta == 0 and _pending_zero_damage_targets.has(target_key)
+	_pending_zero_damage_targets.erase(target_key)
+	if delta == 0 and not zero_damage:
 		return
 	# Authority records the change (as player+slot) so it can be replayed as
 	# floating text on the non-authority client, which never runs combat logic
@@ -985,6 +989,7 @@ func _on_hp_changed(target: CardData, delta: int, new_hp: int):
 	var feedback_event := {
 		"player": loc.player, "slot": loc.slot, "delta": delta, "card": target.card_name,
 		"before_hp": new_hp - delta, "new_hp": new_hp, "max_hp": target.max_hp,
+		"zero_damage": zero_damage,
 		"kind": "hp",
 		"feedback_group": feedback_group, "feedback_origin_group": feedback_origin_group,
 	}
@@ -997,10 +1002,12 @@ func _on_hp_changed(target: CardData, delta: int, new_hp: int):
 	if loc.slot < 0:
 		return
 	if _action_broadcast.is_empty():
-		_show_combat_feedback_for(loc.player, loc.slot, delta)
+		_show_combat_feedback_for(loc.player, loc.slot, delta, zero_damage)
 
 
 func _on_damage_resolved(source: CardData, target: CardData, declared: int, actual: int, reduction_pct: int, temp_hp_before: int, reason: String) -> void:
+	if target != null and actual == 0 and declared > 0:
+		_pending_zero_damage_targets[target.get_instance_id()] = true
 	if _action_broadcast.is_empty() or target == null:
 		return
 	var loc := _locate_card_player_slot(target)
@@ -1047,8 +1054,8 @@ func _on_skill_safety_limit_hit(source_name: String, _reason: String) -> void:
 	_show_toast("tip.skill_safety_limit", [source_name])
 
 
-func _spawn_combat_text(pos: Vector2, delta: int, strong: bool = false) -> void:
-	BattleFx.combat_text($CanvasLayer, pos, delta, strong, _ui_scale())
+func _spawn_combat_text(pos: Vector2, delta: int, strong: bool = false, zero_damage: bool = false) -> void:
+	BattleFx.combat_text($CanvasLayer, pos, delta, strong, _ui_scale(), zero_damage)
 	if strong:
 		BattleFx.shake_layer($CanvasLayer, 2.8)
 
@@ -1061,7 +1068,7 @@ func _spawn_heal_particles(center: Vector2, amount: int) -> void:
 	BattleFx.heal_particles($CanvasLayer, center, amount, _ui_scale())
 
 
-func _show_combat_feedback_for(player: int, slot: int, delta: int) -> void:
+func _show_combat_feedback_for(player: int, slot: int, delta: int, zero_damage: bool = false) -> void:
 	if slot < 0 or slot > 4:
 		return
 	var slots_ui: Array = _my_slots_ui() if player == _view_player() else _their_slots_ui()
@@ -1069,12 +1076,13 @@ func _show_combat_feedback_for(player: int, slot: int, delta: int) -> void:
 		return
 	var slot_ui: Control = slots_ui[slot]
 	var center: Vector2 = slot_ui.global_position + slot_ui.size / 2
-	_spawn_combat_text(center, delta, abs(delta) >= 4)
-	if delta < 0:
+	_spawn_combat_text(center, delta, abs(delta) >= 4, zero_damage)
+	if delta < 0 or zero_damage:
 		_spawn_impact_ring(center, true)
-	else:
+	elif delta > 0:
 		_spawn_heal_particles(center, delta)
-	_play_card_feedback(slot_ui, delta)
+	if delta != 0:
+		_play_card_feedback(slot_ui, delta)
 
 
 func _record_feedback_event(kind: String, player: int, slot: int, extra: Dictionary = {}) -> void:
@@ -1305,8 +1313,8 @@ func _locate_card_player_slot(card: CardData) -> Dictionary:
 
 # Replays floating text on the non-authority client using absolute player+slot,
 # mapping to the correct UI side for this client's viewing perspective.
-func _show_floating_for(player: int, slot: int, delta: int) -> void:
-	_show_combat_feedback_for(player, slot, delta)
+func _show_floating_for(player: int, slot: int, delta: int, zero_damage: bool = false) -> void:
+	_show_combat_feedback_for(player, slot, delta, zero_damage)
 
 
 func _find_card_slot_pos(card: CardData) -> Vector2:

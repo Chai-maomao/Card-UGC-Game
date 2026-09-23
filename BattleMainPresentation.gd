@@ -549,7 +549,12 @@ func _play_presentation_event(event: Dictionary) -> void:
 	match kind:
 		"hp":
 			_update_hp_presentation(event)
-			_show_floating_for(int(event.get("player", 0)), int(event.get("slot", -1)), int(event.get("delta", 0)))
+			_show_floating_for(
+				int(event.get("player", 0)),
+				int(event.get("slot", -1)),
+				int(event.get("delta", 0)),
+				bool(event.get("zero_damage", false))
+			)
 		"hand_entry":
 			_play_staged_hand_entry(event)
 		"effect":

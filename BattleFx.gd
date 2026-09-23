@@ -310,17 +310,17 @@ func status_bar_feedback(layer: CanvasLayer, bar: ProgressBar, delta: int, kind:
 	particle_cleanup.tween_callback(particles.queue_free)
 
 
-func combat_text(layer: CanvasLayer, pos: Vector2, delta: int, strong: bool = false, ui_scale: float = 1.0) -> void:
-	if layer == null or delta == 0:
+func combat_text(layer: CanvasLayer, pos: Vector2, delta: int, strong: bool = false, ui_scale: float = 1.0, zero_damage: bool = false) -> void:
+	if layer == null or (delta == 0 and not zero_damage):
 		return
-	var is_damage: bool = delta < 0
+	var is_damage: bool = delta < 0 or zero_damage
 	var is_crit: bool = strong and is_damage
 	var lbl := _acquire_control("text", func() -> Control:
 		var l := Label.new()
 		l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		return l) as Label
-	lbl.text = ("-%d" % -delta) if is_damage else ("+%d" % delta)
+	lbl.text = ("-%d" % abs(delta)) if is_damage else ("+%d" % delta)
 	# Big damage hits render in a hot orange to read as critical hits.
 	var font_color: Color
 	var outline_color: Color
