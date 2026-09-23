@@ -74,8 +74,10 @@ func _verify_silent_resolution_lock() -> void:
 	var battle := preload("res://Main.tscn").instantiate()
 	add_child(battle)
 	await _settle()
-	battle._on_skill_effect_resolved(null, SkillEngine.EFFECT_DAMAGE, null, 1)
-	battle._on_skill_effect_resolved(null, SkillEngine.EFFECT_HEAL, null, 1)
+	battle._queue_presentation_feedback([
+		{"kind": "effect", "effect_id": SkillEngine.EFFECT_DAMAGE, "targets": [], "feedback_group": 1},
+		{"kind": "effect", "effect_id": SkillEngine.EFFECT_HEAL, "targets": [], "feedback_group": 2},
+	])
 	await get_tree().process_frame
 	var blocker := battle.get("_resolution_blocker") as Control
 	if blocker == null or not blocker.visible or blocker.get_child_count() != 0:

@@ -119,7 +119,79 @@ func _ready() -> void:
 			"separate effects inside one skill must receive separate presentation stages")
 	battle.set("_action_broadcast", {})
 	battle.set("_action_hp_events", [])
+	battle.set("_action_presentation_events", [])
 	battle.set("_action_feedback_group_stack", [])
+
+	# Nested reactions must stay in actual causal order. A 4/4 wall that heals
+	# 3 after damage visually resolves 4->2, 2->4, 4->3, then 3->4.
+	var wall_recovery := {
+		"skill_name": "Recover after hit", "trigger": SkillEngine.TRIGGER_ON_DAMAGED, "probability": 100,
+		"effects": [{"effect": SkillEngine.EFFECT_HEAL, "target": SkillEngine.TARGET_SELF, "value": 3, "probability": 100}],
+	}
+	var followup_hit := {
+		"skill_name": "Follow-up spark", "trigger": SkillEngine.TRIGGER_ON_ATTACK, "probability": 100,
+		"effects": [{"effect": SkillEngine.EFFECT_DAMAGE, "target": SkillEngine.TARGET_SINGLE, "target_side": SkillEngine.TARGET_SIDE_ENEMY, "value": 1, "probability": 100}],
+	}
+	var misaka := CardData.new("御坂美琴", 1, 5, 2, [followup_hit])
+	var wall := CardData.new("肉墙", 1, 4, 0, [wall_recovery])
+	game.player_field.slots[2] = misaka
+	game.player2_field.slots[2] = wall
+	game.current_player = 1
+	game.turn_number = 2
+	battle.call("_begin_action_broadcast", "attack", 1, misaka.card_name, wall.card_name, {"target_player": 2, "target_slot": 2})
+	game.execute_attack(2, 2)
+	var causal_events: Array = []
+	for event: Dictionary in battle.get("_action_presentation_events"):
+		if str(event.get("kind", "")) == "hp":
+			causal_events.append(event)
+	var expected_deltas := [-2, 2, -1, 1]
+	var causal_order_ok := causal_events.size() == expected_deltas.size()
+	for index in range(mini(causal_events.size(), expected_deltas.size())):
+		causal_order_ok = causal_order_ok \
+			and int(causal_events[index].get("delta", 0)) == expected_deltas[index] \
+			and int(causal_events[index].get("feedback_group", -1)) == index
+	_assert(causal_order_ok and wall.hp == 4,
+			"nested damage recovery must present -2, +2, -1, +1 in exact trigger order")
+	_assert(int(battle.call("_feedback_stage_span", battle.get("_action_presentation_events"))) == 4,
+			"nested attack feedback must retain four contiguous 0.2-second stages")
+	battle.set("_action_broadcast", {})
+	battle.set("_action_hp_events", [])
+	battle.set("_action_presentation_events", [])
+	battle.set("_action_feedback_group_stack", [])
+
+	# Zhang Xuefeng's three-effect skill must expose three distinct stages:
+	# self damage, draw travel, then the status pulse on enemy targets.
+	var three_bites := {
+		"skill_name": "三口一个巧乐兹", "trigger": SkillEngine.TRIGGER_ON_ACTIVATE, "probability": 100,
+		"effects": [
+			{"effect": SkillEngine.EFFECT_DAMAGE, "target": SkillEngine.TARGET_SELF, "value": 1, "probability": 100},
+			{"effect": SkillEngine.EFFECT_DRAW_CARDS, "target": SkillEngine.TARGET_SELF, "value": 1, "probability": 100},
+			{"effect": SkillEngine.EFFECT_ADD_BUFF, "target": SkillEngine.TARGET_ALL, "target_side": SkillEngine.TARGET_SIDE_ENEMY, "buff_id": SkillEngine.BUFF_MISFORTUNE, "value": 33, "duration": 1, "probability": 100},
+		],
+	}
+	var zhang := CardData.new("张雪峰", 1, 5, 1, [three_bites])
+	var status_target := CardData.new("状态目标", 1, 5, 1)
+	var drawn_card := CardData.new("抽到的牌", 1, 3, 1)
+	game.player_field.slots[0] = zhang
+	game.player2_field.slots[0] = status_target
+	game.player_hand.clear()
+	game.shared_deck = [drawn_card]
+	battle.call("_begin_action_broadcast", "skill", 1, zhang.card_name, "", {"skill": "三口一个巧乐兹"})
+	game.trigger_activate_skills(0, -1, 0, 0)
+	var visible_kinds: Array[String] = []
+	var visible_groups: Array[int] = []
+	for event: Dictionary in battle.get("_action_presentation_events"):
+		var kind := str(event.get("kind", ""))
+		if kind in ["hp", "hand_entry", "effect"]:
+			visible_kinds.append(kind)
+			visible_groups.append(int(event.get("feedback_group", -1)))
+	_assert(visible_kinds == ["hp", "hand_entry", "effect"] and visible_groups == [1, 2, 3],
+			"damage, draw and status application must play as three ordered stages")
+	battle.set("_action_broadcast", {})
+	battle.set("_action_hp_events", [])
+	battle.set("_action_presentation_events", [])
+	battle.set("_action_feedback_group_stack", [])
+	battle.get("_pending_hand_entry_ids").clear()
 	GamePreferences.set_animation_acceleration(prior_acceleration)
 
 	print("TEST_BATTLE_LAYOUT_OK")

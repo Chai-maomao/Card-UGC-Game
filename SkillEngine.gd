@@ -349,7 +349,7 @@ static func _execute_effects(effects: Array, source_card: CardData, context: Dic
 			_trace(context, source_card, "resolved", {"effect": effect_str, "target": source_card.card_name, "value": value})
 			EventBus.skill_effect_started.emit(source_card, effect_str, depth)
 			_EffectApplier.apply_effect(effect_str, source_card, value, eff_dict, effect_context)
-			EventBus.skill_effect_resolved.emit(source_card, effect_str, source_card, depth)
+			EventBus.skill_effect_resolved.emit(source_card, effect_str, [source_card], depth)
 			continue
 		# Keep the established "one roll per effect" behavior for fixed,
 		# range, random-expression and global/source values. Only expressions
@@ -357,6 +357,7 @@ static func _execute_effects(effects: Array, source_card: CardData, context: Dic
 		var value_uses_target := _effect_value_uses_target(eff_dict)
 		var shared_value := 0
 		var applied_any := false
+		var applied_targets: Array = []
 		var presentation_started := false
 		if not value_uses_target:
 			shared_value = _resolve_value(eff_dict, source_card, source_card, context)
@@ -392,8 +393,9 @@ static func _execute_effects(effects: Array, source_card: CardData, context: Dic
 				presentation_started = true
 			_EffectApplier.apply_effect(effect_str, target_card, value, eff_dict, effect_context)
 			applied_any = true
+			applied_targets.append(target_card)
 		if applied_any:
-			EventBus.skill_effect_resolved.emit(source_card, effect_str, source_card, depth)
+			EventBus.skill_effect_resolved.emit(source_card, effect_str, applied_targets, depth)
 
 
 static func _blocked_enemy_effect_on_first_turn(effect_id: String, effect: Dictionary, target: Variant, source_card: CardData, context: Dictionary) -> bool:

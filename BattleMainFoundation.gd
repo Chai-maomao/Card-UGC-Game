@@ -68,6 +68,7 @@ var _turn_ending: bool = false  # 防止短时间内重复点击结束按钮
 var _pending_feedback_events: Array = []
 var _action_broadcast: Dictionary = {}
 var _action_hp_events: Array = []
+var _action_presentation_events: Array = []
 var _action_damage_events: Array = []
 var _action_parasite_events: Array = []
 var _action_failed_events: Array = []
@@ -78,6 +79,7 @@ var _status_hud_state: Dictionary = {}
 var _status_value_tweens: Dictionary = {}
 var _suppress_status_feedback_once: bool = false
 var _pending_hand_entry_ids: Dictionary = {}
+var _deferred_hand_arrival_refs: Dictionary = {}
 var my_player: int = 0
 var remote_arrow_source: int = -1
 var remote_arrow_target: int = -1
@@ -403,21 +405,11 @@ func _apply_authority_state(state: Dictionary, label: String = "authority") -> v
 		_suppress_status_feedback_once = true
 	var feedback_events: Array = state.get("_feedback_events", [])
 	for event in feedback_events:
-		if str(event.get("kind", "")) == "hand_entry" \
-				and str(event.get("destination", "")) == "hand" \
-				and int(event.get("player", 0)) == _view_player():
-			var source_meta: Dictionary = event.get("source_meta", {})
-			var batch_index := maxi(0, int(source_meta.get("batch_index", 0)))
-			var source := str(event.get("source", "generated"))
-			var reveal_delay := BattleFx.draw_card_arrival_delay(batch_index) if source == "deck" else BattleFx.travel_card_arrival_delay(batch_index)
-			_pending_hand_entry_ids[str(event.get("instance_id", ""))] = {
-				"reveal_delay": reveal_delay,
-				"feedback": {
-					"player": int(event.get("player", 0)),
-					"source": source,
-					"source_meta": source_meta.duplicate(true),
-				},
-			}
+		if str(event.get("kind", "")) == "broadcast":
+			for presentation_event in (event.get("event", {}) as Dictionary).get("presentation_events", []):
+				_prime_remote_hand_entry(presentation_event, true)
+		else:
+			_prime_remote_hand_entry(event, false)
 	game.apply_initial_state(state)
 	NetworkManager.save_match_snapshot(game.export_initial_state())
 	_restore_local_art_paths()
@@ -444,6 +436,31 @@ func _apply_authority_state(state: Dictionary, label: String = "authority") -> v
 	if has_method("_resume_auto_summon_targeting"):
 		call_deferred("_resume_auto_summon_targeting")
 	_print_authority_state(label)
+
+
+func _prime_remote_hand_entry(event: Dictionary, deferred: bool) -> void:
+	if str(event.get("kind", "")) != "hand_entry" \
+			or str(event.get("destination", "")) != "hand" \
+			or int(event.get("player", 0)) != _view_player():
+		return
+	var source_meta: Dictionary = event.get("source_meta", {})
+	var source := str(event.get("source", "generated"))
+	var key := str(event.get("instance_id", ""))
+	if key.is_empty():
+		key = str(event.get("entry_key", ""))
+	if deferred:
+		_pending_hand_entry_ids[key] = {"deferred": true}
+		return
+	var batch_index := maxi(0, int(source_meta.get("batch_index", 0)))
+	var reveal_delay := BattleFx.draw_card_arrival_delay(batch_index) if source == "deck" else BattleFx.travel_card_arrival_delay(batch_index)
+	_pending_hand_entry_ids[key] = {
+		"reveal_delay": reveal_delay,
+		"feedback": {
+			"player": int(event.get("player", 0)),
+			"source": source,
+			"source_meta": source_meta.duplicate(true),
+		},
+	}
 
 
 func _restore_local_art_paths() -> void:
@@ -582,26 +599,70 @@ func _ready():
 
 
 func is_resolution_locked() -> bool:
-	return _resolution_running or _resolution_pending_steps > 1 or _hp_feedback_running or not _hp_feedback_batches.is_empty()
+	var queued_multistage := false
+	for batch in _hp_feedback_batches:
+		if _feedback_stage_span(batch) > 1:
+			queued_multistage = true
+			break
+	return _resolution_running or _resolution_pending_steps > 1 or _hp_feedback_running or queued_multistage
 
 
-func _on_skill_effect_started(_source: CardData, _effect_id: String, _chain_depth: int) -> void:
+func _on_skill_effect_started(_source: CardData, effect_id: String, _chain_depth: int) -> void:
 	if _action_broadcast.is_empty():
 		return
 	_action_feedback_next_group += 1
 	_action_feedback_group_stack.append(_action_feedback_next_group)
+	_action_presentation_events.append({
+		"kind": "stage",
+		"effect_id": effect_id,
+		"feedback_group": _action_feedback_next_group,
+	})
 
 
-func _on_skill_effect_resolved(_source: CardData, _effect_id: String, _target: Variant, _chain_depth: int) -> void:
-	if not _action_broadcast.is_empty() and _action_feedback_group_stack.size() > 1:
-		_action_feedback_group_stack.pop_back()
-	if GamePreferences.animation_acceleration_enabled() or battle_finished:
+func _on_skill_effect_resolved(source: CardData, effect_id: String, targets: Variant, _chain_depth: int) -> void:
+	if _action_broadcast.is_empty():
 		return
-	_resolution_pending_steps += 1
-	if _resolution_pending_steps > 1:
-		_ensure_resolution_blocker()
-	if not _resolution_running:
-		_drain_resolution_steps.call_deferred()
+	var group := int(_action_feedback_group_stack.back()) if not _action_feedback_group_stack.is_empty() else 0
+	# HP changes and hand movement already provide their own readable feedback.
+	# Effects with no such event still get a target pulse in their exact slot in
+	# the causal timeline (buffs, shields, attack changes, cleanse, and so on).
+	if not _presentation_group_has_visible_event(group):
+		var locations := _presentation_target_locations(targets)
+		if locations.is_empty() and source != null:
+			var source_loc := _locate_card_player_slot(source)
+			if int(source_loc.get("slot", -1)) >= 0:
+				locations.append(source_loc)
+		_action_presentation_events.append({
+			"kind": "effect",
+			"effect_id": effect_id,
+			"targets": locations,
+			"feedback_group": group,
+		})
+	if _action_feedback_group_stack.size() > 1:
+		_action_feedback_group_stack.pop_back()
+
+
+func _presentation_group_has_visible_event(group: int) -> bool:
+	for index in range(_action_presentation_events.size() - 1, -1, -1):
+		var event: Dictionary = _action_presentation_events[index]
+		if int(event.get("feedback_group", -1)) != group:
+			continue
+		if str(event.get("kind", "")) == "stage":
+			return false
+		return true
+	return false
+
+
+func _presentation_target_locations(targets: Variant) -> Array:
+	var values: Array = targets if targets is Array else [targets]
+	var locations: Array = []
+	for value in values:
+		if not value is CardData:
+			continue
+		var loc := _locate_card_player_slot(value)
+		if int(loc.get("slot", -1)) >= 0 and not loc in locations:
+			locations.append(loc)
+	return locations
 
 
 func _on_first_turn_effect_blocked(_source: CardData, _effect_id: String) -> void:
@@ -922,12 +983,14 @@ func _on_hp_changed(target: CardData, delta: int, _new_hp: int):
 	var feedback_origin_group := 0 if str(_action_broadcast.get("kind", "")) == "attack" else 1
 	var feedback_event := {
 		"player": loc.player, "slot": loc.slot, "delta": delta, "card": target.card_name,
+		"kind": "hp",
 		"feedback_group": feedback_group, "feedback_origin_group": feedback_origin_group,
 	}
 	if loc.slot >= 0 and not _action_broadcast.is_empty():
 		_action_hp_events.append(feedback_event)
+		_action_presentation_events.append(feedback_event.duplicate(true))
 	if NetworkManager.is_online and NetworkManager.is_authority():
-		if loc.slot >= 0:
+		if loc.slot >= 0 and _action_broadcast.is_empty():
 			_pending_hp_events.append(feedback_event.duplicate())
 	if loc.slot < 0:
 		return
@@ -1025,7 +1088,9 @@ func _replay_feedback_event(event: Dictionary) -> void:
 	var player: int = int(event.get("player", 0))
 	var slot: int = int(event.get("slot", -1))
 	if kind == "broadcast":
-		_show_combat_broadcast(_format_action_broadcast(event.get("event", {})), str(event.get("event", {}).get("kind", "system")))
+		var broadcast_event: Dictionary = event.get("event", {})
+		_show_combat_broadcast(_format_action_broadcast(broadcast_event), str(broadcast_event.get("kind", "system")))
+		_queue_presentation_feedback(broadcast_event.get("presentation_events", broadcast_event.get("hp_events", [])))
 	elif kind == "broadcast_text":
 		_show_combat_broadcast(Locale.t(event.get("text_key", "")))
 	elif kind == "attack":
@@ -1242,63 +1307,6 @@ func _show_floating_for(player: int, slot: int, delta: int) -> void:
 	_show_combat_feedback_for(player, slot, delta)
 
 
-func _queue_hp_feedback(events: Array) -> void:
-	if events.is_empty() or battle_finished:
-		return
-	var stage_span := _feedback_stage_span(events)
-	if GamePreferences.animation_acceleration_enabled() or stage_span <= 1:
-		for value in events:
-			var event: Dictionary = value
-			_show_floating_for(int(event.get("player", 0)), int(event.get("slot", -1)), int(event.get("delta", 0)))
-		return
-	var batch := events.duplicate(true)
-	_hp_feedback_batches.append(batch)
-	_ensure_resolution_blocker()
-	if not _hp_feedback_running:
-		_drain_hp_feedback.call_deferred()
-
-
-func _feedback_stage_span(events: Array) -> int:
-	if events.is_empty():
-		return 0
-	var origin := int((events[0] as Dictionary).get("feedback_origin_group", (events[0] as Dictionary).get("feedback_group", 0)))
-	var last_group := origin
-	for value in events:
-		var event: Dictionary = value
-		last_group = maxi(last_group, int(event.get("feedback_group", origin)))
-	return last_group - origin + 1
-
-
-func _drain_hp_feedback() -> void:
-	if _hp_feedback_running:
-		return
-	_hp_feedback_running = true
-	while not _hp_feedback_batches.is_empty() and is_inside_tree():
-		var events: Array = _hp_feedback_batches.pop_front()
-		if events.is_empty():
-			continue
-		var first_event: Dictionary = events[0]
-		var origin := int(first_event.get("feedback_origin_group", first_event.get("feedback_group", 0)))
-		var last_group := origin
-		var grouped := {}
-		for value in events:
-			var event: Dictionary = value
-			var group := int(event.get("feedback_group", origin))
-			last_group = maxi(last_group, group)
-			if not grouped.has(group):
-				grouped[group] = []
-			(grouped[group] as Array).append(event)
-		for group in range(origin, last_group + 1):
-			if group > origin:
-				await get_tree().create_timer(EFFECT_PRESENTATION_GAP).timeout
-			for value in grouped.get(group, []):
-				var event: Dictionary = value
-				_show_floating_for(int(event.get("player", 0)), int(event.get("slot", -1)), int(event.get("delta", 0)))
-	_hp_feedback_running = false
-	if not _resolution_running and _resolution_pending_steps <= 0 and _resolution_blocker != null and is_instance_valid(_resolution_blocker):
-		_resolution_blocker.visible = false
-
-
 func _find_card_slot_pos(card: CardData) -> Vector2:
 	var p_slots = player_side_ui.get_children()
 	var e_slots = enemy_side_ui.get_children()
@@ -1318,6 +1326,7 @@ func _begin_action_broadcast(kind: String, player: int, source_name: String, tar
 	for key in extra.keys():
 		_action_broadcast[key] = extra[key]
 	_action_hp_events.clear()
+	_action_presentation_events.clear()
 	_action_damage_events.clear()
 	_action_parasite_events.clear()
 	_action_failed_events.clear()
@@ -1326,23 +1335,26 @@ func _begin_action_broadcast(kind: String, player: int, source_name: String, tar
 func _finish_action_broadcast() -> void:
 	if _action_broadcast.is_empty():
 		_action_hp_events.clear()
+		_action_presentation_events.clear()
 		_action_damage_events.clear()
 		_action_parasite_events.clear()
 		_action_failed_events.clear()
 		return
 	var event := _action_broadcast.duplicate(true)
 	event["hp_events"] = _action_hp_events.duplicate(true)
+	event["presentation_events"] = _action_presentation_events.duplicate(true)
 	event["damage_events"] = _action_damage_events.duplicate(true)
 	event["parasite_events"] = _action_parasite_events.duplicate(true)
 	event["failed_events"] = _action_failed_events.duplicate(true)
 	event["after_state"] = _battle_log_state()
-	_queue_hp_feedback(event["hp_events"])
+	_queue_presentation_feedback(event["presentation_events"])
 	var text := _format_action_broadcast(event)
 	_show_combat_broadcast(text, str(event.get("kind", "system")))
 	if NetworkManager.is_online and NetworkManager.is_authority():
 		_pending_feedback_events.append({"kind": "broadcast", "event": event})
 	_action_broadcast.clear()
 	_action_hp_events.clear()
+	_action_presentation_events.clear()
 	_action_damage_events.clear()
 	_action_parasite_events.clear()
 	_action_failed_events.clear()
@@ -1469,6 +1481,18 @@ func _prepare_hand_entry_ui(_card_ui: Control, _card_data: CardData) -> void:
 
 func _play_hand_resolution_feedback(_card: CardData, _player: int, _destination: String, _source: String, _source_meta: Dictionary) -> void:
 	pass
+
+func _play_staged_hand_entry(_event: Dictionary) -> void:
+	pass
+
+func _queue_hp_feedback(_events: Array) -> void:
+	pass
+
+func _queue_presentation_feedback(_events: Array) -> void:
+	pass
+
+func _feedback_stage_span(_events: Array) -> int:
+	return 0
 
 func _play_opening_draw_feedback() -> void:
 	pass

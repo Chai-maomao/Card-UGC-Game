@@ -313,6 +313,7 @@ func reset_hand_ui_from_game_state() -> void:
 		hand_container.remove_child(child)
 		child.queue_free()
 	_pending_hand_entry_ids.clear()
+	_deferred_hand_arrival_refs.clear()
 	_pending_hand_arrivals.clear()
 	if hand_container.sort_children.is_connected(_flush_pending_hand_arrivals):
 		hand_container.sort_children.disconnect(_flush_pending_hand_arrivals)
@@ -360,6 +361,9 @@ func _prepare_hand_entry_ui(card_ui: Control, card_data: CardData) -> void:
 		var pending = _pending_hand_entry_ids.get(entry_key, {})
 		_pending_hand_entry_ids.erase(entry_key)
 		card_ui.modulate.a = 0.0
+		if pending is Dictionary and bool(pending.get("deferred", false)):
+			_deferred_hand_arrival_refs[entry_key] = weakref(card_ui)
+			return
 		var reveal_delay := 0.50
 		if pending is Dictionary:
 			reveal_delay = float(pending.get("reveal_delay", reveal_delay))
@@ -408,6 +412,27 @@ func _flush_pending_hand_arrivals() -> void:
 
 func _on_hand_entry_resolved(card: CardData, player: int, destination: String, source: String, source_meta: Dictionary) -> void:
 	var batch_index := maxi(0, int(source_meta.get("batch_index", 0)))
+	var network_meta := source_meta.duplicate(true)
+	# Screen coordinates are local to one client's layout/viewpoint. The remote
+	# peer reconstructs a correct source from player + slot instead.
+	network_meta.erase("source_position")
+	var entry_event := {
+		"kind": "hand_entry",
+		"player": player,
+		"slot": -1,
+		"destination": destination,
+		"source": source,
+		"source_meta": network_meta,
+		"instance_id": card.instance_id,
+		"entry_key": _hand_entry_key(card),
+		"card_name": card.card_name,
+	}
+	if not _action_broadcast.is_empty():
+		entry_event["feedback_group"] = int(_action_feedback_group_stack.back()) if not _action_feedback_group_stack.is_empty() else 0
+		_action_presentation_events.append(entry_event)
+		if destination == "hand" and player == _view_player():
+			_pending_hand_entry_ids[_hand_entry_key(card)] = {"deferred": true}
+		return
 	if destination == "hand" and player == _view_player():
 		var reveal_delay := BattleFx.draw_card_arrival_delay(batch_index) if source == "deck" else BattleFx.travel_card_arrival_delay(batch_index)
 		_pending_hand_entry_ids[_hand_entry_key(card)] = {
@@ -422,10 +447,6 @@ func _on_hand_entry_resolved(card: CardData, player: int, destination: String, s
 		_play_hand_resolution_feedback(card, player, destination, source, source_meta)
 	if destination == "discard":
 		_spawn_toast(Locale.t("tip.hand_overflow", [card.card_name]), "warn", 2.0)
-	var network_meta := source_meta.duplicate(true)
-	# Screen coordinates are local to one client's layout/viewpoint. The remote
-	# peer reconstructs a correct source from player + slot instead.
-	network_meta.erase("source_position")
 	_record_feedback_event("hand_entry", player, -1, {
 		"destination": destination,
 		"source": source,
@@ -433,6 +454,103 @@ func _on_hand_entry_resolved(card: CardData, player: int, destination: String, s
 		"instance_id": card.instance_id,
 		"card_name": card.card_name,
 	})
+
+
+func _play_staged_hand_entry(event: Dictionary) -> void:
+	var player := int(event.get("player", 0))
+	var destination := str(event.get("destination", ""))
+	var source := str(event.get("source", "generated"))
+	var source_meta: Dictionary = event.get("source_meta", {}).duplicate(true)
+	var card := _find_feedback_card(str(event.get("instance_id", "")))
+	var entry_key := str(event.get("entry_key", event.get("instance_id", "")))
+	if destination == "hand" and player == _view_player():
+		var reference: WeakRef = _deferred_hand_arrival_refs.get(entry_key)
+		var card_ui: Control = reference.get_ref() if reference != null else null
+		if card_ui != null and is_instance_valid(card_ui):
+			_deferred_hand_arrival_refs.erase(entry_key)
+			_play_hand_resolution_feedback(card, player, destination, source, source_meta, card_ui.global_position + card_ui.size * 0.5)
+			var batch_index := maxi(0, int(source_meta.get("batch_index", 0)))
+			var delay := BattleFx.draw_card_arrival_delay(batch_index) if source == "deck" else BattleFx.travel_card_arrival_delay(batch_index)
+			get_tree().create_timer(delay).timeout.connect(_reveal_arriving_hand_card.bind(weakref(card_ui)))
+			return
+	_play_hand_resolution_feedback(card, player, destination, source, source_meta)
+	if destination == "discard":
+		_spawn_toast(Locale.t("tip.hand_overflow", [str(event.get("card_name", Locale.t("battle.card")))]), "warn", 2.0)
+
+
+# Replays one action as contiguous causal stages. Consecutive events from the
+# same effect share a frame; returning from a nested trigger starts a new stage.
+func _queue_hp_feedback(events: Array) -> void:
+	_queue_presentation_feedback(events)
+
+
+func _queue_presentation_feedback(events: Array) -> void:
+	if events.is_empty() or battle_finished:
+		return
+	var stage_span := _feedback_stage_span(events)
+	var needs_deferred_hand := false
+	for value in events:
+		if str((value as Dictionary).get("kind", "")) == "hand_entry":
+			needs_deferred_hand = true
+			break
+	if (GamePreferences.animation_acceleration_enabled() and not needs_deferred_hand) \
+			or (stage_span <= 1 and not needs_deferred_hand):
+		for value in events:
+			_play_presentation_event(value)
+		return
+	_hp_feedback_batches.append(events.duplicate(true))
+	if stage_span > 1:
+		_ensure_resolution_blocker()
+	if not _hp_feedback_running:
+		_drain_hp_feedback.call_deferred()
+
+
+func _feedback_stage_span(events: Array) -> int:
+	var stage_count := 0
+	var previous_group := -1
+	for value in events:
+		var group := int((value as Dictionary).get("feedback_group", 0))
+		if stage_count == 0 or group != previous_group:
+			stage_count += 1
+			previous_group = group
+	return stage_count
+
+
+func _drain_hp_feedback() -> void:
+	if _hp_feedback_running:
+		return
+	_hp_feedback_running = true
+	while not _hp_feedback_batches.is_empty() and is_inside_tree():
+		var events: Array = _hp_feedback_batches.pop_front()
+		var previous_group := -1
+		var played_stage := false
+		for value in events:
+			var event: Dictionary = value
+			var group := int(event.get("feedback_group", 0))
+			if played_stage and group != previous_group and not GamePreferences.animation_acceleration_enabled():
+				await get_tree().create_timer(EFFECT_PRESENTATION_GAP).timeout
+			_play_presentation_event(event)
+			previous_group = group
+			played_stage = true
+	_hp_feedback_running = false
+	if not _resolution_running and _resolution_pending_steps <= 0 and _resolution_blocker != null and is_instance_valid(_resolution_blocker):
+		_resolution_blocker.visible = false
+
+
+func _play_presentation_event(event: Dictionary) -> void:
+	var kind := str(event.get("kind", "hp" if event.has("delta") else "stage"))
+	match kind:
+		"hp":
+			_show_floating_for(int(event.get("player", 0)), int(event.get("slot", -1)), int(event.get("delta", 0)))
+		"hand_entry":
+			_play_staged_hand_entry(event)
+		"effect":
+			for value in event.get("targets", []):
+				var loc: Dictionary = value
+				var slot_ui := _slot_ui_for_player(int(loc.get("player", 0)), int(loc.get("slot", -1)))
+				var target := _card_feedback_target(slot_ui)
+				if target != null and is_instance_valid(target):
+					BattleFx.skill_cast_pulse($CanvasLayer, target, slot_ui.global_position + slot_ui.size / 2, _ui_scale())
 
 
 func _hand_entry_key(card: CardData) -> String:

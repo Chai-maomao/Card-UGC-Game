@@ -32,7 +32,7 @@ signal skill_safety_limit_hit(source_name: String, reason: String)
 @warning_ignore("unused_signal")
 signal skill_effect_started(source: CardData, effect_id: String, chain_depth: int)
 @warning_ignore("unused_signal")
-signal skill_effect_resolved(source: CardData, effect_id: String, target: Variant, chain_depth: int)
+signal skill_effect_resolved(source: CardData, effect_id: String, targets: Variant, chain_depth: int)
 @warning_ignore("unused_signal")
 signal first_turn_effect_blocked(source: CardData, effect_id: String)
 
