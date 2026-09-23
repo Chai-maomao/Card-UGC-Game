@@ -97,6 +97,10 @@ var _screen_refresh_queued: bool = false
 var _resolution_pending_steps: int = 0
 var _resolution_running: bool = false
 var _resolution_blocker: Control
+var _action_feedback_group_stack: Array[int] = []
+var _action_feedback_next_group: int = 0
+var _hp_feedback_batches: Array = []
+var _hp_feedback_running: bool = false
 var _network_command_phase: String = ""
 var tutorial_controller: BattleTutorialController
 var _active_challenge_id: String = ""
@@ -110,6 +114,7 @@ const BASE_HELP_BUTTON_SIZE := Vector2(90, 38)
 const RESUME_SYNC_TIMEOUT := 15.0
 const RESUME_REQUEST_INTERVAL := 1.5
 const RESUME_MAX_REQUESTS := 8
+const EFFECT_PRESENTATION_GAP := 0.2
 
 
 func _ui_scale() -> float:
@@ -430,8 +435,7 @@ func _apply_authority_state(state: Dictionary, label: String = "authority") -> v
 		_replay_feedback_event(ev)
 	# Replay floating text for damage/heal that happened on the authority.
 	var hp_events: Array = state.get("_hp_events", [])
-	for ev in hp_events:
-		_show_floating_for(int(ev.get("player", 0)), int(ev.get("slot", -1)), int(ev.get("delta", 0)))
+	_queue_hp_feedback(hp_events)
 	_check_and_show_game_over()
 	# An authoritative summon may have left a choice-requiring battlecry
 	# pending for this client. Resume its target picker after the new card UI
@@ -537,6 +541,8 @@ func _ready():
 		EventBus.skill_roll_failed.connect(_on_skill_roll_failed)
 	if EventBus.has_signal("skill_safety_limit_hit"):
 		EventBus.skill_safety_limit_hit.connect(_on_skill_safety_limit_hit)
+	if EventBus.has_signal("skill_effect_started"):
+		EventBus.skill_effect_started.connect(_on_skill_effect_started)
 	if EventBus.has_signal("skill_effect_resolved"):
 		EventBus.skill_effect_resolved.connect(_on_skill_effect_resolved)
 	if EventBus.has_signal("first_turn_effect_blocked"):
@@ -576,10 +582,19 @@ func _ready():
 
 
 func is_resolution_locked() -> bool:
-	return _resolution_running or _resolution_pending_steps > 1
+	return _resolution_running or _resolution_pending_steps > 1 or _hp_feedback_running or not _hp_feedback_batches.is_empty()
+
+
+func _on_skill_effect_started(_source: CardData, _effect_id: String, _chain_depth: int) -> void:
+	if _action_broadcast.is_empty():
+		return
+	_action_feedback_next_group += 1
+	_action_feedback_group_stack.append(_action_feedback_next_group)
 
 
 func _on_skill_effect_resolved(_source: CardData, _effect_id: String, _target: Variant, _chain_depth: int) -> void:
+	if not _action_broadcast.is_empty() and _action_feedback_group_stack.size() > 1:
+		_action_feedback_group_stack.pop_back()
 	if GamePreferences.animation_acceleration_enabled() or battle_finished:
 		return
 	_resolution_pending_steps += 1
@@ -633,9 +648,9 @@ func _drain_resolution_steps() -> void:
 		_resolution_pending_steps -= 1
 	while _resolution_pending_steps > 0 and is_inside_tree():
 		_resolution_pending_steps -= 1
-		await get_tree().create_timer(0.28).timeout
+		await get_tree().create_timer(EFFECT_PRESENTATION_GAP).timeout
 	_resolution_running = false
-	if _resolution_blocker != null and is_instance_valid(_resolution_blocker):
+	if not _hp_feedback_running and _hp_feedback_batches.is_empty() and _resolution_blocker != null and is_instance_valid(_resolution_blocker):
 		_resolution_blocker.visible = false
 
 
@@ -921,14 +936,17 @@ func _on_hp_changed(target: CardData, delta: int, _new_hp: int):
 	# floating text on the non-authority client, which never runs combat logic
 	# and therefore never emits hp_changed itself.
 	var loc := _locate_card_player_slot(target)
+	var feedback_group: int = int(_action_feedback_group_stack.back()) if not _action_feedback_group_stack.is_empty() else 0
+	var feedback_event := {"player": loc.player, "slot": loc.slot, "delta": delta, "card": target.card_name, "feedback_group": feedback_group}
 	if loc.slot >= 0 and not _action_broadcast.is_empty():
-		_action_hp_events.append({"player": loc.player, "slot": loc.slot, "delta": delta, "card": target.card_name})
+		_action_hp_events.append(feedback_event)
 	if NetworkManager.is_online and NetworkManager.is_authority():
 		if loc.slot >= 0:
-			_pending_hp_events.append({"player": loc.player, "slot": loc.slot, "delta": delta})
+			_pending_hp_events.append(feedback_event.duplicate())
 	if loc.slot < 0:
 		return
-	_show_combat_feedback_for(loc.player, loc.slot, delta)
+	if _action_broadcast.is_empty():
+		_show_combat_feedback_for(loc.player, loc.slot, delta)
 
 
 func _on_damage_resolved(source: CardData, target: CardData, declared: int, actual: int, reduction_pct: int, temp_hp_before: int, reason: String) -> void:
@@ -1238,6 +1256,49 @@ func _show_floating_for(player: int, slot: int, delta: int) -> void:
 	_show_combat_feedback_for(player, slot, delta)
 
 
+func _queue_hp_feedback(events: Array) -> void:
+	if events.is_empty() or battle_finished:
+		return
+	var group_count := _feedback_group_count(events)
+	if GamePreferences.animation_acceleration_enabled() or group_count <= 1:
+		for value in events:
+			var event: Dictionary = value
+			_show_floating_for(int(event.get("player", 0)), int(event.get("slot", -1)), int(event.get("delta", 0)))
+		return
+	var batch := events.duplicate(true)
+	_hp_feedback_batches.append(batch)
+	_ensure_resolution_blocker()
+	if not _hp_feedback_running:
+		_drain_hp_feedback.call_deferred()
+
+
+func _feedback_group_count(events: Array) -> int:
+	var groups := {}
+	for value in events:
+		var event: Dictionary = value
+		groups[int(event.get("feedback_group", 0))] = true
+	return groups.size()
+
+
+func _drain_hp_feedback() -> void:
+	if _hp_feedback_running:
+		return
+	_hp_feedback_running = true
+	while not _hp_feedback_batches.is_empty() and is_inside_tree():
+		var events: Array = _hp_feedback_batches.pop_front()
+		var prior_group := -1
+		for value in events:
+			var event: Dictionary = value
+			var group := int(event.get("feedback_group", 0))
+			if prior_group >= 0 and group != prior_group:
+				await get_tree().create_timer(EFFECT_PRESENTATION_GAP).timeout
+			prior_group = group
+			_show_floating_for(int(event.get("player", 0)), int(event.get("slot", -1)), int(event.get("delta", 0)))
+	_hp_feedback_running = false
+	if not _resolution_running and _resolution_pending_steps <= 0 and _resolution_blocker != null and is_instance_valid(_resolution_blocker):
+		_resolution_blocker.visible = false
+
+
 func _find_card_slot_pos(card: CardData) -> Vector2:
 	var p_slots = player_side_ui.get_children()
 	var e_slots = enemy_side_ui.get_children()
@@ -1252,6 +1313,8 @@ func _find_card_slot_pos(card: CardData) -> Vector2:
 func _begin_action_broadcast(kind: String, player: int, source_name: String, target_name: String = "", extra: Dictionary = {}) -> void:
 	_action_broadcast = {"kind": kind, "player": player, "source": source_name, "target": target_name}
 	_action_broadcast["before_state"] = _battle_log_state()
+	_action_feedback_next_group = 0
+	_action_feedback_group_stack = [0]
 	for key in extra.keys():
 		_action_broadcast[key] = extra[key]
 	_action_hp_events.clear()
@@ -1273,6 +1336,7 @@ func _finish_action_broadcast() -> void:
 	event["parasite_events"] = _action_parasite_events.duplicate(true)
 	event["failed_events"] = _action_failed_events.duplicate(true)
 	event["after_state"] = _battle_log_state()
+	_queue_hp_feedback(event["hp_events"])
 	var text := _format_action_broadcast(event)
 	_show_combat_broadcast(text, str(event.get("kind", "system")))
 	if NetworkManager.is_online and NetworkManager.is_authority():
@@ -1282,6 +1346,7 @@ func _finish_action_broadcast() -> void:
 	_action_damage_events.clear()
 	_action_parasite_events.clear()
 	_action_failed_events.clear()
+	_action_feedback_group_stack.clear()
 
 
 func _format_action_broadcast(event: Dictionary) -> String:

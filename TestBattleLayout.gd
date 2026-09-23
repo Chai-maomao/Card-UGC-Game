@@ -54,6 +54,48 @@ func _ready() -> void:
 	for card in hand_container.get_children():
 		_assert(_inside((card as Control).get_global_rect(), hand_area.get_global_rect(), 2.0), "a legal hand card exceeds the hand dock")
 
+	var prior_acceleration := GamePreferences.animation_acceleration_enabled()
+	GamePreferences.set_animation_acceleration(false)
+	var attack_skill := {
+		"skill_name": "Chain Hit", "trigger": SkillEngine.TRIGGER_ON_ATTACK, "probability": 100,
+		"effects": [{"effect": SkillEngine.EFFECT_DAMAGE, "target": SkillEngine.TARGET_SIDES, "target_side": SkillEngine.TARGET_SIDE_ENEMY, "value": 1, "probability": 100}],
+	}
+	var sequence_attacker := CardData.new("Sequence Attacker", 1, 5, 2, [attack_skill])
+	game.player_field.slots[2] = sequence_attacker
+	for slot in [1, 2, 3]:
+		game.player2_field.slots[slot] = CardData.new("Sequence Target %d" % slot, 1, 5, 1)
+	game.current_player = 1
+	game.turn_number = 2
+	battle.call("_begin_action_broadcast", "attack", 1, sequence_attacker.card_name, game.player2_field.slots[2].card_name, {"target_player": 2, "target_slot": 2})
+	game.execute_attack(2, 2)
+	var staged_events: Array = battle.get("_action_hp_events").duplicate(true)
+	var staged_correctly := staged_events.size() == 4 and int(staged_events[0].get("delta", 0)) == -2 \
+		and int(staged_events[0].get("feedback_group", -1)) == 0
+	for index in range(1, staged_events.size()):
+		staged_correctly = staged_correctly and int(staged_events[index].get("delta", 0)) == -1 \
+			and int(staged_events[index].get("feedback_group", -1)) == 1
+	_assert(staged_correctly, "direct attack damage must precede simultaneous target-and-neighbor skill damage")
+	battle.set("_action_broadcast", {})
+	battle.set("_action_hp_events", [])
+	battle.set("_action_feedback_group_stack", [])
+	var layer := battle.get_node("CanvasLayer")
+	var initial_minus_two := _count_label_text(layer, "-2")
+	var initial_minus_one := _count_label_text(layer, "-1")
+	battle.call("_queue_hp_feedback", staged_events)
+	await get_tree().process_frame
+	_assert(_count_label_text(layer, "-2") > initial_minus_two, "the direct attack result must play immediately")
+	_assert(_count_label_text(layer, "-1") == initial_minus_one, "the triggered effect must not play in the attack frame")
+	await get_tree().create_timer(0.1).timeout
+	_assert(_count_label_text(layer, "-1") == initial_minus_one, "the triggered effect must wait for the 0.2-second presentation gap")
+	await get_tree().create_timer(0.14).timeout
+	_assert(_count_label_text(layer, "-1") > initial_minus_one, "the triggered effect must play after the presentation gap")
+	GamePreferences.set_animation_acceleration(true)
+	var accelerated_minus_one := _count_label_text(layer, "-1")
+	battle.call("_queue_hp_feedback", staged_events)
+	_assert(_count_label_text(layer, "-1") > accelerated_minus_one and (battle.get("_hp_feedback_batches") as Array).is_empty(),
+			"accelerated mode must play every feedback stage immediately")
+	GamePreferences.set_animation_acceleration(prior_acceleration)
+
 	print("TEST_BATTLE_LAYOUT_OK")
 	get_tree().quit(0)
 
@@ -65,6 +107,15 @@ func _overlap(first: Control, second: Control) -> bool:
 
 func _inside(inner: Rect2, outer: Rect2, tolerance: float) -> bool:
 	return outer.grow(tolerance).encloses(inner)
+
+
+func _count_label_text(root: Node, expected: String) -> int:
+	var count := 0
+	if root is Label and root.text == expected:
+		count += 1
+	for child in root.get_children():
+		count += _count_label_text(child, expected)
+	return count
 
 
 func _assert(condition: bool, message: String) -> void:

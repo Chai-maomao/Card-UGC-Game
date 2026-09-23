@@ -347,6 +347,7 @@ static func _execute_effects(effects: Array, source_card: CardData, context: Dic
 				return
 			_GameplayLog.write("[SkillEngine] %s: %s -> %s x%d (no battlefield target)" % [skill_name, effect_str, target_str, value])
 			_trace(context, source_card, "resolved", {"effect": effect_str, "target": source_card.card_name, "value": value})
+			EventBus.skill_effect_started.emit(source_card, effect_str, depth)
 			_EffectApplier.apply_effect(effect_str, source_card, value, eff_dict, effect_context)
 			EventBus.skill_effect_resolved.emit(source_card, effect_str, source_card, depth)
 			continue
@@ -356,6 +357,7 @@ static func _execute_effects(effects: Array, source_card: CardData, context: Dic
 		var value_uses_target := _effect_value_uses_target(eff_dict)
 		var shared_value := 0
 		var applied_any := false
+		var presentation_started := false
 		if not value_uses_target:
 			shared_value = _resolve_value(eff_dict, source_card, source_card, context)
 			if bool(_ensure_budget(context).get("aborted", false)):
@@ -385,6 +387,9 @@ static func _execute_effects(effects: Array, source_card: CardData, context: Dic
 			var target_name: String = target_card.owner_name if target_card is BattleField else target_card.card_name
 			_GameplayLog.write("[SkillEngine] %s: %s -> %s x%d on %s" % [skill_name, effect_str, target_str, value, target_name])
 			_trace(context, source_card, "resolved", {"effect": effect_str, "target": target_name, "value": value})
+			if not presentation_started:
+				EventBus.skill_effect_started.emit(source_card, effect_str, depth)
+				presentation_started = true
 			_EffectApplier.apply_effect(effect_str, target_card, value, eff_dict, effect_context)
 			applied_any = true
 		if applied_any:
