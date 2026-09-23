@@ -267,16 +267,14 @@ func _refresh_hand_ui():
 	# node whose card instance is identical.
 	var reuse: Array = []
 	var matched := {}
-	var search_from := 0
 	for i in range(hand.size()):
 		var node = null
-		for j in range(search_from, children.size()):
+		for j in range(children.size()):
 			if matched.has(j):
 				continue
 			if children[j].get("current_card_data") == hand[i]:
 				node = children[j]
 				matched[j] = true
-				search_from = j + 1
 				break
 		reuse.append(node)
 	# Drop unmatched nodes (played/left the hand).
@@ -299,7 +297,12 @@ func _refresh_hand_ui():
 			# Reused node: refresh texts only (cost/charm state may have
 			# changed in place); skip entry feedback to avoid flicker.
 			card_ui.set_card(card_data)
-		_apply_hand_castability(card_ui, card_data)
+			_apply_hand_castability(card_ui, card_data)
+		# Effects triggered by a discard can draw, copy, or otherwise rearrange
+		# the hand before this refresh. Reused controls keep their old sibling
+		# index unless moved explicitly, so make the authoritative hand array the
+		# sole ordering source after every mutation.
+		hand_container.move_child(card_ui, i)
 	_update_pile_labels()
 
 

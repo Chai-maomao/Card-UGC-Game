@@ -9,6 +9,7 @@ const SkillEngine = preload("res://SkillEngine.gd")
 #   4. Status badges are rebuilt only when their visible content changes.
 #   5. apply_ui_scale is a no-op for unchanged scale + card type.
 #   6. Hand skill activation resolves the live hand index of reused nodes.
+#   7. Discarding any hand position preserves the remaining authoritative order.
 
 
 func _ready() -> void:
@@ -26,6 +27,7 @@ func _ready() -> void:
 	failures += await _test_status_badge_cache(battle)
 	failures += await _test_apply_ui_scale_idempotent(battle)
 	failures += await _test_dynamic_hand_index(battle)
+	failures += _test_discard_keeps_hand_order(battle)
 	_bench_hand_refresh(battle)
 
 	if failures > 0:
@@ -262,6 +264,54 @@ func _test_dynamic_hand_index(battle: Node) -> int:
 	if not ok:
 		_assert(false, "spell activation via a reused node should use the live hand index")
 		return 1
+	return 0
+
+
+# --- 7. Removing a card must not reshuffle the surviving hand controls. -----
+func _test_discard_keeps_hand_order(battle: Node) -> int:
+	var game = battle.game
+	game.current_player = 1
+	game.is_player_turn = true
+	for discard_index in [0, 2, 3]:
+		var cards: Array[CardData] = []
+		for index in range(4):
+			cards.append(CardData.new("ORDER_%d_%d" % [discard_index, index], 1, 3, 1))
+		game.player_hand.clear()
+		game.player_hand.append_array(cards)
+		battle.reset_hand_ui_from_game_state()
+		var node_ids := {}
+		for child in battle.hand_container.get_children():
+			node_ids[child.get("current_card_data")] = child.get_instance_id()
+		var expected := cards.duplicate()
+		expected.remove_at(discard_index)
+		if not game.discard_card(cards[discard_index]):
+			_assert(false, "discard should remove the selected hand card")
+			return 1
+		battle._refresh_hand_ui()
+		var ui_cards: Array = []
+		for child in battle.hand_container.get_children():
+			ui_cards.append(child.get("current_card_data"))
+		if game.player_hand != expected or ui_cards != expected:
+			_assert(false, "discarding hand index %d must preserve the order of every surviving card" % discard_index)
+			return 1
+		for child in battle.hand_container.get_children():
+			var card: CardData = child.get("current_card_data")
+			if not node_ids.has(card) or int(node_ids[card]) != child.get_instance_id():
+				_assert(false, "discard order repair must reuse each surviving card control")
+				return 1
+		# A discard lifecycle or authority update may also deliver a new legal
+		# order. The UI must mirror it exactly without destroying reused nodes.
+		if expected.size() == 3:
+			var rearranged := [expected[1], expected[0], expected[2]]
+			game.player_hand.clear()
+			game.player_hand.append_array(rearranged)
+			battle._refresh_hand_ui()
+			ui_cards.clear()
+			for child in battle.hand_container.get_children():
+				ui_cards.append(child.get("current_card_data"))
+			if ui_cards != rearranged:
+				_assert(false, "hand UI must follow an authoritative post-discard order exactly")
+				return 1
 	return 0
 
 
