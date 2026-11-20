@@ -49,7 +49,7 @@
 
 新手教程使用真实创卡、技能编辑和战斗操作；战场篇按15步介绍生命/胜负、五格战场、共享牌堆、圣水与行动力、卡牌数值及结束结算，并高亮对应目标。教程范围与验证见 [TUTORIAL_BASICS.md](TUTORIAL_BASICS.md)。
 
-首次启动会从原有标题页自动进入四步引导，然后接入创卡与战场教程，每页均可跳过。完成或跳过后不再自动出现；已有牌库存档的老玩家兼容迁移，手动教学入口继续保留。进度使用 `user://tutorial_progress.cfg`，见 [FIRST_LAUNCH_TUTORIAL.md](FIRST_LAUNCH_TUTORIAL.md)。
+首次启动会从原有标题页自动进入引导，可预览并选择高对比或低对比界面，然后接入创卡与战场教程，每页均可跳过。完成或跳过后不再自动出现；已有牌库存档的老玩家兼容迁移，手动教学入口继续保留。进度使用 `user://tutorial_progress.cfg`，见 [FIRST_LAUNCH_TUTORIAL.md](FIRST_LAUNCH_TUTORIAL.md)。
 
 ## 技术栈
 
@@ -212,11 +212,11 @@ AI 对简单恢复技能按付款后实际到账圣水和缺血量估值，避�
 
 ## 发行候选与本地构建
 
-1.0.0-rc.13 源码与当前公网房间号服务器使用联机协议 18。先前构建的 1.0.0-rc.4 使用协议 9，官网的 1.0.0-rc.2 测试包使用协议 7。进入当前公网房间须使用协议 18 的客户端。默认构建 Windows x64 便携候选包。
+当前 Windows x64 便携测试版为 [1.0.2rc1](https://github.com/Chai-maomao/Card-UGC-Game/releases/tag/v1.0.2rc1)。房间号联机使用协议 18，联机玩家需使用协议相同的客户端。
 
 - 设置按画面、声音、游戏、操作分类。首次启动默认全屏，可选择全屏、窗口化、桌面无边框窗口化，选择会保存；保留分辨率、VSync、帧率、画质、音量、播放速度等选项。设置保存在原有 settings.cfg 中，保持卡库与战局存档格式。
 - Esc 优先关闭顶层弹层；本地对局可暂停，联机菜单持续收发网络，不冻结对手。设置 → 支持与说明提供许可、隐私、UGC、诊断与本地目录入口。诊断不会自动上传。
-- 构建使用 `python scripts/build_windows.py <Godot 4.6.3 可执行文件>`。产物在 `build/windows/1.0.0-rc.13/` 与同级 ZIP。便携包未签名，运行时需保持 Cardex.exe 和 Cardex.pck 同目录。
+- 构建使用 `python scripts/build_windows.py <Godot 4.6.3 可执行文件>`。产物在 `build/windows/1.0.2rc1/` 与同级 ZIP。便携包未签名，运行时需保持 Cardex.exe 和 Cardex.pck 同目录。
 - 图形默认 Vulkan，并允许引擎回退到 D3D12/OpenGL。图形启动失败时可用包内 Compatibility.cmd 强制 OpenGL 3；旧驱动、集显和移动设备仍需实机验证。
 - 发行检查：`python scripts/verify_release.py <Godot> --suite logic`；视觉用 `--suite visual`，必须打开生成截图复核。每个场景使用隔离资料目录；视觉检查需要 GPU 或 Xvfb/Mesa。长跑脚本 `scripts/run_presentation_soak.py` 按真实时钟运行，不加速。
 - 包冒烟：`Cardex.exe -- --release-smoke`，在隔离用户目录与空解压目录验证。其检查资源、中文字体、说明文件、默认菜单、写入与测试文件排除；不代替完整试玩。

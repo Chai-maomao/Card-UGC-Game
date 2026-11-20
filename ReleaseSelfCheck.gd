@@ -4,7 +4,7 @@ func _ready() -> void:
 	await get_tree().scene_changed
 	await get_tree().create_timer(1.5).timeout
 	var failures: Array[String] = []
-	for path in ["res://Main.tscn","res://MainMenu.tscn","res://CardEditor.tscn","res://SkillEditor.tscn","res://SettingsMenu.tscn","res://Workshop.tscn","res://res/audio/cardex-card_editor_1.mp3","res://res/audio/cardex-card_editor_2.mp3","res://res/fonts/NotoSansSC.ttf","res://res/audio/cardex-title.mp3","res://res/audio/cardex-battle.mp3","res://res/audio/cardex-ui_deny.mp3"]:
+	for path in ["res://Main.tscn","res://MainMenu.tscn","res://CardEditor.tscn","res://SkillEditor.tscn","res://SettingsMenu.tscn","res://Workshop.tscn","res://res/audio/cardex-card_editor_1.mp3","res://res/audio/cardex-card_editor_2.mp3","res://res/fonts/NotoSansSC.ttf","res://res/audio/cardex-title.mp3","res://res/audio/cardex-battle.mp3","res://res/audio/cardex-ui_deny.mp3","res://res/tabletop/title-dice.png","res://res/tabletop/title-wheel.png"]:
 		if ResourceLoader.load(path) == null: failures.append("missing resource: "+path)
 	for path in ["res://legal/PRIVACY.md","res://legal/TERMS.md","res://legal/UGC.md","res://legal/GODOT_LICENSE.txt","res://legal/GODOT_COPYRIGHT.txt","res://res/fonts/OFL.txt","res://LICENSE"]:
 		if FileAccess.get_file_as_string(path).is_empty(): failures.append("missing document: "+path)
