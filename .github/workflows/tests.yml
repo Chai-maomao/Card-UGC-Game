@@ -71,9 +71,9 @@ jobs:
       - name: Install verified engine and Windows templates
         run: python scripts/install_godot.py --windows-templates
       - name: Import
-        run: .godot/ci-engine/bin/Godot_v4.6.3-stable_win64.exe --headless --editor --import --path .
+        run: .godot/ci-engine/bin/Godot_v4.6.3-stable_win64_console.exe --headless --editor --import --path .
       - name: Export portable candidate
-        run: python scripts/build_windows.py .godot/ci-engine/bin/Godot_v4.6.3-stable_win64.exe
+        run: python scripts/build_windows.py .godot/ci-engine/bin/Godot_v4.6.3-stable_win64_console.exe
       - name: Verify extracted portable package
         run: python scripts/smoke_windows.py (Get-ChildItem build/windows/CARDEX-*-windows-x64.zip | Select-Object -ExpandProperty FullName) --headless
       - uses: actions/upload-artifact@v4
