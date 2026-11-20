@@ -1,83 +1,166 @@
 <!DOCTYPE html>
+
 <html lang="zh-CN">
+
 <head>
+
 <meta charset="UTF-8" />
+
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+
 <title>Cardex</title>
+
 <meta name="description" content="一款以游戏内引擎自定义卡牌为核心的卡牌对战游戏，支持热座、P2P 局域网与服务器联机三种模式。" />
+
 <link rel="preconnect" href="https://fonts.googleapis.com" />
+
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+
 <link href="https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&family=Inter:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;600;700;800;900&display=swap" rel="stylesheet" />
+
 <style>
+
   :root { --ink:#070908; --panel:#121714; --panel-2:#171d19; --line:rgba(219,255,225,.15); --muted:#9dac9f; --text:#f5fff6; --lime:#7cff60; --lime-2:#c9ffb2; --cyan:#38d9ff; --violet:#a78bfa; --maxw:1180px; }
+
   * { box-sizing:border-box; margin:0; padding:0; }
+
   html { scroll-behavior:smooth; }
+
   body { background:var(--ink); color:var(--text); font-family:"Inter","Noto Sans SC",sans-serif; line-height:1.55; overflow-x:hidden; -webkit-font-smoothing:antialiased; }
+
   a { color:inherit; text-decoration:none; }
+
   .wrap { max-width:var(--maxw); width:100%; margin:0 auto; padding:0 28px; }
+
   .announcement { min-height:30px; display:grid; place-items:center; background:var(--lime); color:#071107; font-size:12px; font-weight:700; letter-spacing:-.01em; }
+
   .announcement span { display:flex; align-items:center; gap:9px; }
+
   .announcement b { font-family:"DM Mono",monospace; font-size:10px; letter-spacing:.08em; }
+
   header { position:sticky; z-index:10; top:0; padding:12px 0; background:rgba(7,9,8,.72); backdrop-filter:blur(18px); }
+
   nav { height:52px; padding:0 8px 0 18px; display:flex; align-items:center; justify-content:space-between; border:1px solid var(--line); background:rgba(22,28,24,.92); border-radius:999px; box-shadow:0 12px 50px rgba(0,0,0,.3); }
+
   .brand { display:flex; gap:9px; align-items:center; font-size:16px; font-weight:700; letter-spacing:-.04em; }
+
   .logo { width:25px; height:25px; display:grid; place-items:center; color:#061006; background:var(--lime); border-radius:8px; font-size:14px; font-weight:900; transform:rotate(-8deg); box-shadow:0 0 18px rgba(124,255,96,.35); }
+
   .nav-links,.nav-actions { display:flex; align-items:center; gap:28px; }
+
   .nav-links { color:#c0cec2; font-size:12px; font-weight:500; }
+
   .nav-links a:hover { color:var(--lime); }
+
   .btn { min-height:36px; padding:0 16px; border:1px solid transparent; border-radius:999px; display:inline-flex; align-items:center; justify-content:center; gap:7px; font:600 12px/1 inherit; cursor:pointer; transition:transform .2s,background .2s,border .2s; }
+
   .btn:hover { transform:translateY(-2px); }
+
   .btn-primary { background:var(--lime); color:#071007; box-shadow:0 0 22px rgba(124,255,96,.18); }
+
   .btn-primary:hover { background:#a0ff8b; }
+
   .btn-ghost { color:#e8f5ea; border-color:var(--line); background:rgba(255,255,255,.025); }
+
   .btn-ghost:hover { border-color:rgba(124,255,96,.55); }
+
   .menu-toggle { display:none; color:var(--text); background:none; border:0; font-size:22px; cursor:pointer; }
+
   .hero { position:relative; min-height:700px; padding:76px 0 14px; isolation:isolate; }
+
   .hero::before { content:""; position:absolute; z-index:-2; top:190px; left:50%; width:920px; height:410px; transform:translateX(-50%); background:radial-gradient(ellipse at center,rgba(126,255,93,.25),rgba(44,212,255,.13) 32%,rgba(139,92,246,.1) 50%,transparent 71%); filter:blur(18px); }
+
   .hero::after { content:""; position:absolute; z-index:-1; inset:0; opacity:.32; background-image:linear-gradient(rgba(181,255,197,.08) 1px,transparent 1px),linear-gradient(90deg,rgba(181,255,197,.08) 1px,transparent 1px); background-size:72px 72px; mask-image:linear-gradient(to bottom,black,transparent 75%); }
+
   .hero-copy { max-width:800px; margin:0 auto; text-align:center; }
+
   .eyebrow { display:inline-flex; align-items:center; gap:8px; color:var(--lime-2); padding:5px 10px; border:1px solid rgba(124,255,96,.22); background:rgba(124,255,96,.07); border-radius:999px; font:500 10px "DM Mono",monospace; letter-spacing:.08em; }
+
   .eyebrow i { width:6px; height:6px; border-radius:50%; background:var(--lime); box-shadow:0 0 10px var(--lime); }
+
   h1 { margin:20px auto 19px; max-width:760px; font-size:clamp(46px,6.7vw,82px); line-height:.98; letter-spacing:-.072em; font-weight:800; }
+
   .lime-text { color:var(--lime); text-shadow:0 0 34px rgba(124,255,96,.22); }
+
   .lead { max-width:590px; margin:0 auto; color:#b4c4b6; font-size:16px; line-height:1.65; }
+
   .hero-actions { margin-top:27px; display:flex; gap:10px; justify-content:center; }
+
   .hero-actions .btn { min-height:42px; padding:0 20px; }
+
   .arena { position:relative; max-width:925px; height:335px; margin:45px auto 0; border:1px solid rgba(185,255,196,.24); border-radius:24px 24px 0 0; overflow:hidden; background:linear-gradient(135deg,rgba(28,43,31,.9),rgba(7,9,8,.92) 44%,rgba(7,22,25,.86)); box-shadow:inset 0 1px rgba(255,255,255,.06),0 -15px 80px rgba(49,255,101,.08); }
+
   .arena::before { content:""; position:absolute; width:640px; height:300px; left:50%; bottom:-190px; transform:translateX(-50%); border:1px solid rgba(124,255,96,.35); border-radius:50%; box-shadow:0 0 0 45px rgba(124,255,96,.025),0 0 0 90px rgba(124,255,96,.018),0 0 55px rgba(124,255,96,.22); }
+
   .arena-label { position:absolute; top:19px; left:22px; color:#bdcabc; font:500 10px "DM Mono",monospace; letter-spacing:.09em; }
+
   .arena-label b { color:var(--lime); }
+
   .cards { position:absolute; inset:45px 0 0; display:flex; justify-content:center; align-items:flex-end; gap:16px; }
+
   .game-card { width:154px; height:222px; position:relative; padding:12px; overflow:hidden; border:1px solid rgba(255,255,255,.25); border-radius:15px; box-shadow:0 24px 38px rgba(0,0,0,.48); background:#17291e; transform-origin:center bottom; }
+
   .game-card:nth-child(1) { transform:rotate(-10deg) translateY(27px); opacity:.82; } .game-card:nth-child(2) { transform:rotate(-3deg) translateY(4px); } .game-card:nth-child(3) { transform:rotate(5deg) translateY(18px); opacity:.9; }
+
   .game-card::before { content:""; position:absolute; inset:7px; border:1px solid rgba(255,255,255,.22); border-radius:10px; }
+
   .card-a { background:radial-gradient(circle at 50% 33%,#e9ff69 0 10%,#39d884 20%,#112c27 55%,#08120d); } .card-b { background:radial-gradient(circle at 45% 35%,#48dcff 0 7%,#3779e3 22%,#1b235e 50%,#0b0b20); } .card-c { background:radial-gradient(circle at 50% 32%,#de9eff 0 7%,#8b5cf6 24%,#321b5e 53%,#120b25); }
+
   .orb { position:absolute; left:50%; top:39%; width:58px; height:58px; transform:translate(-50%,-50%); border-radius:50%; background:rgba(255,255,255,.62); filter:blur(2px); box-shadow:0 0 25px 8px currentColor; color:#baff55; } .card-b .orb { color:#49d6ff; } .card-c .orb { color:#d69bff; }
+
   .card-cost { position:absolute; left:14px; top:14px; width:25px; height:25px; display:grid; place-items:center; border-radius:50%; background:#071007; border:1px solid rgba(255,255,255,.5); font:700 11px "DM Mono",monospace; }
+
   .card-name { position:absolute; bottom:23px; left:0; right:0; text-align:center; font-size:14px; font-weight:700; } .card-type { position:absolute; bottom:10px; left:0; right:0; text-align:center; color:rgba(255,255,255,.65); font:500 7px "DM Mono",monospace; letter-spacing:.18em; }
+
   section { padding:104px 0; position:relative; }
+
   .section-head { max-width:650px; margin:0 auto 48px; text-align:center; } .kicker { color:var(--lime); font:500 10px "DM Mono",monospace; letter-spacing:.12em; } h2 { margin-top:10px; font-size:clamp(30px,4vw,50px); line-height:1.08; letter-spacing:-.06em; font-weight:750; } .section-head p { margin-top:15px; color:var(--muted); font-size:15px; }
+
   .feature-grid { display:grid; grid-template-columns:repeat(3,1fr); border-top:1px solid var(--line); border-left:1px solid var(--line); border-radius:17px; overflow:hidden; }
+
   .card { min-height:224px; padding:29px; background:linear-gradient(145deg,rgba(32,43,35,.58),rgba(12,16,13,.85)); border-right:1px solid var(--line); border-bottom:1px solid var(--line); transition:background .25s,transform .25s; } .card:hover { background:rgba(41,64,42,.78); }
+
   .ic { width:38px; height:38px; display:grid; place-items:center; margin-bottom:39px; color:var(--lime); font-size:19px; background:rgba(124,255,96,.08); border:1px solid rgba(124,255,96,.17); border-radius:11px; } .card h3 { font-size:17px; letter-spacing:-.04em; } .card p { margin-top:8px; color:var(--muted); font-size:13px; line-height:1.65; }
+
   .modes { display:grid; grid-template-columns:repeat(3,1fr); gap:14px; }.mode { min-height:290px; padding:30px; border:1px solid var(--line); border-radius:17px; background:linear-gradient(145deg,rgba(28,37,31,.8),rgba(10,13,11,.9)); transition:transform .2s,border .2s; }.mode:hover { transform:translateY(-4px); border-color:rgba(124,255,96,.52); }.tag { color:var(--lime); font:500 10px "DM Mono",monospace; letter-spacing:.12em; }.mode h3 { margin:29px 0 15px; font-size:21px; letter-spacing:-.05em; }.mode ul { list-style:none; }.mode li { padding:7px 0 7px 16px; position:relative; color:var(--muted); font-size:13px; }.mode li::before { content:""; position:absolute; left:0; top:15px; width:5px; height:5px; border-radius:50%; background:var(--lime); }
+
   .download-wrap { padding:56px; position:relative; overflow:hidden; border:1px solid rgba(124,255,96,.28); border-radius:22px; background:radial-gradient(circle at 82% 10%,rgba(124,255,96,.19),transparent 25%),linear-gradient(130deg,#1d3522,#101b15 55%,#0c1110); }.download-wrap::after { content:""; position:absolute; inset:auto -80px -140px auto; width:390px; height:390px; border-radius:50%; border:1px solid rgba(124,255,96,.25); box-shadow:0 0 0 50px rgba(124,255,96,.04),0 0 0 100px rgba(124,255,96,.025); }.download-content { position:relative; z-index:1; max-width:590px; }.download-content h2 { margin:8px 0 12px; }.download-content p { color:#afc2b0; font-size:15px; }.download-grid { display:flex; gap:11px; flex-wrap:wrap; margin-top:28px; }.dl-card { flex:1; min-width:220px; display:flex; align-items:center; justify-content:space-between; gap:16px; padding:15px 17px; border:1px solid var(--line); border-radius:12px; background:rgba(7,11,8,.46); transition:border .2s,transform .2s; }.dl-card:hover { transform:translateY(-2px); border-color:var(--lime); }.plat { font-size:13px; font-weight:650; }.note,.dl-note { color:#91a394; font-size:11px; }.note { margin-top:3px; }.dl-note { margin-top:18px; line-height:1.65; }.warn { color:var(--lime-2); }
+
   footer { padding:38px 0 30px; border-top:1px solid var(--line); }.footer-grid { display:flex; justify-content:space-between; gap:30px; }.footer-grid p,.col a { color:var(--muted); font-size:12px; }.footer-grid p { max-width:260px; margin-top:12px; }.col h4 { margin-bottom:10px; font:500 10px "DM Mono",monospace; color:var(--lime); letter-spacing:.1em; }.col a { display:block; padding:3px 0; }.col a:hover { color:var(--lime); }.copyright { margin-top:34px; padding-top:16px; border-top:1px solid var(--line); color:#647267; font:400 10px "DM Mono",monospace; }
+
   @media (max-width:860px) { .nav-links { display:none; }.nav-links.open { position:absolute; top:63px; left:0; right:0; display:flex; flex-direction:column; align-items:stretch; gap:0; padding:12px 20px; border:1px solid var(--line); border-radius:20px; background:#151a17; }.nav-links.open a { padding:10px 0; }.menu-toggle { display:block; }.nav-actions .btn-ghost { display:none; }.feature-grid,.modes { grid-template-columns:1fr; }.arena { height:290px; }.game-card { width:130px; height:188px; }.cards { gap:1px; }.download-wrap { padding:36px 25px; } }
+
   @media (max-width:560px) { .wrap { padding:0 17px; }.announcement { font-size:10px; }.announcement b { display:none; } header { padding:9px 0; } nav { height:48px; padding-left:13px; }.nav-actions .btn-primary { display:none; }.hero { min-height:610px; padding-top:58px; } h1 { font-size:45px; }.lead { font-size:14px; }.arena { margin-top:34px; height:255px; border-radius:18px 18px 0 0; }.game-card { width:111px; height:162px; padding:8px; }.card-name { font-size:11px; }.section-head { margin-bottom:34px; } section { padding:72px 0; }.card { min-height:auto; padding:25px; }.ic { margin-bottom:24px; }.footer-grid { flex-wrap:wrap; }.footer-grid > :first-child { width:100%; }.hero-actions { flex-direction:column; align-items:center; }.hero-actions .btn { width:100%; max-width:270px; } }
+
 </style>
+
 </head>
+
 <body>
+
 <div class="announcement"><span><b>CARDEX 1.0.0-rc.2</b> 自定义你的第一张卡牌，立即加入对战 <strong>→</strong></span></div>
+
 <header><div class="wrap"><nav><a class="brand" href="#top"><span class="logo">C</span><span>Cardex</span></a><div class="nav-links" id="navLinks"><a href="#about">关于</a><a href="#features">特性</a><a href="#modes">游戏模式</a><a href="#download">下载</a></div><div class="nav-actions"><a class="btn btn-ghost" href="#download">获取游戏</a><a class="btn btn-primary" href="https://github.com/Chai-maomao/Card-UGC-Game">GitHub ↗</a><button class="menu-toggle" id="menuToggle" aria-label="菜单">☰</button></div></nav></div></header>
+
 <main>
+
 <section class="hero" id="top"><div class="wrap"><div class="hero-copy"><h1>让每一张卡牌<br>都成为你的<span class="lime-text">战术</span>。</h1><p class="lead">在游戏内设计卡牌与技能，构筑只属于你的策略。热座、局域网或服务器联机，随时与好友开战。</p><div class="hero-actions"><a class="btn btn-primary" href="#download">↓ 下载 Windows 版</a><a class="btn btn-ghost" href="#features">探索玩法</a></div></div><div class="arena" aria-label="Cardex 卡牌预览"><div class="cards"><div class="game-card card-a"><span class="card-cost">2</span><span class="orb"></span><span class="card-name">星辉治愈</span><span class="card-type">RESTORE</span></div><div class="game-card card-b"><span class="card-cost">4</span><span class="orb"></span><span class="card-name">潮汐法师</span><span class="card-type">ARCANE</span></div><div class="game-card card-c"><span class="card-cost">3</span><span class="orb"></span><span class="card-name">虚空穿梭</span><span class="card-type">DIMENSION</span></div></div></div></div></section>
+
 <section id="about"><div class="wrap section-head"><h2>创造规则，而不是遵循规则。</h2><p>Cardex 将完整的卡牌与技能编辑器放进游戏。你设计的每一张卡，都能立即进入牌组、加入对局，并在真实对战中验证它的可能性。</p></div></section>
+
 <section id="features"><div class="wrap"><div class="feature-grid"><div class="card"><div class="ic">✦</div><h3>游戏内卡牌引擎</h3><p>无需代码，直接编辑卡牌属性、外观与技能效果，所见即所得。</p></div><div class="card"><div class="ic">⌘</div><h3>可视化技能编辑</h3><p>组合触发条件与效果，设计独一无二的卡牌机制和连锁玩法。</p></div><div class="card"><div class="ic">▦</div><h3>专属卡组收藏</h3><p>管理你的创作库，构筑个性化卡组，随时调整并投入对战。</p></div><div class="card"><div class="ic">⚔</div><h3>策略对战</h3><p>回合制对局考验布局与时机，技能联动带来丰富的战术深度。</p></div><div class="card"><div class="ic">◌</div><h3>多种对战方式</h3><p>单人练习、同机热座，或通过局域网、服务器与好友对战。</p></div><div class="card"><div class="ic">文</div><h3>多语言界面</h3><p>内置本地化支持，界面与卡牌描述随语言切换，体验始终流畅。</p></div></div></div></section>
+
 <section id="modes"><div class="wrap"><div class="section-head"><h2>随时开局，以你喜欢的方式。</h2><p>无论身边有没有网络，总有一种方式适合你和你的对手。</p></div><div class="modes"><article class="mode"><h3>热座模式</h3><ul><li>两名玩家共用一台设备轮流操作</li><li>无需任何网络连接</li><li>面对面对战，适合朋友聚会</li></ul></article><article class="mode"><h3>P2P 局域网联机</h3><ul><li>同一局域网内直连对战</li><li>点对点连接，低延迟无需服务器</li><li>卡牌资源在玩家之间同步传输</li></ul></article><article class="mode"><h3>服务器联机</h3><ul><li>通过服务器与远程玩家对战</li><li>创建或加入房间，与远程好友对战</li><li>开战前双方确认规则与牌组</li></ul></article></div></div></section>
+
 <section id="download"><div class="wrap"><div class="download-wrap"><div class="download-content"><h2>你的卡组，正在等待第一场对战。</h2><p>当前提供 Windows 64 位测试版 1.0.0-rc.2，2026 年 11 月 16 日更新。</p><p>本次优化随机判定轮盘、手牌动画和新手教程，修复暂停、返回与存档相关问题。</p><div class="download-grid"><a class="dl-card" href="https://github.com/Chai-maomao/Card-UGC-Game/releases/download/v1.0.0-rc.2/CARDEX-1.0.0-rc.2-windows-x64.zip"><div><div class="plat">Windows 10 / 11</div><div class="note">1.0.0-rc.2 测试版，76.0 MB</div></div><span class="btn btn-primary">下载 ↓</span></a><a class="dl-card" href="https://github.com/Chai-maomao/Card-UGC-Game/releases/tag/v1.0.0-rc.2"><div><div class="plat">查看发行版</div><div class="note">版本说明与下载</div></div><span class="btn btn-ghost">前往 ↗</span></a></div><p class="dl-note"><span class="warn">提示：</span>完整解压后运行 Cardex.exe。画面异常时可运行 Compatibility.cmd。</p></div></div></div></section>
+
 </main>
+
 <footer><div class="wrap"><div class="footer-grid"><div><a class="brand" href="#top"><span class="logo">C</span><span>Cardex</span></a><p>自由创造卡牌，自由对战。一款由创作者驱动的卡牌对战游戏。</p></div><div class="col"><h4>导航</h4><a href="#about">关于游戏</a><a href="#features">核心特性</a><a href="#modes">游戏模式</a><a href="#download">下载</a></div><div class="col"><h4>联系 & 反馈</h4><a href="https://github.com/Chai-maomao/Card-UGC-Game/issues">问题反馈</a><a href="https://github.com/Chai-maomao/Card-UGC-Game/releases">更新日志</a><a href="https://github.com/Chai-maomao/Card-UGC-Game">官方仓库</a></div></div><div class="copyright">© 2026 CARDEX</div></div></footer>
+
 <script>const toggle=document.getElementById('menuToggle');const links=document.getElementById('navLinks');toggle.addEventListener('click',()=>links.classList.toggle('open'));links.querySelectorAll('a').forEach(a=>a.addEventListener('click',()=>links.classList.remove('open')));</script>
+
 </body>
+
 </html>
+
