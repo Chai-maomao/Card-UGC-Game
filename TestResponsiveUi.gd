@@ -8,6 +8,7 @@ const REQUIRED_SIZES: Array[Vector2i] = [
 	Vector2i(2560, 1440),
 ]
 const LANGUAGES := ["zh", "en"]
+const OpponentHand := preload("res://presentation/OpponentHandPresentation.gd")
 const SCENES := [
 	["main_menu", "res://MainMenu.tscn", "CenterContainer"],
 	["settings", "res://SettingsMenu.tscn", "CenterContainer"],
@@ -21,6 +22,10 @@ var _failures := 0
 
 
 func _ready() -> void:
+	if DisplayServer.get_name() == "headless":
+		push_error("Responsive layout verification requires the production renderer")
+		get_tree().quit(1)
+		return
 	_assert(bool(ProjectSettings.get_setting("display/window/size/resizable", false)),
 		"the project window must be user-resizable")
 	for required_size in REQUIRED_SIZES:
@@ -76,7 +81,7 @@ func _exercise_scene(tag: String, path: String, key_path: String, viewport_size:
 			"%s %s %s key panel is outside viewport: %s" % [tag, language, viewport_size, key_control.get_global_rect()])
 	_check_interactive_controls(scene, bounds, "%s %s %s" % [tag, language, viewport_size])
 	if tag == "battle":
-		await _check_battle_2d_layout(scene, bounds, "%s %s" % [language, viewport_size])
+		_check_battle_layout(scene, bounds, "%s %s" % [language, viewport_size])
 
 	# Exercise three representative modal layouts under the same matrix: menu
 	# choice, battlefield rules, and the data-dense history detail view.
@@ -97,10 +102,10 @@ func _exercise_scene(tag: String, path: String, key_path: String, viewport_size:
 	await get_tree().process_frame
 
 
-func _check_battle_2d_layout(scene: Node, bounds: Rect2, tag: String) -> void:
+func _check_battle_layout(scene: Node, bounds: Rect2, tag: String) -> void:
 	var layout := scene.get_node_or_null("CanvasLayer/MainBackground/MainLayout") as Control
-	_assert(layout != null and layout.visible, "%s has no active 2D battlefield" % tag)
-	_assert(scene.get_node_or_null("BattleStage3D") == null, "%s still contains the retired 3D stage" % tag)
+	_assert(layout != null and layout.visible, "%s has no visible battle controls" % tag)
+	_assert(scene.get_node_or_null("BattleTable3D") != null, "%s did not initialize the production tabletop" % tag)
 	var enemy_hud := scene.get("enemy_status_hud") as Control
 	var player_hud := scene.get("player_status_hud") as Control
 	var enemy_row := scene.get("enemy_side_ui") as Control
@@ -165,6 +170,12 @@ func _check_interactive_controls(root: Node, bounds: Rect2, tag: String) -> void
 		var rect := control.get_global_rect()
 		_assert(rect.size.x >= 8.0 and rect.size.y >= 8.0,
 			"%s has zero-sized interactive control %s: %s" % [tag, control.name, rect])
+		if control.get_parent() is OpponentHand and not control.get_parent().accepting:
+			# The back fan deliberately peeks into the viewport from above.
+			_assert(rect.intersects(bounds) and control.mouse_filter == Control.MOUSE_FILTER_IGNORE
+					and control.focus_mode == Control.FOCUS_NONE,
+					"%s idle opponent cards must remain visible at the edge without capturing input" % tag)
+			continue
 		if _has_scroll_ancestor(control, root):
 			continue
 		_assert(_rect_inside(rect, bounds, 2.0),

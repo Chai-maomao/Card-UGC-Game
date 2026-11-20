@@ -31,6 +31,7 @@ func _ready() -> void:
 	_test_b2_damaged_skill_cannot_target_dead_card()
 	_test_b3_hand_effect_honors_condition()
 	_test_poison_buff_damages_on_tick()
+	_test_poison_at_controller_turn_end()
 	_test_stun_blocks_next_turn()
 	_test_mana_drain_effect()
 	_test_swap_attack_effect()
@@ -930,9 +931,9 @@ func _test_stop_block_halts_branch() -> void:
 func _test_poison_buff_damages_on_tick() -> void:
 	var card := _card("Poisoned", 10)
 	card.apply_buff(SkillEngine.BUFF_POISON, 2, 2, 1)
-	card.tick_buffs(1)
+	card.tick_poison()
 	_assert(card.hp == 8, "poison did not tick (hp=%d)" % card.hp)
-	card.tick_buffs(1)
+	card.tick_poison()
 	_assert(card.hp == 6, "poison did not tick twice (hp=%d)" % card.hp)
 
 
@@ -946,7 +947,9 @@ func _test_stun_blocks_next_turn() -> void:
 	game.current_player = 2  # so start_new_turn switches back to P1 and stuns P1's board
 	game.start_new_turn()
 	_assert(card.has_acted, "stunned card was not blocked from acting")
-	_assert(not card.has_stun(), "stun buff was not consumed")
+	_assert(card.has_stun(), "stun must suppress passives throughout the skipped turn")
+	game.end_player_turn()
+	_assert(not card.has_stun(), "active stun must expire after turn-end resolution")
 
 
 func _test_mana_drain_effect() -> void:
@@ -1111,3 +1114,39 @@ func _test_sentence_tokens() -> void:
 	_assert(buff_types.contains("duration,"), "add_buff missing duration control (%s)" % buff_types)
 	_assert(buff_types.contains("value,"), "add_buff missing value control (%s)" % buff_types)
 	Locale.language = old_lang
+
+func _test_poison_at_controller_turn_end() -> void:
+	for caster in [1,2]:
+		var game := HeadlessBattleSimulator._create_game([],[],121,PlayerData.DEFAULT_BATTLE_CONFIG)
+		game.turn_number = 2
+		for i in range(8): game.shared_deck.append(CardData.new("Filler",0,1,0))
+		game.current_player = caster
+		var caster_field: BattleField = game.player_field if caster==1 else game.player2_field
+		var target_field: BattleField = game.player2_field if caster==1 else game.player_field
+		var source := CardData.new("Poisoner",0,10,0,[{"trigger":"on_activate","effects":[{"effect":"add_buff","buff_id":"poison","value":2,"duration":2,"target":"target_single","target_side":"enemy"}]}])
+		var target := CardData.new("Poison target",0,10,0)
+		caster_field.slots[0] = source
+		target_field.slots[0] = target
+		_assert(game.trigger_activate_skills(0,0,0,3-caster),"poison must be applied through real skill execution")
+		game.end_player_turn(false)
+		_assert(target.hp==10 and target.status_effects[0].duration==2,"caster ending turn must not tick poison on opponent")
+		game.current_player = 3-caster
+		game.end_player_turn(false)
+		_assert(target.hp==8 and target.status_effects[0].duration==1,"afflicted controller ending turn must damage then reduce duration")
+		# Moving the same unit to the other side models a control change.
+		target_field.slots[0] = null
+		caster_field.slots[1] = target
+		game.end_player_turn(false)
+		_assert(target.hp==8 and target.status_effects[0].duration==1,"poison must stop following the previous controller")
+		game.current_player = caster
+		target.temp_hp = 3
+		target.apply_buff("damage_reduction",100,2,caster)
+		game.end_player_turn(false)
+		_assert(target.hp==6 and target.temp_hp==3,"poison must directly remove HP at the new controller turn end")
+		for effect in target.status_effects: _assert(effect.buff_id!="poison","final poison tick must remove expired status")
+		target.hp = 1
+		target.apply_buff("poison",2,1,caster)
+		game.end_player_turn(false)
+		_assert(target.hp==0,"poison must be lethal")
+		game.cleanup_deaths()
+		_assert(caster_field.slots[1]==null and game.shared_discard.has(target),"lethal poison must use the regular death cleanup")

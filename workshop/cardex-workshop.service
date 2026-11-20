@@ -1,0 +1,22 @@
+[Unit]
+Description=CARDEX Workshop
+After=network.target
+
+[Service]
+User=cardex-workshop
+Group=cardex-workshop
+WorkingDirectory=/opt/cardex-workshop
+EnvironmentFile=/etc/cardex-workshop.env
+ExecStart=/usr/bin/python3 /opt/cardex-workshop/server.py --db /var/lib/cardex-workshop/workshop.sqlite3
+Restart=on-failure
+StateDirectory=cardex-workshop
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+UMask=0077
+MemoryMax=512M
+TasksMax=64
+
+[Install]
+WantedBy=multi-user.target

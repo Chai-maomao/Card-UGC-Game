@@ -1,0 +1,9 @@
+{
+  "source": "https://curl.se/ca/cacert.pem",
+  "generator": "Mozilla trust store conversion by curl.se",
+  "sha256": "427c064216761a1e72a8b30f0d954d08cb6e4435a82091fb865afd20c8497285",
+  "download_date": "2026-11-13",
+  "license": "MPL-2.0",
+  "verification": "curl.se published SHA256; HTTPS validation retained",
+  "purpose": "portable public HTTPS trust store, independent of Windows ROOT store access"
+}

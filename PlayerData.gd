@@ -44,6 +44,8 @@ var return_to_waiting_room: bool = false
 var continue_editing_flag: bool = false  # "继续编辑"跳转标记
 var return_to_deck_id: String = ""
 var battle_deck: Array = []
+var online_room_deck_id := ""
+var hotseat_opening_player := 0
 var opponent_battle_deck: Array = []
 var battle_mode: String = "hotseat"
 var practice_ai_difficulty: String = "normal"
@@ -60,6 +62,9 @@ var card_playtest_context: Dictionary = {}
 var skill_tutorial_active: bool = false
 var tutorial_editor_stage: String = ""
 var tutorial_created_card: CardData = null
+var tutorial_progress_path: String = "user://tutorial_progress.cfg"
+var startup_tutorial_pending := false
+var had_saved_library_on_startup := false
 var _skill_tutorial_editor_backup: Dictionary = {}
 var _draft_save_pending: bool = false
 var _draft_save_at: float = 0.0
@@ -68,6 +73,8 @@ var _draft_save_at: float = 0.0
 # Battle configuration (战斗前自定义参数)
 # ============================================
 const DEFAULT_BATTLE_CONFIG := {
+	"draw_pile_visible": false,
+	"draw_pile_ordered": false,
 	"mana_per_turn": 2,       # 每回合回费数量
 	"draw_per_turn": 2,        # 每回合抽牌数量
 	"starting_hp": 30,         # 玩家初始血量
@@ -75,12 +82,17 @@ const DEFAULT_BATTLE_CONFIG := {
 	"second_extra_mana": 2,    # 后手第一回合补偿圣水（2000局校准：先手胜率49.95%）
 	"death_compensation": true,        # 战败补偿：卡牌被击杀时抽1张牌
 	"face_damage_compensation": false,  # 本体伤害补偿：每张攻击牌给1点临时圣水
+	"action_base": 3,
+	"action_empty_slot_factor": 1.0,
+	"action_empty_hand_factor": 0.5,
+	"action_mana_factor": 1.0,
 }
 var battle_config: Dictionary = DEFAULT_BATTLE_CONFIG.duplicate(true)
 
 
 func _apply_battle_preparation(state: Dictionary) -> void:
 	battle_mode = str(state.get("mode", "hotseat"))
+	hotseat_opening_player = int(state.get("hotseat_opening_player", 0))
 	practice_ai_difficulty = str(state.get("difficulty", "normal"))
 	battle_deck = (state.get("player_deck", []) as Array).duplicate()
 	opponent_battle_deck = (state.get("opponent_deck", []) as Array).duplicate()
@@ -120,13 +132,14 @@ func configure_card_playtest(saved_card: CardData) -> void:
 
 
 func card_playtest_opening_card() -> CardData:
-	if battle_mode != "hotseat" or NetworkManager.is_online:
+	if battle_mode != "hotseat" or is_online_battle():
 		return null
 	var saved: Dictionary = card_playtest_context.get("test_card", {})
 	return deserialize_card(saved) if not saved.is_empty() else null
 
 
-func configure_online_battle(player_cards: Array, next_scene: String = "res://Lobby.tscn") -> void:
+func configure_online_battle(player_cards: Array, next_scene: String = "res://Lobby.tscn", source_deck_id: String = "") -> void:
+	online_room_deck_id = source_deck_id
 	_apply_battle_preparation(BattlePrep.online(player_cards, next_scene))
 	card_playtest_context = {}
 
@@ -175,6 +188,7 @@ func begin_card_tutorial() -> void:
 		"atk": 2,
 		"gender": "nonhuman",
 		"art_path": "",
+		"damaged_art_path": "",
 		"skill1": {},
 		"skill2": {},
 		"skill3": {},
@@ -232,6 +246,7 @@ func _restore_skill_tutorial_editor_state() -> void:
 
 
 func prepare_online_selection(next_scene: String) -> void:
+	online_room_deck_id = ""
 	_apply_battle_preparation(BattlePrep.online([], next_scene))
 
 
@@ -240,6 +255,7 @@ func set_online_opponent_deck(cards: Array) -> void:
 
 
 func clear_battle_preparation() -> void:
+	online_room_deck_id = ""
 	_apply_battle_preparation(BattlePrep.empty())
 	card_playtest_context = {}
 	tutorial_created_card = null
@@ -252,11 +268,14 @@ func battle_preparation_snapshot() -> Dictionary:
 		"pending_p1": pending_hotseat_p1_deck.duplicate(), "select_mode": battle_select_mode,
 		"next_scene": battle_select_next_scene, "select_step": battle_select_step,
 		"return_to_waiting_room": return_to_waiting_room,
+		"hotseat_opening_player": hotseat_opening_player,
 	}
 
 
 func _ready():
 	save_path = "user://" + SAVE_FILE_NAME
+	# Capture this before load_library creates the default beginner collection.
+	had_saved_library_on_startup = FileAccess.file_exists(save_path) or FileAccess.file_exists(_save_backup_path())
 	print("Save path: %s" % ProjectSettings.globalize_path(save_path))
 	load_library()
 	_load_card_draft_recovery()
@@ -270,6 +289,17 @@ func _process(_delta: float) -> void:
 	if _draft_save_pending and Time.get_ticks_msec() / 1000.0 >= _draft_save_at:
 		_draft_save_pending = false
 		save_card_draft_recovery()
+
+func _notification(what: int) -> void:
+	if what != NOTIFICATION_APPLICATION_PAUSED or not OS.has_feature("android") or card_draft.is_empty() or skill_tutorial_active:
+		return
+	var scene := get_tree().current_scene
+	var workspace: Dictionary = {}
+	var editing_skill := scene != null and scene.has_method("interrupted_skill_workspace")
+	if editing_skill:
+		workspace = scene.interrupted_skill_workspace()
+	if _draft_save_pending or not workspace.is_empty() or (editing_skill and recovered_card_draft.has("interrupted_skill")):
+		_draft_save_pending = not save_card_draft_recovery(workspace)
 
 
 # ============================================
@@ -294,6 +324,9 @@ static func ensure_instance_id(card: CardData) -> void:
 
 static func prepare_deck_card(card: CardData, keep_instance: bool = false) -> CardData:
 	var copy := card.duplicate_card()
+	# Collection metadata also works on CardData instances created before a script reload.
+	if card.has_meta(&"modified_at"):
+		copy.set_meta(&"modified_at", card.get_meta(&"modified_at"))
 	ensure_card_id(copy)
 	if not keep_instance:
 		copy.instance_id = ""
@@ -325,6 +358,7 @@ static func serialize_card(card: CardData) -> Dictionary:
 		"base_atk": card.base_atk,
 		"gender": card.gender,
 		"art_path": card.art_path,
+		"damaged_art_path": "" if card.is_spell() else card.damaged_art_path,
 		"card_type": card.card_type,
 		"parasite_damage_mode": card.parasite_damage_mode,
 		"skills": skills_data,
@@ -363,6 +397,7 @@ static func deserialize_card(data: Dictionary) -> CardData:
 	card.base_atk = int(data.get("base_atk", atk))
 	card.hp = int(data.get("hp", max_hp))
 	card.art_path = data.get("art_path", "")
+	card.damaged_art_path = "" if data.get("card_type", "minion") == "spell" else data.get("damaged_art_path", "")
 	card.gender = data.get("gender", "female")
 	card.card_type = data.get("card_type", "minion")
 	card.parasite_damage_mode = CardData.normalize_parasite_damage_mode(str(data.get("parasite_damage_mode", CardData.PARASITE_DAMAGE_ABSORB)))
@@ -370,7 +405,17 @@ static func deserialize_card(data: Dictionary) -> CardData:
 	card.has_attacked = bool(data.get("has_attacked", false))
 	card.summoned_this_turn = bool(data.get("summoned_this_turn", false))
 	card.skills_used = data.get("skills_used", []).duplicate()
-	card.skills_used_count = data.get("skills_used_count", {})
+	# JSON object keys are strings, while SkillEngine indexes skills by int.
+	# Normalize once on restore so limited-use skills cannot reset after saving.
+	card.skills_used_count.clear()
+	var use_counts: Variant = data.get("skills_used_count", {})
+	if use_counts is Dictionary:
+		for key in use_counts:
+			if not str(key).is_valid_int(): continue
+			var skill_index := int(str(key))
+			var count: Variant = use_counts[key]
+			if skill_index < 0 or skill_index >= skills.size() or not (count is int or count is float): continue
+			card.skills_used_count[skill_index] = maxi(int(card.skills_used_count.get(skill_index, 0)), maxi(0, int(count)))
 	card.charmed_slot = int(data.get("charmed_slot", -1))
 	card.original_cost = int(data.get("original_cost", -1))
 	card.permanent_cost_reduction = maxi(0, int(data.get("permanent_cost_reduction", 0)))
@@ -402,10 +447,7 @@ static func deserialize_card(data: Dictionary) -> CardData:
 
 
 static func deserialize_battle_deck_payload(value: Variant) -> Dictionary:
-	if not (value is Array):
-		return {"ok": false, "cards": [], "errors": [{"code": "deck_type", "path": [], "details": {}}]}
-	var deck_payload := {"id": "network", "name": "Network", "cards": value}
-	var errors := Schema.validate(Schema.KIND_DECK, deck_payload)
+	var errors := battle_deck_payload_errors(value)
 	if not errors.is_empty():
 		return {"ok": false, "cards": [], "errors": errors}
 	var cards: Array = []
@@ -414,11 +456,20 @@ static func deserialize_battle_deck_payload(value: Variant) -> Dictionary:
 	return {"ok": true, "cards": cards, "errors": []}
 
 
-static func serialize_deck(deck: Dictionary) -> Dictionary:
+static func battle_deck_payload_errors(value: Variant) -> Array:
+	if not (value is Array):
+		return [{"code": "deck_type", "path": [], "details": {}}]
+	return Schema.validate(Schema.KIND_DECK, {"id": "network", "name": "Network", "cards": value})
+
+
+static func serialize_deck(deck: Dictionary, include_modified_at: bool = false) -> Dictionary:
 	var cards_data: Array = []
 	for card in deck.get("cards", []):
 		if card is CardData:
-			cards_data.append(serialize_card(card))
+			var data := serialize_card(card)
+			if include_modified_at and card.has_meta(&"modified_at"):
+				data["modified_at"] = card.get_meta(&"modified_at")
+			cards_data.append(data)
 		elif typeof(card) == TYPE_DICTIONARY:
 			cards_data.append(card.duplicate(true))
 	return {
@@ -433,7 +484,7 @@ func serialize_library() -> String:
 	_normalize_library()
 	var decks_array: Array = []
 	for deck in deck_library:
-		decks_array.append(serialize_deck(deck))
+		decks_array.append(serialize_deck(deck, true))
 	var root := {"decks": decks_array, "version": 3}
 	return JSON.stringify(root, "\t")
 
@@ -453,7 +504,7 @@ func deserialize_library(json_string: String) -> Array:
 		return []
 	var old_cards_by_id := {}
 	for card_data in root.get("cards", []):
-		var old_card := deserialize_card(card_data)
+		var old_card := _deserialize_library_card(card_data)
 		old_cards_by_id[old_card.card_id] = old_card
 	deck_library = []
 	var decks_array: Array = root.get("decks", [])
@@ -461,7 +512,7 @@ func deserialize_library(json_string: String) -> Array:
 		var deck_cards: Array = []
 		if deck_data.has("cards"):
 			for card_data in deck_data.get("cards", []):
-				deck_cards.append(prepare_deck_card(deserialize_card(card_data), true))
+				deck_cards.append(prepare_deck_card(_deserialize_library_card(card_data), true))
 		else:
 			for card_id in deck_data.get("card_ids", []):
 				if old_cards_by_id.has(card_id):
@@ -481,6 +532,14 @@ func deserialize_library(json_string: String) -> Array:
 	return card_library
 
 
+static func _deserialize_library_card(data: Dictionary) -> CardData:
+	var card := deserialize_card(data)
+	var timestamp: Variant = data.get("modified_at", 0)
+	if (timestamp is int or timestamp is float) and timestamp > 0:
+		card.set_meta(&"modified_at", int(timestamp))
+	return card
+
+
 func _normalize_library() -> void:
 	var original_cards: Array = card_library.duplicate()
 	var normalized_decks: Array = []
@@ -489,7 +548,7 @@ func _normalize_library() -> void:
 		var cards: Array = []
 		if deck.has("cards"):
 			for card_entry in deck.get("cards", []):
-				var card: CardData = card_entry if card_entry is CardData else deserialize_card(card_entry)
+				var card: CardData = card_entry if card_entry is CardData else _deserialize_library_card(card_entry)
 				cards.append(prepare_deck_card(card, true))
 		elif deck.has("card_ids"):
 			for card_id in deck.get("card_ids", []):
@@ -500,6 +559,7 @@ func _normalize_library() -> void:
 			"id": deck.get("id", make_id("deck")),
 			"name": deck.get("name", Locale.t("deck.default_name") if Engine.has_singleton("Locale") else "默认卡组"),
 			"cards": cards,
+			"provenance": SharePackage.metadata(deck.get("provenance", {})),
 		})
 		for card in cards:
 			card_library.append(card)
@@ -523,6 +583,7 @@ func card_content_fingerprint(card: CardData) -> String:
 	data.erase("card_id")
 	data.erase("instance_id")
 	data.erase("art_path")
+	data.erase("damaged_art_path")
 	data.erase("has_acted")
 	data.erase("has_attacked")
 	data.erase("summoned_this_turn")
@@ -559,6 +620,14 @@ func find_card_index_by_id(card_id: String) -> int:
 
 func get_deck(deck_id: String) -> Dictionary:
 	return LibraryRepo.find_deck(deck_library, deck_id)
+
+
+func deck_display_name(deck: Dictionary) -> String:
+	var stored := str(deck.get("name", ""))
+	match stored:
+		"", "默认卡组", "Default Deck": return Locale.t("deck.default_name")
+		BEGINNER_DEFAULT_DECK_NAME, "Starter Deck": return Locale.t("deck.starter_name")
+	return stored
 
 
 func get_current_deck() -> Dictionary:
@@ -643,6 +712,15 @@ func find_deck_conflict(deck_id: String, card: CardData, ignore_instance_id: Str
 	return {"kind": "none"}
 
 
+static func available_card_copy_name(base_name: String, is_taken: Callable) -> String:
+	var suffix := 2
+	var candidate := "%s %d" % [base_name, suffix]
+	while is_taken.call(candidate):
+		suffix += 1
+		candidate = "%s %d" % [base_name, suffix]
+	return candidate
+
+
 func add_card_copy_to_deck(deck_id: String, card: CardData, check_duplicate: bool = true) -> Dictionary:
 	var conflict := find_deck_conflict(deck_id, card) if check_duplicate else {"kind": "none"}
 	if conflict.get("kind", "") != "none":
@@ -667,10 +745,38 @@ func update_deck_card(deck_id: String, instance_id: String, card: CardData) -> b
 	if card.card_id == "":
 		card.card_id = old_card.card_id
 	card.instance_id = old_card.instance_id
+	card.set_meta(&"modified_at", int(Time.get_unix_time_from_system()))
 	cards[index] = prepare_deck_card(card, true)
 	rebuild_card_library_cache()
 	save_library()
 	return true
+
+
+func save_deck_card_lists(card_lists: Dictionary) -> bool:
+	if card_lists.is_empty():
+		return true
+	var next_decks: Array = []
+	var changed := 0
+	for deck: Dictionary in deck_library:
+		if card_lists.has(deck["id"]):
+			var next_deck := deck.duplicate()
+			next_deck["cards"] = card_lists[deck["id"]]
+			next_decks.append(next_deck)
+			changed += 1
+		else:
+			next_decks.append(deck)
+	if changed != card_lists.size():
+		return false
+	var previous_decks := deck_library
+	var previous_deck_id := current_deck_id
+	deck_library = next_decks
+	rebuild_card_library_cache()
+	if save_library():
+		return true
+	deck_library = previous_decks
+	current_deck_id = previous_deck_id
+	rebuild_card_library_cache()
+	return false
 
 
 func remove_deck_card(deck_id: String, instance_id: String) -> bool:
@@ -682,6 +788,21 @@ func remove_deck_card(deck_id: String, instance_id: String) -> bool:
 	rebuild_card_library_cache()
 	save_library()
 	return true
+
+
+func remove_deck_cards(deck_id: String, instance_ids: Array) -> int:
+	var cards := get_cards_for_deck(deck_id)
+	var before := cards.duplicate()
+	for index in range(cards.size()-1,-1,-1):
+		if instance_ids.has(cards[index].instance_id): cards.remove_at(index)
+	var removed := before.size()-cards.size()
+	if removed == 0: return 0
+	rebuild_card_library_cache()
+	if not save_library():
+		cards.assign(before)
+		rebuild_card_library_cache()
+		return 0
+	return removed
 
 
 func copy_cards_between_decks(source_deck_id: String, instance_ids: Array, target_deck_ids: Array) -> Dictionary:
@@ -730,12 +851,16 @@ func serialize_deck_for_share(deck: Dictionary) -> String:
 func _serialize_card_for_share(card: CardData) -> Dictionary:
 	var data := serialize_card(card)
 	data["share_id"] = card.card_id
-	var art_bytes := read_art_bytes(card.art_path)
-	if not art_bytes.is_empty():
-		var ext := _extension_from_path(card.art_path)
-		if SAFE_ART_EXTENSIONS.has(ext):
-			data["art_ext"] = ext
-			data["art_base64"] = Marshalls.raw_to_base64(art_bytes)
+	data.erase("art_path")
+	data.erase("damaged_art_path")
+	for field in ["art", "damaged_art"]:
+		if field == "damaged_art" and card.is_spell(): continue
+		var path: String = card.art_path if field == "art" else card.damaged_art_path
+		var bytes := read_art_bytes(path)
+		var ext := _extension_from_path(path)
+		if not bytes.is_empty() and SAFE_ART_EXTENSIONS.has(ext):
+			data[field+"_ext"] = ext
+			data[field+"_base64"] = Marshalls.raw_to_base64(bytes)
 	return data
 
 
@@ -773,40 +898,75 @@ func prepare_import_cards(package: Dictionary, target_deck_id: String = "") -> D
 			conflicts.append({"local": match["card"], "incoming": card, "share_id": share_id})
 		else:
 			incoming.append({"card": card, "share_id": share_id})
-	return {"incoming": incoming, "skipped": skipped, "conflicts": conflicts, "id_map": id_map}
+	return {"deck_id": deck_id, "incoming": incoming, "skipped": skipped, "conflicts": conflicts, "id_map": id_map, "updates": {}}
 
 
 func apply_prepared_import(prepared: Dictionary, package: Dictionary, replace_library: bool = false, append_to_current_deck: bool = false) -> Dictionary:
-	var deck := get_current_deck()
+	if prepared.get("invalid", false):
+		return {"ok": false}
+	var previous_deck_id := current_deck_id
+	var target_id := str(prepared.get("deck_id", ""))
+	var deck := get_deck(target_id if not target_id.is_empty() else current_deck_id)
+	if deck.is_empty() and target_id.is_empty() and not deck_library.is_empty():
+		deck = deck_library[0]
+	var created := deck.is_empty() and target_id.is_empty()
+	if created:
+		deck = {"id": make_id("deck"), "name": Locale.t("deck.default_name"), "cards": []}
 	if deck.is_empty():
-		deck = create_deck(Locale.t("deck.default_name"))
-	var added_count: int = 0
+		return {"ok": false}
+	var old_cards: Array = deck.get("cards", [])
+	var next_cards := old_cards.duplicate()
+	var updates: Dictionary = prepared.get("updates", {})
+	var updated_count := 0
+	var imported_at := int(Time.get_unix_time_from_system())
+	for index in range(next_cards.size()):
+		var original: CardData = old_cards[index]
+		if updates.has(original.instance_id):
+			var replacement := prepare_deck_card(updates[original.instance_id], true)
+			replacement.set_meta(&"modified_at", imported_at)
+			next_cards[index] = replacement
+			updated_count += 1
+	if updated_count != updates.size():
+		return {"ok": false}
+	var id_map: Dictionary = prepared.get("id_map", {}).duplicate()
 	for item in prepared.get("incoming", []):
-		var card: CardData = item["card"]
-		var result := add_card_copy_to_deck(deck.get("id", ""), card, false)
-		if result.get("kind", "") == "added":
-			added_count += 1
-			prepared["id_map"][item["share_id"]] = result["card"].instance_id
-	save_library()
-	return {"added": added_count, "skipped": prepared.get("skipped", []).size()}
+		var copy := prepare_deck_card(item["card"], false)
+		copy.set_meta(&"modified_at", imported_at)
+		next_cards.append(copy)
+		id_map[item["share_id"]] = copy.instance_id
+	var previous_decks := deck_library.duplicate()
+	deck["cards"] = next_cards
+	if created:
+		deck_library.append(deck)
+	current_deck_id = deck["id"]
+	rebuild_card_library_cache()
+	if not save_library():
+		deck["cards"] = old_cards
+		# Saving normalizes the library into new deck dictionaries.
+		deck_library = previous_decks
+		current_deck_id = previous_deck_id
+		rebuild_card_library_cache()
+		return {"ok": false}
+	prepared["id_map"] = id_map
+	return {"ok": true, "added": next_cards.size() - old_cards.size(), "updated": updated_count, "skipped": prepared.get("skipped", []).size()}
 
 
 func import_package_as_new_deck(package: Dictionary, deck_name: String) -> Dictionary:
 	var package_issues := _validate_share_package(package)
 	if not package_issues.is_empty():
-		return {"added": 0, "deck_name": "", "invalid": true, "errors": package_issues}
+		return {"ok": false, "added": 0, "deck_name": "", "invalid": true, "errors": package_issues}
 	var deck_cards: Array = []
 	var id_map := {}
-	var added_count: int = 0
+	var imported_at := int(Time.get_unix_time_from_system())
 	for card_data in package.get("cards", []):
 		var share_id: String = card_data.get("share_id", card_data.get("card_id", ""))
 		var card := deserialize_card(card_data)
 		_restore_shared_art(card, card_data)
 		var copy := prepare_deck_card(card, false)
+		copy.set_meta(&"modified_at", imported_at)
 		deck_cards.append(copy)
 		if share_id != "":
 			id_map[share_id] = copy.instance_id
-		added_count += 1
 	var final_cards := deck_cards
 	if package.get("type", "") == "deck":
 		var deck_data: Dictionary = package.get("deck", {})
@@ -823,11 +983,17 @@ func import_package_as_new_deck(package: Dictionary, deck_name: String) -> Dicti
 	if final_name == "":
 		final_name = Locale.t("share.import_deck_name")
 	var deck := {"id": make_id("deck"), "name": final_name, "cards": final_cards, "provenance": SharePackage.metadata(package.get("provenance", {}))}
+	var previous_decks := deck_library.duplicate()
+	var previous_deck_id := current_deck_id
 	deck_library.append(deck)
 	current_deck_id = deck.get("id", "")
 	rebuild_card_library_cache()
-	save_library()
-	return {"added": added_count, "deck_name": final_name}
+	if not save_library():
+		deck_library = previous_decks
+		current_deck_id = previous_deck_id
+		rebuild_card_library_cache()
+		return {"ok": false, "added": 0, "deck_name": ""}
+	return {"ok": true, "added": final_cards.size(), "deck_name": final_name}
 
 
 func _find_import_match(card: CardData) -> Dictionary:
@@ -835,16 +1001,17 @@ func _find_import_match(card: CardData) -> Dictionary:
 
 
 func _restore_shared_art(card: CardData, card_data: Dictionary) -> void:
-	var encoded: String = card_data.get("art_base64", "")
-	if encoded == "":
-		return
-	var ext: String = card_data.get("art_ext", "png").to_lower()
-	if not SAFE_ART_EXTENSIONS.has(ext):
-		return
-	var bytes := Marshalls.base64_to_raw(encoded)
-	if bytes.is_empty() or bytes.size() > MAX_ART_BYTES:
-		return
-	card.art_path = save_imported_art(bytes, ext)
+	# Imported cards must not retain filesystem paths from the sender.
+	card.art_path = ""
+	card.damaged_art_path = ""
+	for field in ["art", "damaged_art"]:
+		if field == "damaged_art" and card.is_spell(): continue
+		var encoded: String = card_data.get(field+"_base64", "")
+		var ext: String = str(card_data.get(field+"_ext", "png")).to_lower()
+		if encoded.is_empty() or not SAFE_ART_EXTENSIONS.has(ext): continue
+		var bytes := Marshalls.base64_to_raw(encoded)
+		if bytes.is_empty() or bytes.size() > MAX_ART_BYTES: continue
+		card.set(field+"_path",save_imported_art(bytes,ext))
 
 
 func save_imported_art(bytes: PackedByteArray, ext: String) -> String:
@@ -986,6 +1153,7 @@ func _card_revision_snapshot(card: CardData) -> Dictionary:
 	copy.instance_id = card.instance_id
 	copy.gender = card.gender
 	copy.art_path = card.art_path
+	copy.damaged_art_path = card.damaged_art_path
 	copy.card_type = card.card_type
 	copy.parasite_damage_mode = card.parasite_damage_mode
 	return serialize_card(copy)
@@ -1008,6 +1176,16 @@ func record_card_revision(card: CardData, saved_at: int = -1) -> bool:
 
 func get_card_revisions(card_id: String) -> Array:
 	return RevisionRepo.history(card_revisions, card_id)
+
+
+func card_modified_at(card: CardData) -> int:
+	if card.has_meta(&"modified_at"): return int(card.get_meta(&"modified_at"))
+	if card.card_id.is_empty(): return 0
+	var snapshot := _card_revision_snapshot(card)
+	for entry in card_revisions:
+		if entry.get("card_id", "") == card.card_id and RevisionRepo._same_content(entry.get("card", {}), snapshot):
+			return int(entry.get("saved_at", 0))
+	return 0
 
 
 func save_library() -> bool:
@@ -1119,6 +1297,15 @@ func clear_net_arts() -> void:
 func read_art_bytes(art_path: String) -> PackedByteArray:
 	if art_path == "":
 		return PackedByteArray()
+	if art_path.begins_with("res://res/workshop/") and not FileAccess.file_exists(art_path):
+		# Exported games keep the imported texture, while the source PNG is remapped.
+		var texture := ResourceLoader.load(art_path, "Texture2D") as Texture2D if ResourceLoader.exists(art_path, "Texture2D") else null
+		if texture == null: return PackedByteArray()
+		var image := texture.get_image()
+		if image == null or image.is_empty(): return PackedByteArray()
+		if image.is_compressed() and image.decompress() != OK: return PackedByteArray()
+		var encoded := image.save_png_to_buffer()
+		return encoded if encoded.size() <= MAX_ART_BYTES else PackedByteArray()
 	var abs_path: String = art_path
 	if abs_path.begins_with("user://") or abs_path.begins_with("res://"):
 		abs_path = ProjectSettings.globalize_path(abs_path)
@@ -1224,7 +1411,7 @@ func queue_card_draft_recovery() -> void:
 	_draft_save_at = Time.get_ticks_msec() / 1000.0 + 0.45
 
 
-func save_card_draft_recovery() -> bool:
+func save_card_draft_recovery(interrupted_skill: Dictionary = {}) -> bool:
 	if skill_tutorial_active or card_draft.is_empty():
 		return false
 	var payload := {
@@ -1236,6 +1423,8 @@ func save_card_draft_recovery() -> bool:
 		"editing_instance_id": editing_instance_id,
 		"return_scene": card_editor_return_scene,
 	}
+	if not interrupted_skill.is_empty():
+		payload["interrupted_skill"] = interrupted_skill
 	var ok := _write_json_atomic(DRAFT_RECOVERY_PATH, payload, Schema.KIND_DRAFT_RECOVERY)
 	if ok:
 		recovered_card_draft = payload.duplicate(true)
@@ -1344,6 +1533,11 @@ func is_card_playtest_active() -> bool:
 	return not card_playtest_context.is_empty()
 
 
+func is_online_battle() -> bool:
+	# A room connection can stay alive while its player tests a card locally.
+	return NetworkManager.is_online and not is_card_playtest_active()
+
+
 func restore_after_card_playtest() -> bool:
 	if card_playtest_context.is_empty():
 		return false
@@ -1361,7 +1555,26 @@ func restore_after_card_playtest() -> bool:
 	return true
 
 func init_card_draft():
-	card_draft = {
+	card_draft = default_card_draft("minion")
+	queue_card_draft_recovery()
+
+
+func init_spell_draft():
+	card_draft = default_card_draft("spell")
+	queue_card_draft_recovery()
+
+
+func init_parasite_draft():
+	card_draft = default_card_draft("parasite")
+	queue_card_draft_recovery()
+
+
+func default_card_draft(card_type: String) -> Dictionary:
+	if card_type == "spell":
+		return _default_spell_draft()
+	if card_type == "parasite":
+		return _default_parasite_draft()
+	return {
 		"name": "",
 		"cost": 0,
 		"hp": 1,
@@ -1369,24 +1582,23 @@ func init_card_draft():
 		"gender": "female",
 		"card_type": "minion",
 		"art_path": "",
+		"damaged_art_path": "",
 		"skill1": {},
 		"skill2": {},
 		"skill3": {},
 		"talent": {}
 	}
-	queue_card_draft_recovery()
 
 
-# Initialise the card draft for a spell card: no body stats, and a pre-filled
-# on_cast skill template so the creator sees an immediately useful starting point.
-func init_spell_draft():
-	card_draft = {
+func _default_spell_draft() -> Dictionary:
+	return {
 		"name": "",
 		"cost": 2,
 		"hp": 0,
 		"atk": 0,
 		"gender": "female",
 		"art_path": "",
+		"damaged_art_path": "",
 		"card_type": "spell",
 		"skill1": {
 			"skill_name": Locale.t("skill.spell_default"),
@@ -1402,17 +1614,17 @@ func init_spell_draft():
 		"skill2": {},
 		"talent": {},
 	}
-	queue_card_draft_recovery()
 
 
-func init_parasite_draft():
-	card_draft = {
+func _default_parasite_draft() -> Dictionary:
+	return {
 		"name": "",
 		"cost": 2,
 		"hp": 3,
 		"atk": 0,
 		"gender": "nonhuman",
 		"art_path": "",
+		"damaged_art_path": "",
 		"card_type": "parasite",
 		"parasite_damage_mode": CardData.PARASITE_DAMAGE_ABSORB,
 		"skill1": {
@@ -1429,9 +1641,6 @@ func init_parasite_draft():
 		"skill2": {},
 		"talent": {},
 	}
-	queue_card_draft_recovery()
-
-
 func load_card_to_draft(card: CardData):
 	card_draft = card_to_draft(card)
 	queue_card_draft_recovery()
@@ -1447,6 +1656,7 @@ func card_to_draft(card: CardData) -> Dictionary:
 		"card_type": card.card_type,
 		"parasite_damage_mode": card.parasite_damage_mode,
 		"art_path": card.art_path,
+		"damaged_art_path": "" if card.is_spell() else card.damaged_art_path,
 		"skill1": {},
 		"skill2": {},
 		"skill3": {},
@@ -1480,24 +1690,25 @@ func _draft_spell_shell(card_name: String) -> CardData:
 	return card
 
 
-func build_card_from_draft() -> CardData:
-	var card_name: String = card_draft.get("name", "Unnamed")
-	var card_type: String = card_draft.get("card_type", "minion")
+func build_card_from_draft(source: Dictionary = {}) -> CardData:
+	var draft: Dictionary = card_draft if source.is_empty() else source
+	var card_name: String = draft.get("name", "Unnamed")
+	var card_type: String = draft.get("card_type", "minion")
 	var is_spell: bool = card_type == "spell"
 	var is_parasite: bool = card_type == "parasite"
 	var skills: Array = []
-	var has_talent: bool = not card_draft.get("talent", {}).is_empty() and not is_spell and not is_parasite
-	if not has_talent and not card_draft.get("skill1", {}).is_empty():
-		var skill1: Dictionary = card_draft["skill1"].duplicate(true)
+	var has_talent: bool = not draft.get("talent", {}).is_empty() and not is_spell and not is_parasite
+	if not has_talent and not draft.get("skill1", {}).is_empty():
+		var skill1: Dictionary = draft["skill1"].duplicate(true)
 		if is_spell:
 			skill1 = SpellRules.normalize_spell_skill(_draft_spell_shell(card_name), skill1)
 		skills.append(skill1)
-	if not card_draft.get("skill2", {}).is_empty() and not is_spell and not is_parasite:
-		skills.append(card_draft["skill2"].duplicate(true))
-	if not card_draft.get("skill3", {}).is_empty() and not is_spell and not is_parasite:
-		skills.append(card_draft["skill3"].duplicate(true))
+	if not draft.get("skill2", {}).is_empty() and not is_spell and not is_parasite:
+		skills.append(draft["skill2"].duplicate(true))
+	if not draft.get("skill3", {}).is_empty() and not is_spell and not is_parasite:
+		skills.append(draft["skill3"].duplicate(true))
 	if has_talent:
-		var talent: Dictionary = card_draft["talent"].duplicate(true)
+		var talent: Dictionary = draft["talent"].duplicate(true)
 		talent["skill_type"] = SkillEngine.SKILL_TYPE_TALENT
 		talent["probability"] = 100
 		talent["max_uses"] = 0
@@ -1505,15 +1716,37 @@ func build_card_from_draft() -> CardData:
 
 	var card := CardData.new(
 		card_name,
-		card_draft.get("cost", 0),
-		0 if is_spell else card_draft.get("hp", 1),
-		0 if is_spell else card_draft.get("atk", 0),
+		draft.get("cost", 0),
+		0 if is_spell else draft.get("hp", 1),
+		0 if is_spell else draft.get("atk", 0),
 		skills
 	)
-	card.art_path = card_draft.get("art_path", "")
-	card.gender = card_draft.get("gender", "female")
+	card.art_path = draft.get("art_path", "")
+	card.damaged_art_path = "" if is_spell else draft.get("damaged_art_path", "")
+	card.gender = draft.get("gender", "female")
 	card.card_type = card_type
-	card.parasite_damage_mode = CardData.normalize_parasite_damage_mode(str(card_draft.get("parasite_damage_mode", CardData.PARASITE_DAMAGE_ABSORB)))
+	card.parasite_damage_mode = CardData.normalize_parasite_damage_mode(str(draft.get("parasite_damage_mode", CardData.PARASITE_DAMAGE_ABSORB)))
 	SpellRules.normalize_spell_card(card)
 	ParasiteRules.normalize_parasite_card(card)
 	return card
+
+# Preserve primary art indices for existing peers; alternate images use a
+# separate index range within the existing chunked art transfer protocol.
+const DAMAGED_ART_INDEX_OFFSET := 100000
+func card_art_transfers(cards: Array) -> Array:
+	var arts: Array = []
+	for i in cards.size():
+		for field in ["art_path","damaged_art_path"]:
+			if field == "damaged_art_path" and cards[i].is_spell(): continue
+			var path: String = cards[i].get(field)
+			var bytes := read_art_bytes(path)
+			if not bytes.is_empty():
+				arts.append({"card_index":i+(DAMAGED_ART_INDEX_OFFSET if field=="damaged_art_path" else 0),"ext":path.get_extension(),"bytes":bytes})
+	return arts
+
+func apply_received_art(cards: Array, index: int, path: String) -> void:
+	var damaged := index >= DAMAGED_ART_INDEX_OFFSET
+	var slot := index-DAMAGED_ART_INDEX_OFFSET if damaged else index
+	if slot >= 0 and slot < cards.size():
+		if damaged and cards[slot].is_spell(): return
+		cards[slot].set("damaged_art_path" if damaged else "art_path",path)

@@ -36,6 +36,7 @@ var _condition_value_spin: SpinBox
 var _condition_buff_sel: OptionButton
 var _buff_sel: OptionButton
 var _dur_spin: SpinBox
+var _dur_label: Label
 var _cost_mode_sel: OptionButton
 
 # Labels / rows
@@ -71,7 +72,7 @@ func _build_ui(existing: Dictionary) -> void:
 
 	var popup_size := Vector2(390, 380) * s
 	var panel := Panel.new()
-	UITheme.apply_panel(panel, "gold")
+	UITheme.apply_popup_frame(panel, "gold", false)
 	panel.custom_minimum_size = popup_size
 	panel.anchor_left = 0.5
 	panel.anchor_right = 0.5
@@ -233,7 +234,8 @@ func _build_ui(existing: Dictionary) -> void:
 	_buff_sel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_buff_sel.custom_minimum_size = Vector2(120 * s, 0)
 	_buff_row.add_child(_buff_sel)
-	_buff_row.add_child(_make_label(Locale.t("skill_editor.duration"), s))
+	_dur_label = _make_label(Locale.t("skill_editor.duration"), s)
+	_buff_row.add_child(_dur_label)
 	_dur_spin = _make_spin(1.0, 20.0, 2.0, s)
 	_buff_row.add_child(_dur_spin)
 	_buff_row.visible = false
@@ -324,15 +326,16 @@ func _setup_editor_dropdown(dd: OptionButton, category: String, keys: Array) -> 
 		var key: String = keys[i]
 		dd.add_item(Locale.term(category, key), i)
 		dd.get_popup().set_item_tooltip(i, _editor_term(category, key))
+	if category == "buff": preload("res://SkillStatusPicker.gd").fill(dd, SkillEngine.BUFF_ATK_BOOST)
 	_update_editor_dropdown_tooltip(dd, category, keys)
 	dd.item_selected.connect(func(_i: int): _update_editor_dropdown_tooltip(dd, category, keys))
 
 
 func _update_editor_dropdown_tooltip(dd: OptionButton, category: String, keys: Array) -> void:
-	if dd.selected < 0 or dd.selected >= keys.size():
+	if dd.get_selected_id() < 0 or dd.get_selected_id() >= keys.size():
 		dd.tooltip_text = ""
 		return
-	dd.tooltip_text = _editor_term(category, keys[dd.selected])
+	dd.tooltip_text = _editor_term(category, keys[dd.get_selected_id()])
 
 
 func _setup_condition_dropdown(dd: OptionButton) -> void:
@@ -416,20 +419,22 @@ func _on_effect_changed(_i: int) -> void:
 	if effect_key != SkillEngine.EFFECT_ADD_BUFF:
 		_val_spin.editable = true
 	else:
-		_val_spin.editable = SkillRegistry.buff_uses_value(SkillRegistry.BUFF_IDS[_buff_sel.selected])
+		_val_spin.editable = SkillRegistry.buff_uses_value(preload("res://SkillStatusPicker.gd").value(_buff_sel))
 	_update_effect_labels()
 	_update_value_mode(_mode_sel.selected)
 	_update_pct()
 
 
 func _on_buff_changed(_i: int) -> void:
-	var buff_key: String = SkillRegistry.BUFF_IDS[_buff_sel.selected]
+	var buff_key: String = preload("res://SkillStatusPicker.gd").value(_buff_sel)
 	if not SkillRegistry.buff_uses_value(buff_key):
 		_val_spin.value = 1.0
 		_val_spin.editable = false
 	else:
 		_val_spin.editable = true
 	_update_pct()
+	_update_effect_labels()
+	_update_value_mode(_mode_sel.selected)
 
 
 func _update_target_side() -> void:
@@ -484,7 +489,7 @@ func _target_warning_for(trigger_key: String, target_key: String, target_disable
 
 func _update_pct() -> void:
 	var effect_key: String = SkillRegistry.EFFECT_IDS[_effect_sel.selected]
-	var buff_key: String = SkillRegistry.BUFF_IDS[_buff_sel.selected]
+	var buff_key: String = preload("res://SkillStatusPicker.gd").value(_buff_sel)
 	_pct_label.visible = (effect_key == SkillEngine.EFFECT_ADD_BUFF and buff_key in [SkillEngine.BUFF_DAMAGE_REDUCTION, SkillEngine.BUFF_MISFORTUNE])
 
 
@@ -503,7 +508,11 @@ func _update_effect_labels() -> void:
 		_rcount_spin.max_value = 15.0
 	_rcount_row.visible = SkillRegistry.supports_random_count(effect_key)
 	_val_spin.min_value = -500.0 if allows_negative else 0.0
-	_val_spin.suffix = "%" if (effect_key == SkillEngine.EFFECT_ADD_BUFF and SkillRegistry.BUFF_IDS[_buff_sel.selected] in [SkillEngine.BUFF_DAMAGE_REDUCTION, SkillEngine.BUFF_MISFORTUNE]) else ""
+	var percentage: bool = effect_key == SkillEngine.EFFECT_ADD_BUFF and preload("res://SkillStatusPicker.gd").value(_buff_sel) in [SkillEngine.BUFF_DAMAGE_REDUCTION, SkillEngine.BUFF_MISFORTUNE]
+	for spin in [_val_spin, _min_spin, _max_spin]:
+		spin.max_value = 100.0 if percentage else 500.0
+		spin.allow_greater = not percentage
+	_val_spin.suffix = "%" if (effect_key == SkillEngine.EFFECT_ADD_BUFF and preload("res://SkillStatusPicker.gd").value(_buff_sel) in [SkillEngine.BUFF_DAMAGE_REDUCTION, SkillEngine.BUFF_MISFORTUNE]) else ""
 	_min_spin.min_value = -500.0 if allows_negative else 0.0
 	if _val_spin.value < _val_spin.min_value:
 		_val_spin.value = _val_spin.min_value
@@ -514,11 +523,15 @@ func _update_effect_labels() -> void:
 func _update_value_mode(m: int) -> void:
 	var effect_key: String = SkillRegistry.EFFECT_IDS[_effect_sel.selected]
 	var uses_value: bool = SkillRegistry.uses_value(effect_key)
+	if effect_key == SkillEngine.EFFECT_ADD_BUFF: uses_value = SkillRegistry.buff_uses_value(preload("res://SkillStatusPicker.gd").value(_buff_sel))
 	_val_label.visible = uses_value and (m == 0)
 	_val_spin.visible = uses_value and (m == 0)
 	_rand_row.visible = uses_value and (m == 1)
 	_var_row.visible = uses_value and (m == 2)
 	_mode_row.visible = uses_value
+	var uses_duration: bool = SkillRegistry.buff_uses_duration(preload("res://SkillStatusPicker.gd").value(_buff_sel))
+	_dur_spin.visible = uses_duration
+	_dur_label.visible = uses_duration
 
 
 func _update_condition_mode() -> void:
@@ -555,19 +568,20 @@ func _preview_dict() -> Dictionary:
 		preview.value_var = SkillRegistry.VALUE_VAR_IDS[_var_sel.selected]
 		preview.value_offset = int(_off_spin.value)
 	if SkillRegistry.EFFECT_IDS[_effect_sel.selected] == SkillEngine.EFFECT_ADD_BUFF:
-		preview.buff_id = SkillRegistry.BUFF_IDS[_buff_sel.selected]
+		preview.buff_id = preload("res://SkillStatusPicker.gd").value(_buff_sel)
 		preview.duration = int(_dur_spin.value)
 	var condition_type: String = SkillRegistry.CONDITION_IDS[_condition_sel.selected]
 	if condition_type != SkillEngine.CONDITION_NONE:
 		preview.condition_type = condition_type
 		if condition_type == SkillEngine.CONDITION_TARGET_HAS_BUFF:
-			preview.condition_buff_id = SkillRegistry.BUFF_IDS[_condition_buff_sel.selected]
+			preview.condition_buff_id = preload("res://SkillStatusPicker.gd").value(_condition_buff_sel)
 		else:
 			preview.condition_op = SkillRegistry.CONDITION_OP_IDS[_condition_op_sel.selected]
 			preview.condition_value = int(_condition_value_spin.value)
 	if SkillRegistry.force_self(str(preview.effect)):
 		preview.target = SkillEngine.TARGET_SELF
 		preview.target_side = SkillEngine.TARGET_SIDE_ALL
+	SkillRegistry.normalize_editor_value(preview)
 	return _TargetResolver.normalize_effect_target(preview)
 
 
@@ -584,8 +598,8 @@ func _backfill(existing: Dictionary) -> void:
 	_effect_sel.selected = _idx_of(eff.get("effect", SkillEngine.EFFECT_DAMAGE), SkillRegistry.EFFECT_IDS)
 	_cost_mode_sel.selected = _idx_of(eff.get("cost_reduction_mode", SkillRegistry.COST_REDUCTION_TURN), SkillRegistry.COST_REDUCTION_MODES)
 	_val_spin.value = float(eff.get("value", 1))
-	_buff_sel.selected = _idx_of(eff.get("buff_id", SkillEngine.BUFF_ATK_BOOST), SkillRegistry.BUFF_IDS)
-	_val_spin.editable = SkillRegistry.buff_uses_value(SkillRegistry.BUFF_IDS[_buff_sel.selected])
+	preload("res://SkillStatusPicker.gd").select_value(_buff_sel, eff.get("buff_id", SkillEngine.BUFF_ATK_BOOST))
+	_val_spin.editable = SkillRegistry.buff_uses_value(preload("res://SkillStatusPicker.gd").value(_buff_sel))
 	_target_sel.disabled = SkillRegistry.force_self(SkillRegistry.EFFECT_IDS[_effect_sel.selected])
 	_update_target_side()
 	_dur_spin.value = int(eff.get("duration", 2))
@@ -611,7 +625,7 @@ func _backfill(existing: Dictionary) -> void:
 	_condition_sel.selected = _idx_of(eff.get("condition_type", SkillEngine.CONDITION_NONE), SkillRegistry.CONDITION_IDS)
 	_condition_op_sel.selected = _idx_of(eff.get("condition_op", SkillEngine.CONDITION_OP_GTE), SkillRegistry.CONDITION_OP_IDS)
 	_condition_value_spin.value = float(eff.get("condition_value", 1))
-	_condition_buff_sel.selected = _idx_of(eff.get("condition_buff_id", SkillEngine.BUFF_TAUNT), SkillRegistry.BUFF_IDS)
+	preload("res://SkillStatusPicker.gd").select_value(_condition_buff_sel, eff.get("condition_buff_id", SkillEngine.BUFF_TAUNT))
 	_update_condition_mode()
 	_update_effect_labels()
 	_update_value_mode(_mode_sel.selected)
@@ -651,13 +665,13 @@ func _on_ok() -> void:
 		eff.value_var = SkillRegistry.VALUE_VAR_IDS[_var_sel.selected]
 		eff.value_offset = int(_off_spin.value)
 	if SkillRegistry.EFFECT_IDS[_effect_sel.selected] == SkillEngine.EFFECT_ADD_BUFF:
-		eff.buff_id = SkillRegistry.BUFF_IDS[_buff_sel.selected]
+		eff.buff_id = preload("res://SkillStatusPicker.gd").value(_buff_sel)
 		eff.duration = int(_dur_spin.value)
 	var condition_type: String = SkillRegistry.CONDITION_IDS[_condition_sel.selected]
 	if condition_type != SkillEngine.CONDITION_NONE:
 		eff.condition_type = condition_type
 		if condition_type == SkillEngine.CONDITION_TARGET_HAS_BUFF:
-			eff.condition_buff_id = SkillRegistry.BUFF_IDS[_condition_buff_sel.selected]
+			eff.condition_buff_id = preload("res://SkillStatusPicker.gd").value(_condition_buff_sel)
 		else:
 			eff.condition_op = SkillRegistry.CONDITION_OP_IDS[_condition_op_sel.selected]
 			eff.condition_value = int(_condition_value_spin.value)
@@ -668,6 +682,7 @@ func _on_ok() -> void:
 	if forced_side != "":
 		eff.target_side = forced_side
 	eff = _TargetResolver.normalize_effect_target(eff)
+	SkillRegistry.normalize_editor_value(eff)
 	confirmed.emit(eff)
 	queue_free()
 

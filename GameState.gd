@@ -13,6 +13,7 @@ var player2_hand: Array = []
 var is_player_turn: bool = true
 var turn_number: int = 1
 var current_player: int = 1  # 1 or 2
+var starting_player: int = 1
 var draw_callable: Callable
 var first_switch: bool = true
 var battle_config: Dictionary = {}
@@ -20,8 +21,10 @@ var shared_deck: Array = []
 var shared_discard: Array = []
 var game_rng := RandomNumberGenerator.new()
 var state_revision: int = 0
+var pending_cost_choices: Array = []
 var quiet: bool = false
 var trace_callable: Callable
+var metrics_callable: Callable
 var allow_first_turn_attacks: bool = false
 var _lifecycle_trigger_depth: int = 0
 var _board_change_trigger_depth: int = 0
@@ -88,6 +91,12 @@ func _on_stats_damage(source: CardData, target: CardData, _declared: int, actual
 		stats[owner]["kills"] = int(stats[owner].get("kills", 0)) + 1
 
 
+func _record_suppressed_damage(source: CardData, target: CardData, declared: int, actual: int, reduction_pct: int, temp_hp_before: int, reason: String) -> void:
+	# UI suppression must not suppress authoritative statistics during replay.
+	if EventBus.is_blocking_signals() and _stats_listening:
+		_on_stats_damage(source, target, declared, actual, reduction_pct, temp_hp_before, reason)
+
+
 func _stats_owner_of(card: CardData) -> int:
 	if card == null:
 		return 0
@@ -105,24 +114,84 @@ func _stats_add(player: int, key: String, amount: int) -> void:
 	stats[player][key] = int(stats[player].get(key, 0)) + amount
 
 
-func init_game(draw_cb: Callable, requested_seed: Variant = null) -> void:
+func record_metric(event: Dictionary) -> void:
+	if not metrics_callable.is_valid(): return
+	var row := event.duplicate()
+	var source: CardData = row.get("source_card")
+	var target: Variant = row.get("target_card")
+	var owner := _metric_owner_of(source)
+	row["source_player"] = owner if owner != 0 else int(row.get("source_player", current_player))
+	var target_owner := _metric_owner_of(target)
+	row["target_player"] = target_owner if target_owner != 0 else int(row.get("target_player", 0))
+	row["source"] = {"name": source.card_name, "card_id": source.card_id, "instance_id": source.instance_id, "identity": BattleMetrics.identity_of(source)} if source != null else {}
+	row["hero"] = target is BattleField
+	if str(row.get("kind", "")) == "status_origin" and target is CardData:
+		row["status_target"] = weakref(target)
+	row.erase("source_card")
+	row.erase("target_card")
+	metrics_callable.call(row)
+
+
+func _metric_owner_of(target: Variant) -> int:
+	if target == null: return 0
+	for player in [1, 2]:
+		var field: BattleField = player_field if player == 1 else player2_field
+		if target == field: return player
+		for card in field.slots:
+			if card == target: return player
+			if card is CardData and card.parasite_cards.has(target): return player
+	return 0
+
+
+func _record_attack_metric(source: CardData, target: Variant, amount: int, kind: String = "damage") -> void:
+	if not metrics_callable.is_valid() or amount <= 0: return
+	var total := maxi(1,source.effective_atk())
+	var remaining := amount
+	for parasite in source.parasite_cards:
+		var share := mini(remaining, int(floor(float(amount) * maxi(0,parasite.atk) / total)))
+		if share > 0:
+			record_metric({"kind":kind,"source_card":parasite,"target_card":target,"amount":share})
+			remaining -= share
+	for status in source.status_effects:
+		if status.get("buff_id","") != SkillEngine.BUFF_ATK_BOOST or int(status.get("value",0)) <= 0: continue
+		var share := mini(remaining, int(floor(float(amount) * int(status.value) / total)))
+		if share > 0:
+			record_metric({"kind":kind,"status":status,"source_card":source,"target_card":target,"amount":share})
+			remaining -= share
+	record_metric({"kind":kind,"source_card":source,"target_card":target,"amount":remaining})
+
+
+func _metric_payment(source: CardData, action: String, mana: int, points: int, temp_before: int) -> void:
+	record_metric({"kind": "payment", "source_card": source, "action": action, "mana": mana, "points": points, "temporary_mana": mini(temp_before, mana), "source_player": current_player})
+
+
+func init_game(draw_cb: Callable, requested_seed: Variant = null, opening_player: int = 1) -> void:
 	draw_callable = draw_cb
 	if requested_seed != null:
 		game_rng.seed = int(requested_seed)
-	elif NetworkManager.is_online:
+	elif PlayerData.is_online_battle():
 		game_rng.seed = 4567
 	else:
 		game_rng.randomize()
-	battle_config = PlayerData.battle_config.duplicate(true)
-	var cfg: Dictionary = battle_config
-	var start_hp: int = cfg.get("starting_hp", 30)
+	initialize_fields(PlayerData.battle_config)
+	_build_shared_deck()
+	deal_opening_hands(PlayerData.card_playtest_opening_card(), opening_player)
+	EventBus.game_started.emit()
+
+
+# Shared setup for fresh real and simulated matches. Deck selection, RNG seed,
+# editor instruments and presentation events remain the caller's responsibility.
+func initialize_fields(config: Dictionary) -> void:
+	battle_config = config.duplicate(true)
+	var start_hp: int = battle_config.get("starting_hp", 30)
 	player_field = BattleField.new("P1", start_hp, 10)
 	player2_field = BattleField.new("P2", start_hp, 10)
 	player_field.quiet = quiet
 	player2_field.quiet = quiet
-	_build_shared_deck()
-	var opening_count: int = clampi(int(cfg.get("draw_per_turn", 2)) + 1, 1, SkillEngine.MAX_HAND_SIZE)
-	var test_card := PlayerData.card_playtest_opening_card()
+
+
+func deal_opening_hands(test_card: CardData = null, opening_player: int = 1) -> void:
+	var opening_count: int = clampi(int(battle_config.get("draw_per_turn", 2)) + 1, 1, SkillEngine.MAX_HAND_SIZE)
 	if test_card != null:
 		# The dedicated test specimen is not shuffled into the shared deck: reserve
 		# one opening-hand slot for it, even when the normal opening already fills six.
@@ -132,10 +201,12 @@ func init_game(draw_cb: Callable, requested_seed: Variant = null) -> void:
 		_reserve_playtest_helpers(player2_hand, 2)
 		# Even custom zero-draw settings must leave room for the test instruments.
 		opening_count = maxi(opening_count, 3)
-	draw_cards(opening_count - player_hand.size(), player_hand)
-	draw_cards(opening_count - player2_hand.size(), player2_hand)
-	current_player = 1
-	EventBus.game_started.emit()
+	draw_cards_for_player(opening_count - player_hand.size(), 1)
+	draw_cards_for_player(opening_count - player2_hand.size(), 2)
+	starting_player = 2 if opening_player == 2 else 1
+	current_player = starting_player
+	reset_action_budget(1)
+	reset_action_budget(2)
 
 
 func _reserve_playtest_helpers(hand: Array, player: int) -> void:
@@ -150,7 +221,7 @@ func _reserve_playtest_helpers(hand: Array, player: int) -> void:
 
 
 func export_initial_state() -> Dictionary:
-	return {
+	var state := {
 		"player_field": _serialize_field(player_field),
 		"player2_field": _serialize_field(player2_field),
 		"player_hand": _serialize_card_array(player_hand),
@@ -158,6 +229,7 @@ func export_initial_state() -> Dictionary:
 		"shared_deck": _serialize_card_array(shared_deck),
 		"shared_discard": _serialize_card_array(shared_discard),
 		"current_player": current_player,
+		"starting_player": starting_player,
 		"turn_number": turn_number,
 		"is_player_turn": is_player_turn,
 		"first_switch": first_switch,
@@ -168,6 +240,46 @@ func export_initial_state() -> Dictionary:
 		"battle_config": battle_config.duplicate(true),
 		"allow_first_turn_attacks": allow_first_turn_attacks,
 	}
+	if not pending_cost_choices.is_empty():
+		state["pending_cost_choices"] = pending_cost_choices.duplicate(true)
+	return state
+
+
+func copy_for_simulation() -> RefCounted:
+	# Trusted in-memory copies avoid revalidating the network/save schema at
+	# every search node. No cards, arrays, callbacks or RNG are shared with play.
+	var copy: RefCounted = get_script().new()
+	copy.quiet = true
+	for pair in [["player_field", player_field], ["player2_field", player2_field]]:
+		var source: BattleField = pair[1]
+		var field := BattleField.new(source.owner_name, source.max_player_hp, source.max_mana)
+		field.quiet = true
+		field.player_hp = source.player_hp
+		field.current_mana = source.current_mana
+		field.temp_mana = source.temp_mana
+		field.action_budget = source.action_budget
+		field.action_points = source.action_points
+		field.actions_taken = source.actions_taken
+		field.slots = _copy_cards(source.slots)
+		copy.set(pair[0], field)
+	for property in ["player_hand", "player2_hand", "shared_deck", "shared_discard"]:
+		copy.set(property, _copy_cards(get(property)))
+	for property in ["is_player_turn", "turn_number", "current_player", "starting_player", "first_switch", "state_revision", "allow_first_turn_attacks"]:
+		copy.set(property, get(property))
+	copy.battle_config = battle_config.duplicate(true)
+	copy.stats = stats.duplicate(true)
+	copy.pending_cost_choices = pending_cost_choices.duplicate(true)
+	copy.game_rng.seed = game_rng.seed
+	copy.game_rng.state = game_rng.state
+	copy.draw_callable = copy.draw_cards
+	return copy
+
+
+func _copy_cards(cards: Array) -> Array:
+	var copies: Array = []
+	for card in cards:
+		copies.append(card.duplicate_card() if card != null else null)
+	return copies
 
 
 func apply_initial_state(state: Dictionary, sync_preferences: bool = true) -> void:
@@ -178,6 +290,7 @@ func apply_initial_state(state: Dictionary, sync_preferences: bool = true) -> vo
 		return
 	# Sync battle_config from authority so both players use the same rules.
 	var config: Dictionary = state.get("battle_config", {})
+	record_metric({"kind": "reset"})
 	if not config.is_empty():
 		battle_config = config.duplicate(true)
 		if sync_preferences:
@@ -195,10 +308,12 @@ func apply_initial_state(state: Dictionary, sync_preferences: bool = true) -> vo
 	shared_deck = _deserialize_card_array(state.get("shared_deck", []))
 	shared_discard = _deserialize_card_array(state.get("shared_discard", []))
 	current_player = int(state.get("current_player", 1))
+	starting_player = 2 if state.get("starting_player", 1) == 2 else 1
 	turn_number = int(state.get("turn_number", 1))
 	is_player_turn = bool(state.get("is_player_turn", true))
 	first_switch = bool(state.get("first_switch", true))
 	state_revision = int(state.get("state_revision", state_revision))
+	pending_cost_choices = state.get("pending_cost_choices", []).duplicate(true)
 	allow_first_turn_attacks = bool(state.get("allow_first_turn_attacks", false))
 	game_rng.seed = int(state.get("rng_seed", game_rng.seed))
 	game_rng.state = int(state.get("rng_state", game_rng.state))
@@ -217,6 +332,9 @@ func _serialize_field(field: BattleField) -> Dictionary:
 		"current_mana": field.current_mana,
 		"max_mana": field.max_mana,
 		"temp_mana": field.temp_mana,
+		"action_points": field.action_points,
+		"action_budget": field.action_budget,
+		"actions_taken": field.actions_taken,
 		"slots": _serialize_slots(field.slots),
 	}
 
@@ -229,6 +347,9 @@ func _apply_field_state(field: BattleField, state: Dictionary) -> void:
 	field.current_mana = int(state.get("current_mana", field.current_mana))
 	field.max_mana = int(state.get("max_mana", field.max_mana))
 	field.temp_mana = int(state.get("temp_mana", 0))
+	field.action_points = int(state.get("action_points", 0))
+	field.action_budget = int(state.get("action_budget", field.action_points))
+	field.actions_taken = int(state.get("actions_taken", 0))
 	field.slots = _deserialize_slots(state.get("slots", []))
 
 
@@ -268,7 +389,7 @@ func _build_shared_deck() -> void:
 	shared_discard.clear()
 	var p1 = PlayerData.battle_deck if PlayerData.battle_deck.size() > 0 else PlayerData.card_library
 	var p2 = PlayerData.opponent_battle_deck if PlayerData.opponent_battle_deck.size() > 0 else PlayerData.card_library
-	if NetworkManager.is_online and not NetworkManager.is_authority():
+	if PlayerData.is_online_battle() and not NetworkManager.is_authority():
 		p1 = PlayerData.opponent_battle_deck if PlayerData.opponent_battle_deck.size() > 0 else PlayerData.card_library
 		p2 = PlayerData.battle_deck if PlayerData.battle_deck.size() > 0 else PlayerData.card_library
 	for c in p1:
@@ -327,7 +448,27 @@ func make_skill_context_for_player(player: int, source_slot: int = -1, target_sl
 		"turn_number": turn_number,
 		"quiet": quiet,
 		"trace_callable": trace_callable,
+		"metrics_callable": Callable(self, "record_metric") if metrics_callable.is_valid() else Callable(),
+		"damage_stats_callable": Callable(self, "_record_suppressed_damage"),
+		"reaction_context_callable": Callable(self, "make_reaction_context"),
 	}
+
+
+func make_reaction_context(reactor: CardData, context: Dictionary) -> Dictionary:
+	var owner := _metric_owner_of(reactor)
+	if owner not in [1, 2]: return context
+	var cause: CardData = context.get("source_card")
+	var cause_owner := _metric_owner_of(cause)
+	if cause_owner == 0: cause_owner = int(context.get("current_player", 0))
+	var source_field: BattleField = player_field if owner == 1 else player2_field
+	var cause_field: BattleField = player_field if cause_owner == 1 else player2_field
+	var cause_slot := cause_field.slots.find(cause) if cause != null else -1
+	# Keep the shared recursion budget/RNG and per-effect options. Rebind only
+	# battle-owned fields, hands and callbacks to the reacting unit's owner.
+	var reaction := context.duplicate()
+	reaction.merge(make_skill_context_for_player(owner, source_field.slots.find(reactor), cause_slot, cause_owner), true)
+	reaction["reaction_target_card"] = cause
+	return reaction
 
 
 # ============================================
@@ -346,8 +487,10 @@ func draw_cards(amount: int, hand: Array = active_hand(), player: int = 0) -> Ar
 	# card that overflows into an empty discard pile could immediately be
 	# shuffled back and drawn again by the same multi-card draw.
 	var candidates: Array = []
+	var reshuffle_count := 0
 	for _k in range(maxi(0, amount)):
 		if shared_deck.is_empty() and not shared_discard.is_empty():
+			reshuffle_count = shared_discard.size()
 			_log("Deck empty! Shuffling discard pile into deck...")
 			shared_deck = shared_discard.duplicate()
 			shared_discard.clear()
@@ -365,6 +508,8 @@ func draw_cards(amount: int, hand: Array = active_hand(), player: int = 0) -> Ar
 		var destination := resolve_hand_entry_for_player(card_data, "deck", {
 			"batch_index": candidate_index,
 			"batch_size": candidates.size(),
+			"reshuffle_count": reshuffle_count,
+			"reshuffle_deck_remaining": shared_deck.size(),
 		}, player)
 		if destination == "hand":
 			drawn.append(card_data)
@@ -456,15 +601,20 @@ func notify_board_units_changed(changed_player: int, change_kind: String = "chan
 
 
 func discard_card(card_data: CardData) -> bool:
+	return discard_card_with_refund(card_data) >= 0
+
+
+# A negative result means no card was removed. Zero is a successful discard at the mana cap.
+func discard_card_with_refund(card_data: CardData) -> int:
 	# Check hand first, then battlefield
 	var hand = active_hand()
 	var idx: int = hand.find(card_data)
 	if idx >= 0:
 		hand.remove_at(idx)
 		move_card_to_shared_discard(card_data, current_player, "manual")
-		active_field().add_mana(1)
+		var refund := _refund_discard_mana(card_data)
 		_log("Discarded from hand: %s" % card_data.card_name)
-		return true
+		return refund
 	# Check battlefield
 	var field = active_field()
 	for i in range(5):
@@ -472,10 +622,19 @@ func discard_card(card_data: CardData) -> bool:
 			field.slots[i] = null
 			move_card_to_shared_discard(card_data, current_player, "manual")
 			notify_board_units_changed(current_player, "leave", card_data)
-			active_field().add_mana(1)
+			var refund := _refund_discard_mana(card_data)
 			_log("Discarded from field: %s" % card_data.card_name)
-			return true
-	return false
+			return refund
+	return -1
+
+
+func _refund_discard_mana(card_data: CardData) -> int:
+	var field := active_field()
+	var before := field.current_mana
+	field.add_mana(1)
+	var refund := field.current_mana - before
+	record_metric({"kind": "mana_refunded", "source_card": card_data, "target_card": field, "amount": refund})
+	return maxi(0, refund)
 
 
 # ============================================
@@ -486,10 +645,12 @@ func summon_card(card_data: CardData, slot_index: int) -> bool:
 	if card_data != null and (card_data.is_spell() or card_data.is_parasite()):
 		return false
 	var summoner := current_player
+	var temp_before := active_field().temp_mana
 	if not active_field().summon_card(card_data, slot_index):
 		return false
 	_stats_add(summoner, "summons", 1)
 	_stats_add(summoner, "mana_spent", card_data.cost)
+	_metric_payment(card_data, "summon", card_data.cost, 0, temp_before)
 	card_data.clear_cost_modifiers_after_play()
 	active_hand().erase(card_data)
 	notify_board_units_changed(summoner, "enter", card_data)
@@ -507,7 +668,9 @@ func attach_parasite(hand_index: int, target_player: int, target_slot: int) -> b
 	if not attach_check.get("ok", false):
 		return false
 	var attacher := current_player
+	var temp_before := active_field().temp_mana
 	active_field().spend_mana(card.cost)
+	_metric_payment(card, "attach", card.cost, 0, temp_before)
 	hand.remove_at(hand_index)
 	ParasiteRules.attach(card, target)
 	_stats_add(attacher, "parasites", 1)
@@ -530,7 +693,10 @@ func cast_spell(hand_index: int, skill_index: int = SpellRules.CAST_SKILL_INDEX,
 
 	var caster := current_player
 	var field := active_field()
+	var paid_cost := card.cost
+	var temp_before := field.temp_mana
 	field.spend_mana(card.cost)
+	_metric_payment(card, "cast", paid_cost, 0, temp_before)
 	hand.remove_at(hand_index)
 
 	var ctx := make_skill_context(-1, target_slot, target_player)
@@ -542,7 +708,7 @@ func cast_spell(hand_index: int, skill_index: int = SpellRules.CAST_SKILL_INDEX,
 	_stats_unlisten()
 
 	_stats_add(caster, "spells", 1)
-	_stats_add(caster, "mana_spent", card.cost)
+	_stats_add(caster, "mana_spent", paid_cost)
 	card.reset_to_base()
 	shared_discard.append(card)
 	return true
@@ -563,23 +729,116 @@ func trigger_summon_skills(source_slot: int, target_slot: int, skill_index: int,
 		_stats_unlisten()
 
 
-func trigger_activate_skills(source_slot: int, target_slot: int, skill_index: int, target_player: int = 0) -> void:
+func reset_action_budget(player: int) -> void:
+	var field: BattleField = player_field if player == 1 else player2_field
+	var hand: Array = player_hand if player == 1 else player2_hand
+	var empty_slots := field.slots.size() - field.get_alive_count()
+	var empty_hand := maxi(0, SkillEngine.MAX_HAND_SIZE - hand.size())
+	field.action_budget = maxi(0, int(floor(float(battle_config.get("action_base", 3)) + empty_slots * float(battle_config.get("action_empty_slot_factor", 1.0)) + empty_hand * float(battle_config.get("action_empty_hand_factor", 0.5)))))
+	field.action_points = field.action_budget
+	if not battle_config.has("action_base"):
+		field.action_budget = 0
+		field.action_points = 0
+	field.actions_taken = 0
+
+
+func next_action_payment() -> Dictionary:
+	# Missing coefficients mean a legacy saved match keeps its original rules.
+	return _action_payment(active_field().actions_taken, active_field().action_points, active_field().get_total_mana())
+
+
+func _action_payment(actions: int, available_points: int, available_mana: int) -> Dictionary:
+	var cost := actions if battle_config.has("action_base") else 0
+	var points := mini(cost, available_points)
+	var mana := int(ceil((cost - points) * float(battle_config.get("action_mana_factor", 1.0))))
+	return {"cost": cost, "points": points, "mana": mana, "ok": available_mana >= mana}
+
+
+func can_pay_action() -> bool:
+	return bool(next_action_payment()["ok"])
+
+
+func preview_action_payments(count: int = 2) -> Array:
+	var points := active_field().action_points
+	var mana := active_field().get_total_mana()
+	var actions := active_field().actions_taken
+	var result: Array = []
+	for index in range(clampi(count, 0, active_field().slots.size())):
+		var payment := _action_payment(actions, points, mana)
+		result.append(payment)
+		if not payment.ok:
+			break
+		points -= int(payment.points)
+		mana -= int(payment.mana)
+		actions += 1
+	return result
+
+
+func _pay_action(source: CardData = null, action: String = "activate") -> bool:
+	var payment := next_action_payment()
+	if not payment["ok"]:
+		return false
+	var temp_before := active_field().temp_mana
+	active_field().spend_mana(int(payment["mana"]))
+	active_field().action_points -= int(payment["points"])
+	active_field().actions_taken += 1
+	_stats_add(current_player, "mana_spent", int(payment["mana"]))
+	_metric_payment(source, action, int(payment.mana), int(payment.points), temp_before)
+	return true
+
+
+func can_activate_skill(source_slot: int, skill_index: int) -> bool:
+	if source_slot < 0 or source_slot >= active_field().slots.size():
+		return false
 	var card: CardData = active_field().slots[source_slot]
-	if card != null:
-		if turn_number <= 1 and skill_index >= 0 and skill_index < card.skills.size() and SkillRegistry.skill_changes_enemy_hp_or_presence(card.skills[skill_index]):
-			return
-		var actor := current_player
-		_stats_listen(actor)
-		SkillEngine.trigger_single_skill(card, skill_index, make_skill_context(source_slot, target_slot, target_player))
-		_stats_unlisten()
-		card.has_acted = true
+	if card == null or not card.is_alive() or card.has_attacked or card.skills_disabled():
+		return false
+	if skill_index < 0 or skill_index >= card.skills.size() or card.skills_used.has(skill_index):
+		return false
+	var skill: Dictionary = card.skills[skill_index]
+	if str(skill.get("trigger", "")) != SkillEngine.TRIGGER_ON_ACTIVATE or not SkillEngine.has_uses_remaining(card, skill, skill_index):
+		return false
+	if turn_number <= 1 and SkillRegistry.skill_changes_enemy_hp_or_presence(skill):
+		return false
+	return can_pay_action()
+
+
+# Target-independent readiness only: no UGC execution or target prediction.
+# Zero-ATK attacks remain valid (e.g. to trigger on-attack growth).
+func unit_action_readiness(source_slot: int) -> Dictionary:
+	var ready := {"attack": false, "skills": []}
+	if source_slot < 0 or source_slot >= active_field().slots.size():
+		return ready
+	var card: CardData = active_field().slots[source_slot]
+	if card == null or not card.is_alive() or not can_pay_action():
+		return ready
+	ready.attack = not card.has_acted and (turn_number > 1 or allow_first_turn_attacks) and not card.has_stun()
+	for skill_index in range(card.skills.size()):
+		if can_activate_skill(source_slot, skill_index):
+			ready.skills.append(skill_index)
+	return ready
+
+
+func trigger_activate_skills(source_slot: int, target_slot: int, skill_index: int, target_player: int = 0) -> bool:
+	if not can_activate_skill(source_slot, skill_index):
+		return false
+	var card: CardData = active_field().slots[source_slot]
+	if not _pay_action(card, "activate"):
+		return false
+	card.skills_used.append(skill_index)
+	var actor := current_player
+	_stats_listen(actor)
+	SkillEngine.trigger_single_skill(card, skill_index, make_skill_context(source_slot, target_slot, target_player))
+	_stats_unlisten()
+	card.has_acted = true
+	return true
 
 
 func activate_skill(slot_index: int, skill_index: int) -> String:
 	var card: CardData = active_field().slots[slot_index]
-	if card == null or card.has_acted:
+	if card == null or card.has_attacked:
 		return ""
-	if card.is_silenced():
+	if card.skills_disabled():
 		return ""
 	if skill_index >= card.skills.size():
 		return ""
@@ -588,12 +847,8 @@ func activate_skill(slot_index: int, skill_index: int) -> String:
 		return ""
 	var trigger: String = skill.get("trigger", "")
 	if trigger == SkillEngine.TRIGGER_ON_ACTIVATE:
-		var actor := current_player
-		_stats_listen(actor)
-		SkillEngine.trigger_skills(SkillEngine.TRIGGER_ON_ACTIVATE, card, make_skill_context(slot_index, -1))
-		_stats_unlisten()
-		card.has_acted = true
-		return skill.get("skill_name", "")
+		if trigger_activate_skills(slot_index, -1, skill_index):
+			return skill.get("skill_name", "")
 	return ""
 
 
@@ -602,6 +857,8 @@ func activate_skill(slot_index: int, skill_index: int) -> String:
 # ============================================
 
 func execute_attack(atk_slot: int, def_slot: int) -> Dictionary:
+	if atk_slot < 0 or atk_slot >= active_field().slots.size() or def_slot < 0 or def_slot >= opponent_field().slots.size():
+		return {}
 	if turn_number <= 1 and not allow_first_turn_attacks:
 		_log("Turn 1: attacks are not allowed!")
 		return {}
@@ -617,8 +874,10 @@ func execute_attack(atk_slot: int, def_slot: int) -> Dictionary:
 	if attacker.has_acted:
 		_log("%s already acted this turn!" % attacker.card_name)
 		return {}
-	if attacker.is_silenced() and not attacker.attack_ignores_silence:
-		_log("%s is silenced and cannot attack!" % attacker.card_name)
+	if attacker.has_stun():
+		_log("%s is stunned and cannot attack!" % attacker.card_name)
+		return {}
+	if not attacker.is_alive() or not victim.is_alive() or not _pay_action(attacker, "attack"):
 		return {}
 	var actor := current_player
 	_stats_listen(actor)
@@ -633,20 +892,28 @@ func execute_attack(atk_slot: int, def_slot: int) -> Dictionary:
 	atk_dmg = int(parasite_result.get("remaining", atk_dmg))
 	var parasite: CardData = parasite_result.get("parasite", null)
 	if parasite != null:
+		record_metric({"kind":"damage_prevented","source_card":parasite,"target_card":victim,"amount":parasite_result.get("prevented",0),"source_player":3-current_player})
+		record_metric({"kind": "parasite_damage", "source_card": attacker, "target_card": victim, "amount": parasite_result.absorbed})
 		EventBus.parasite_damage_resolved.emit(victim, parasite, declared_dmg, int(parasite_result.get("absorbed", 0)), bool(parasite_result.get("destroyed", false)))
 	var temp_hp_before: int = victim.temp_hp
 	var actual_dmg: int = victim.take_damage_without_reduction(atk_dmg)
+	_record_attack_metric(attacker,victim,actual_dmg)
+	_record_attack_metric(attacker,victim,temp_hp_before-victim.temp_hp,"shield_damage")
+	_record_suppressed_damage(attacker, victim, declared_dmg, actual_dmg, reduction_pct, temp_hp_before, "attack")
 	EventBus.damage_resolved.emit(attacker, victim, declared_dmg, actual_dmg, reduction_pct, temp_hp_before, "attack")
 	EventBus.hp_changed.emit(victim, -actual_dmg, victim.hp)
 	if victim.is_alive():
-		var victim_ctx := make_skill_context_for_player(3 - current_player, def_slot, atk_slot)
+		var victim_ctx := make_skill_context_for_player(3 - current_player, def_slot, atk_slot, current_player)
+		victim_ctx["reaction_target_card"] = attacker
 		SkillEngine.trigger_skills(SkillEngine.TRIGGER_ON_DAMAGED, victim, victim_ctx)
 		SkillEngine.trigger_skills(SkillEngine.TRIGGER_ON_ATTACKED, victim, victim_ctx)
 		ParasiteRules.trigger_host_passives(SkillEngine.TRIGGER_ON_DAMAGED, victim, victim_ctx)
 	attacker.has_acted = true
 	attacker.has_attacked = true
 	if not victim.is_alive():
+		var mana_before := active_field().current_mana
 		active_field().add_mana(1)
+		record_metric({"kind": "mana_refunded", "source_card": attacker, "target_card": active_field(), "amount": active_field().current_mana - mana_before})
 		_log("  Kill! Mana +1")
 	EventBus.attack_declared.emit(attacker, victim, atk_slot, def_slot)
 	var thorns: int = thorns_before_damage
@@ -655,6 +922,9 @@ func execute_attack(atk_slot: int, def_slot: int) -> Dictionary:
 		var attacker_reduction: int = attacker.get_damage_reduction()
 		var attacker_temp_before: int = attacker.temp_hp
 		var thorns_actual: int = attacker.take_damage(thorns)
+		record_metric({"kind": "damage", "source_card": victim, "target_card": attacker, "amount": thorns_actual})
+		record_metric({"kind": "shield_damage", "source_card": victim, "target_card": attacker, "amount": attacker_temp_before - attacker.temp_hp})
+		_record_suppressed_damage(victim, attacker, thorns, thorns_actual, attacker_reduction, attacker_temp_before, "thorns")
 		EventBus.damage_resolved.emit(victim, attacker, thorns, thorns_actual, attacker_reduction, attacker_temp_before, "thorns")
 		EventBus.hp_changed.emit(attacker, -thorns_actual, attacker.hp)
 	SkillEngine.trigger_skills(SkillEngine.TRIGGER_ON_ATTACK, attacker, make_skill_context(atk_slot, def_slot))
@@ -713,12 +983,20 @@ func cleanup_deaths() -> Dictionary:
 # Turn system
 # ============================================
 
-func end_player_turn() -> Dictionary:
+func end_player_turn(allow_face_mana: bool = true) -> Dictionary:
 	is_player_turn = false
 	# Clear current player's temp mana (vanishes at turn end)
 	active_field().clear_temp_mana()
 	var refund_owner: int = current_player
 	var refund_total: int = 0
+	var observed_refunds: Array = []
+	if metrics_callable.is_valid():
+		for field in [player_field, player2_field]:
+			for card in field.slots:
+				if card == null: continue
+				for effect in card.status_effects:
+					if int(effect.get("owner", 0)) == refund_owner and str(effect.get("buff_id", "")) == SkillEngine.BUFF_MANA_REFUND:
+						observed_refunds.append({"status": effect, "amount": maxi(0, int(effect.get("value", 0)))})
 	for slot in player_field.slots:
 		if slot != null:
 			refund_total += slot.process_mana_refund(refund_owner)
@@ -726,8 +1004,17 @@ func end_player_turn() -> Dictionary:
 		if slot != null:
 			refund_total += slot.process_mana_refund(refund_owner)
 	if refund_total > 0:
+		var mana_before := active_field().current_mana
 		active_field().add_mana(refund_total)
+		var remaining := active_field().current_mana - mana_before
+		for refund in observed_refunds:
+			var actual := mini(remaining, int(refund.amount))
+			remaining -= actual
+			record_metric({"kind": "mana_refunded", "status": refund.status, "amount": actual, "target_card": active_field(), "source_player": current_player})
 		_log("[Mana+] P%d gains %d mana at turn end (%d/%d)" % [current_player, refund_total, active_field().current_mana, active_field().max_mana])
+	for refund in observed_refunds:
+		if int(refund.status.get("duration", 0)) <= 0 or int(refund.status.get("value", 0)) <= 0:
+			record_metric({"kind": "status_expired", "status": refund.status})
 
 	# On-turn-end passives for the current player's field.
 	var ending_board: BattleField = player_field if current_player == 1 else player2_field
@@ -750,7 +1037,8 @@ func end_player_turn() -> Dictionary:
 	for slot in player_field.slots:
 		if slot != null:
 			var hp_before: int = slot.hp
-			slot.tick_buffs(tick_owner)
+			if current_player == 1: slot.tick_poison(Callable(self,"record_metric") if metrics_callable.is_valid() else Callable())
+			slot.tick_buffs(tick_owner, Callable(self, "record_metric") if metrics_callable.is_valid() else Callable())
 			if tick_owner == 1:
 				slot.temp_hp = 0
 			if slot.hp != hp_before:
@@ -758,14 +1046,17 @@ func end_player_turn() -> Dictionary:
 	for slot in player2_field.slots:
 		if slot != null:
 			var hp_before: int = slot.hp
-			slot.tick_buffs(tick_owner)
+			if current_player == 2: slot.tick_poison(Callable(self,"record_metric") if metrics_callable.is_valid() else Callable())
+			slot.tick_buffs(tick_owner, Callable(self, "record_metric") if metrics_callable.is_valid() else Callable())
 			if tick_owner == 2:
 				slot.temp_hp = 0
 			if slot.hp != hp_before:
 				EventBus.hp_changed.emit(slot, slot.hp - hp_before, slot.hp)
 
 	# Empty-field direct damage (turn 2+)
-	var result := _process_empty_field_damage()
+	var result := _process_empty_field_damage(allow_face_mana)
+	for card in active_field().slots:
+		if card != null: card.finish_stun_turn()
 	return result
 
 
@@ -776,7 +1067,7 @@ func _field_is_empty(field: BattleField) -> bool:
 	return true
 
 
-func _process_empty_field_damage() -> Dictionary:
+func _process_empty_field_damage(allow_face_mana: bool = true) -> Dictionary:
 	if turn_number < 2:
 		return {}
 
@@ -793,14 +1084,28 @@ func _process_empty_field_damage() -> Dictionary:
 
 	var total_dmg := 0
 	var cards_hit: Array = []
-	for i in range(5):
+	var resources_before := {"points":af.action_points,"mana":af.get_total_mana()}
+	var plan := _automatic_attack_plan(af.get_total_mana(), allow_face_mana)
+	for hit in plan.cards_hit:
+		var i := int(hit.slot)
 		var card = attacking_field.slots[i]
 		if card != null and card.is_alive() and not card.has_acted:
+			if card.has_stun():
+				continue
+			if not _pay_action(card, "automatic"):
+				continue
+			card.has_acted = true
+			card.has_attacked = true
 			var dmg :int= card.effective_atk()
 			total_dmg += dmg
-			cards_hit.append({"card_name": card.card_name, "dmg": dmg, "slot": i, "player": attacking_player})
+			cards_hit.append({"card_name": card.card_name, "dmg": dmg, "slot": i, "player": attacking_player,"resources_after":{"points":af.action_points,"mana":af.get_total_mana()}})
 
 	if total_dmg > 0:
+		var remaining_hp := opponent_field().player_hp
+		for hit in cards_hit:
+			var damage := mini(maxi(0, int(hit.dmg)), remaining_hp)
+			remaining_hp -= damage
+			_record_attack_metric(attacking_field.slots[int(hit.slot)],opponent_field(),damage)
 		if damaged_player == 1:
 			player_field.damage_player(total_dmg)
 		else:
@@ -823,7 +1128,66 @@ func _process_empty_field_damage() -> Dictionary:
 		"total_damage": total_dmg,
 		"attacking_player": attacking_player,
 		"cards_hit": cards_hit,
+		"resources_before": resources_before,
 	}
+
+
+func preview_end_turn_attacks(allow_face_mana: bool = true) -> Dictionary:
+	# Read-only quote: temporary Elixir expires before automatic attacks.
+	# Refunds are deterministic; authored turn-end skills and ticking buffs may
+	# change the quoted board, so expose that uncertainty instead of running UGC.
+	var refund := 0
+	var conditional := false
+	for field in [player_field, player2_field]:
+		for card in field.slots:
+			if card == null:
+				continue
+			for status in card.status_effects:
+				var buff := str(status.get("buff_id", ""))
+				if int(status.get("owner", 0)) == current_player and buff == SkillEngine.BUFF_MANA_REFUND:
+					refund += maxi(0, int(status.get("value", 0)))
+				elif (buff == SkillEngine.BUFF_POISON and field == active_field()) or (int(status.get("owner", 0)) == 3-current_player and buff not in [SkillEngine.BUFF_MANA_REFUND, SkillEngine.BUFF_STUN, SkillEngine.BUFF_POISON]):
+					conditional = true
+			if field == active_field() and card.is_alive():
+				for skill in card.skills:
+					if str(skill.get("trigger", "")) == SkillEngine.TRIGGER_ON_TURN_END:
+						conditional = true
+	var plan := _automatic_attack_plan(mini(active_field().max_mana, active_field().current_mana + refund), allow_face_mana)
+	plan["conditional"] = conditional
+	return plan
+
+
+func _automatic_attack_plan(available_mana: int, allow_face_mana: bool = true) -> Dictionary:
+	var field := active_field()
+	var points := field.action_points
+	var actions := field.actions_taken
+	var plan := {"cards_hit": [], "blocked": [], "total_damage": 0, "points": 0, "mana": 0, "reason": "ready"}
+	if turn_number < 2:
+		plan.reason = "first_turn"
+		return plan
+	if not _field_is_empty(opponent_field()):
+		plan.reason = "defended"
+		return plan
+	for slot in range(field.slots.size()):
+		var card: CardData = field.slots[slot]
+		if card == null or not card.is_alive() or card.has_acted or (card.has_stun()):
+			continue
+		var payment := _action_payment(actions, points, available_mana)
+		if not allow_face_mana and int(payment.mana) > 0:
+			plan.blocked.append(slot)
+			continue
+		var hit := {"slot": slot, "card_name": card.card_name, "dmg": card.effective_atk(), "points": payment.points, "mana": payment.mana}
+		if not payment.ok:
+			plan.blocked.append(hit)
+			continue
+		plan.cards_hit.append(hit)
+		plan.total_damage += hit.dmg
+		plan.points += payment.points
+		plan.mana += payment.mana
+		points -= int(payment.points)
+		available_mana -= int(payment.mana)
+		actions += 1
+	return plan
 
 
 func start_new_turn() -> void:
@@ -834,15 +1198,17 @@ func start_new_turn() -> void:
 	var mana_per_turn: int = cfg.get("mana_per_turn", 2)
 	var draw_amount: int = cfg.get("draw_per_turn", 2)
 	if first_switch:
-		# First P1→P2 switch: half benefits as catch-up + extra compensation
+		# The second player gets catch-up benefits on their first turn.
 		var extra_mana: int = cfg.get("second_extra_mana", 0)
 		var extra_cards: int = cfg.get("second_extra_cards", 0)
 		active_field().add_mana(max(1, mana_per_turn / 2) + extra_mana)
 		draw_amount = max(1, draw_amount / 2) + extra_cards
 		first_switch = false
 	else:
-		# Standard mana restoration per turn
-		active_field().current_mana = min(active_field().max_mana, active_field().current_mana + mana_per_turn)
+		# Both players receive the base amount in round two, their first regular refill.
+		var upcoming_round := turn_number + int(current_player == starting_player)
+		var mana_increment := int(cfg.get("mana_increment", 0))
+		active_field().add_mana(mana_per_turn + mana_increment * maxi(0, upcoming_round - 2))
 
 	for slot in player_field.slots:
 		if slot != null:
@@ -857,7 +1223,7 @@ func start_new_turn() -> void:
 			slot.summoned_this_turn = false
 			slot.skills_used.clear()
 
-	if current_player == 1:
+	if current_player == starting_player:
 		turn_number += 1
 
 	# Stun: stunned cards skip their actions this turn (buff consumed once).
@@ -865,6 +1231,7 @@ func start_new_turn() -> void:
 	for slot in active_board.slots:
 		if slot != null and slot.has_stun():
 			slot.has_acted = true
+			slot.has_attacked = true
 			slot.consume_stun()
 
 	# On-turn-start passives for the current player's field.
@@ -879,6 +1246,7 @@ func start_new_turn() -> void:
 		draw_callable.call(draw_amount)
 	else:
 		draw_cards(draw_amount)
+	reset_action_budget(current_player)
 
 	_log("Turn %d start! Player %d (Mana: %d/%d)" % [turn_number, current_player, active_field().current_mana, active_field().max_mana])
 	EventBus.turn_started.emit(turn_number)

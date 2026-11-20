@@ -17,27 +17,68 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Godot 4.6.3
-        run: |
-          curl --fail --location --retry 3 \
-            --output /tmp/godot.zip \
-            https://github.com/godotengine/godot/releases/download/4.6.3-stable/Godot_v4.6.3-stable_linux.x86_64.zip
-          unzip -q /tmp/godot.zip -d /tmp/godot
-          chmod +x /tmp/godot/Godot_v4.6.3-stable_linux.x86_64
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
 
-      - name: Install CJK fonts
-        # Card-layout tests render Chinese skill names; without a CJK font the
-        # fallback line metrics are degenerate and the chip column overflows.
-        run: sudo apt-get update -qq && sudo apt-get install -y -qq fonts-noto-cjk
+      - name: Install verified Godot 4.6.3
+        run: python scripts/install_godot.py --directory /tmp/cardex-godot
+
+      - name: Install software rendering
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq xvfb libgl1-mesa-dri mesa-utils
 
       - name: Build project cache (import + class scan)
         # Scene-mode runners on a fresh checkout need the .godot import cache
         # and global class list; without it every test process re-imports from
         # scratch and times out.
-        run: /tmp/godot/Godot_v4.6.3-stable_linux.x86_64 --headless --import --path .
+        run: /tmp/cardex-godot/bin/Godot_v4.6.3-stable_linux.x86_64 --headless --import --path .
 
       - name: Run project tests
-        run: ./scripts/run_tests.sh /tmp/godot/Godot_v4.6.3-stable_linux.x86_64
+        run: python scripts/verify_release.py /tmp/cardex-godot/bin/Godot_v4.6.3-stable_linux.x86_64 --suite logic --output artifacts/ci-logic
 
-      - name: Verify room reconnect
-        run: ./scripts/run_reconnect_integration.sh /tmp/godot/Godot_v4.6.3-stable_linux.x86_64
+      - name: Verify current LAN room flow
+        run: python scripts/run_room_integration.py /tmp/cardex-godot/bin/Godot_v4.6.3-stable_linux.x86_64 --output artifacts/ci-rooms
+
+      - name: Verify dedicated room flow
+        run: python scripts/run_dedicated_integration.py /tmp/cardex-godot/bin/Godot_v4.6.3-stable_linux.x86_64
+
+      - name: Run rendered regressions with Mesa
+        env:
+          LIBGL_ALWAYS_SOFTWARE: "1"
+        run: xvfb-run -a -s "-screen 0 1920x1080x24" python scripts/verify_release.py /tmp/cardex-godot/bin/Godot_v4.6.3-stable_linux.x86_64 --suite visual --timeout 180 --output artifacts/ci-visual
+
+      - name: Preserve evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: godot-verification
+          path: |
+            artifacts/**/*.log
+            artifacts/**/*.json
+            artifacts/**/*.png
+            !artifacts/**/profiles/**
+            !artifacts/dedicated-integration/**/profile-*/**
+          retention-days: 14
+
+  windows-portable:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install verified engine and Windows templates
+        run: python scripts/install_godot.py --windows-templates
+      - name: Import
+        run: .godot/ci-engine/bin/Godot_v4.6.3-stable_win64.exe --headless --editor --import --path .
+      - name: Export portable candidate
+        run: python scripts/build_windows.py .godot/ci-engine/bin/Godot_v4.6.3-stable_win64.exe
+      - name: Verify extracted portable package
+        run: python scripts/smoke_windows.py (Get-ChildItem build/windows/CARDEX-*-windows-x64.zip | Select-Object -ExpandProperty FullName) --headless
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: windows-portable-candidate
+          path: build/windows/
+          retention-days: 14

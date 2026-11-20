@@ -45,7 +45,7 @@ func _ready() -> void:
 	sed.call("_on_block_changed", [0])
 	sed.call("_undo")
 	ed = sed.get("effect_data")
-	_assert(int(ed[0].get("value", -1)) == 1, "undo param change failed (value=%s)" % str(ed[0].get("value", "?")))
+	_assert(not ed[0].has("value"), "undoing the first number entry must restore an empty socket")
 	sed.call("_redo")
 	ed = sed.get("effect_data")
 	_assert(int(ed[0].get("value", -1)) == 7, "redo param change failed (value=%s)" % str(ed[0].get("value", "?")))

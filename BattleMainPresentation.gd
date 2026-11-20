@@ -1,4 +1,38 @@
-extends "res://BattleMainActions.gd"
+extends "res://presentation/BattleFeedbackTimeline.gd"
+
+
+# The presentation layer is the sole owner of the battle log implementation.
+const ACTION_LOG_MAX := 60
+const TARGETING_ARROW_REFRESH_MS := 250
+var _action_log_entries: Array = []
+var _action_log_latest: Button
+var _action_log_close: Button
+var _action_log_waiting := false
+
+func _end_turn_preview_text() -> String:
+	var plan: Dictionary = game.preview_end_turn_attacks(face_mana_button.button_pressed)
+	var lines: Array[String] = [Locale.t("battle.end_preview_title")]
+	if plan.reason == "first_turn":
+		lines.append(Locale.t("battle.end_preview_first"))
+	elif plan.reason == "defended":
+		lines.append(Locale.t("battle.end_preview_defended"))
+	else:
+		if game.battle_config.has("action_base"):
+			lines.append(Locale.t("battle.end_preview_total", [plan.total_damage, plan.points, plan.mana]))
+		else:
+			lines.append(("自动攻击对方玩家，共造成 %d 点伤害。" if Locale.language == "zh" else "Your units will attack the opposing player for %d damage.") % plan.total_damage)
+		for hit in plan.cards_hit:
+			if game.battle_config.has("action_base"):
+				lines.append(Locale.t("battle.end_preview_hit", [int(hit.slot) + 1, str(hit.card_name).left(24), hit.dmg, hit.points, hit.mana]))
+			else:
+				lines.append(("%s：伤害 %d" if Locale.language == "zh" else "%s: %d damage") % [str(hit.card_name).left(24), hit.dmg])
+		if not plan.blocked.is_empty():
+			lines.append(Locale.t("battle.end_preview_blocked", [plan.blocked.size()]))
+	lines.append(Locale.t("battle.end_preview_temp"))
+	if plan.conditional:
+		lines.append(Locale.t("battle.end_preview_conditional"))
+	return "\n".join(lines)
+
 
 var _pending_hand_arrivals: Array = []
 var _hand_arrival_sort_connected := false
@@ -6,18 +40,17 @@ var _discard_pile_feedback_tween: Tween = null
 var _discard_pile_feedback_target: Control = null
 var _discard_pile_rest_modulate := Color.WHITE
 var _discard_pile_rest_scale := Vector2.ONE
-var combat_broadcast_panel: PanelContainer = null
-var combat_broadcast_label: Label = null
-var _combat_broadcast_tween: Tween = null
+@onready var combat_broadcast_panel: Label = $CanvasLayer/MainBackground/MainLayout/MiddleInfoBar/InfoHBox/CombatBroadcastStrip
+@onready var combat_broadcast_label: Label = combat_broadcast_panel
 var _action_log_unread := 0
 
 const FEED_KIND_COLOR := {
-	"attack": Color(0.90, 0.40, 0.36),
-	"skill": Color(0.26, 0.72, 0.88),
-	"cast": Color(0.26, 0.72, 0.88),
-	"summon_skill": Color(0.36, 0.76, 0.68),
-	"warn": Color(0.95, 0.58, 0.25),
-	"system": Color(0.62, 0.50, 0.28),
+	"attack": UITheme.Tokens.ENEMY,
+	"skill": UITheme.Tokens.TEAL,
+	"cast": UITheme.Tokens.TEAL,
+	"summon_skill": UITheme.Tokens.TEAL,
+	"warn": UITheme.Tokens.WARNING,
+	"system": UITheme.Tokens.PRIMARY_HOVER,
 }
 
 # ============================================
@@ -27,31 +60,25 @@ const FEED_KIND_COLOR := {
 # The latest action lives in the centre information bar, between both lanes.
 # Full wording remains in the log, while the persistent one-line summary never
 # covers an enemy card or disappears before the player has read it.
-func _show_combat_broadcast(text: String, kind: String = "system") -> void:
+func _show_combat_broadcast(text: String, kind: String = "system", recovered_turn: int = -1) -> void:
 	if text.strip_edges().is_empty():
 		return
-	_append_action_log(text, kind)
-	if combat_broadcast_label == null or not is_instance_valid(combat_broadcast_label):
+	if kind == "parasite" and recovered_turn < 0: AppAudio.play("summon")
+	_append_action_log(text, kind, recovered_turn)
+	if not is_instance_valid(combat_broadcast_panel):
 		return
 	var tint: Color = FEED_KIND_COLOR.get(kind, FEED_KIND_COLOR["system"])
-	combat_broadcast_label.text = BattleLogFormatter.summary(text.strip_edges().replace("\n", " "))
-	combat_broadcast_label.tooltip_text = text.strip_edges()
-	combat_broadcast_label.add_theme_color_override("font_color", tint.lightened(0.28))
-	combat_broadcast_panel.add_theme_stylebox_override("panel", UITheme.panel_style(
-		Color(0.045, 0.055, 0.08, 0.96), tint.darkened(0.12), 1, 7,
-		Color(tint.r, tint.g, tint.b, 0.18), 3
-	))
-	if _combat_broadcast_tween != null and _combat_broadcast_tween.is_valid():
-		_combat_broadcast_tween.kill()
-	combat_broadcast_panel.modulate.a = 0.55
-	_combat_broadcast_tween = combat_broadcast_panel.create_tween()
-	_combat_broadcast_tween.tween_property(combat_broadcast_panel, "modulate:a", 1.0, 0.18).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	combat_broadcast_panel.text = BattleLogFormatter.summary(text.strip_edges().replace("\n", " "))
+	combat_broadcast_panel.tooltip_text = text.strip_edges()
+	combat_broadcast_panel.add_theme_color_override("font_color", tint.lightened(0.28))
+	if turn_wait_hint != null and not battle_finished:
+		_toggle_turn_cover()
 
 
 func _build_action_log() -> void:
 	abandon_battle_button = Button.new()
 	abandon_battle_button.text = Locale.t("battle.abandon_battle")
-	UITheme.apply_button(abandon_battle_button, "danger")
+	UITheme.apply_button(abandon_battle_button, "secondary")
 	abandon_battle_button.pressed.connect(_show_abandon_confirmation)
 	$CanvasLayer.add_child(abandon_battle_button)
 	action_log_button = Button.new()
@@ -59,15 +86,28 @@ func _build_action_log() -> void:
 	UITheme.apply_button(action_log_button, "secondary")
 	$CanvasLayer.add_child(action_log_button)
 
-	_build_combat_broadcast_strip()
+	# Keep the one-line summary and waiting hint in control of their own visibility.
+	combat_broadcast_panel.set_meta("keyword_literal", true)
+	UITheme.apply_label(combat_broadcast_panel, true)
+	combat_broadcast_panel.autowrap_mode = TextServer.AUTOWRAP_OFF
+	combat_broadcast_panel.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+	combat_broadcast_panel.max_lines_visible = 1
+	combat_broadcast_panel.gui_input.connect(func(event):
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed: _toggle_action_log())
+	var broadcast_style := UITheme.panel_style(
+		UITheme.COLOR_PANEL_DARK, UITheme.Tokens.BORDER, 1, 8, Color.TRANSPARENT, 0
+	)
+	broadcast_style.content_margin_top = 2
+	broadcast_style.content_margin_bottom = 2
+	combat_broadcast_panel.add_theme_stylebox_override("normal", broadcast_style)
 	action_log_panel = PanelContainer.new()
 	action_log_panel.name = "ActionLogPanel"
 	action_log_panel.visible = false
 	action_log_panel.mouse_filter = Control.MOUSE_FILTER_STOP
-	UITheme.apply_panel(action_log_panel, "dark")
+	UITheme.apply_popup_frame(action_log_panel, "dark", false)
 	var margin := MarginContainer.new()
 	for side in ["margin_left", "margin_top", "margin_right", "margin_bottom"]:
-		margin.add_theme_constant_override(side, 10)
+		margin.add_theme_constant_override(side, 18)
 	action_log_panel.add_child(margin)
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 8)
@@ -91,15 +131,17 @@ func _build_action_log() -> void:
 	var clear_btn := Button.new()
 	clear_btn.text = Locale.t("battle.clear_log")
 	clear_btn.custom_minimum_size = Vector2(64, 26)
-	UITheme.apply_button(clear_btn, "secondary")
+	UITheme.apply_button(clear_btn, "utility")
+	clear_btn.add_theme_font_size_override("font_size",12)
 	clear_btn.pressed.connect(_clear_action_log)
 	header.add_child(clear_btn)
-	var close_btn := Button.new()
-	close_btn.text = "X"
-	close_btn.custom_minimum_size = Vector2(30, 26)
-	UITheme.apply_button(close_btn, "danger")
-	close_btn.pressed.connect(_close_action_log)
-	header.add_child(close_btn)
+	_action_log_close = Button.new()
+	_action_log_close.text = Locale.t("common.close")
+	_action_log_close.custom_minimum_size = Vector2(56, 26)
+	UITheme.apply_button(_action_log_close, "secondary")
+	_action_log_close.add_theme_font_size_override("font_size",12)
+	_action_log_close.pressed.connect(_close_action_log)
+	header.add_child(_action_log_close)
 	action_log_text = RichTextLabel.new()
 	action_log_text.bbcode_enabled = true
 	action_log_text.fit_content = false
@@ -107,39 +149,64 @@ func _build_action_log() -> void:
 	action_log_text.selection_enabled = true
 	action_log_text.context_menu_enabled = true
 	action_log_text.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	action_log_text.add_theme_font_size_override("normal_font_size", 13)
+	action_log_text.add_theme_font_size_override("normal_font_size", 14)
+	action_log_text.add_theme_font_size_override("bold_font_size", 14)
+	action_log_text.add_theme_font_override("normal_font", UITheme.regular_font())
+	action_log_text.add_theme_font_override("bold_font", UITheme.medium_font())
+	action_log_text.add_theme_color_override("default_color", UITheme.COLOR_TEXT)
+	action_log_text.add_theme_constant_override("line_separation", 4)
+	action_log_text.gui_input.connect(_on_action_log_body_input)
 	box.add_child(action_log_text)
+	_action_log_latest = Button.new()
+	_action_log_latest.name = "LatestLogEntries"
+	_action_log_latest.hide()
+	UITheme.apply_button(_action_log_latest, "utility")
+	_action_log_latest.pressed.connect(_show_latest_action_log)
+	box.add_child(_action_log_latest)
+	var exporter := preload("res://BattlePositionExporter.gd").new()
+	add_child(exporter)
+	exporter.setup(self, box)
+	var dismiss_area := ColorRect.new()
+	dismiss_area.name = "ActionLogDismissArea"
+	dismiss_area.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dismiss_area.color = Color(0, 0, 0, 0.20)
+	dismiss_area.z_index = 80
+	dismiss_area.hide()
+	dismiss_area.gui_input.connect(func(event: InputEvent):
+		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+			_close_action_log()
+			dismiss_area.accept_event())
+	$CanvasLayer.add_child(dismiss_area)
+	action_log_panel.z_index = 81
+	action_log_panel.visibility_changed.connect(func(): dismiss_area.visible = action_log_panel.visible)
 	$CanvasLayer.add_child(action_log_panel)
 	action_log_button.pressed.connect(_toggle_action_log)
-
-
-func _build_combat_broadcast_strip() -> void:
-	var info_hbox := $CanvasLayer/MainBackground/MainLayout/MiddleInfoBar/InfoHBox as HBoxContainer
-	combat_broadcast_panel = PanelContainer.new()
-	combat_broadcast_panel.name = "CombatBroadcastStrip"
-	combat_broadcast_panel.custom_minimum_size = Vector2(300, 34) * _ui_scale()
-	combat_broadcast_panel.mouse_filter = Control.MOUSE_FILTER_PASS
-	UITheme.apply_panel(combat_broadcast_panel, "dark")
-	combat_broadcast_label = Label.new()
-	combat_broadcast_label.text = Locale.t("battle.broadcast_idle")
-	combat_broadcast_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	combat_broadcast_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	combat_broadcast_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	combat_broadcast_label.clip_text = true
-	combat_broadcast_label.mouse_filter = Control.MOUSE_FILTER_PASS
-	UITheme.apply_label(combat_broadcast_label, true)
-	combat_broadcast_panel.add_child(combat_broadcast_label)
-	info_hbox.add_child(combat_broadcast_panel)
-	var right_spacer := info_hbox.get_node("RightSpacer")
-	info_hbox.move_child(combat_broadcast_panel, right_spacer.get_index())
 
 
 func _toggle_action_log() -> void:
 	action_log_panel.visible = not action_log_panel.visible
 	if action_log_panel.visible:
-		_action_log_unread = 0
-		_refresh_action_log_button()
+		UIMotion.register_popup(action_log_panel, _action_log_close)
+		_show_latest_action_log()
+
+
+func _show_latest_action_log() -> void:
+	_action_log_unread = 0
+	_action_log_waiting = false
+	if _action_log_latest.has_focus():
+		_action_log_close.grab_focus()
+	_action_log_latest.hide()
+	_refresh_action_log_text()
+
+
+func _on_action_log_body_input(event: InputEvent) -> void:
+	if not event is InputEventKey or not event.pressed or event.keycode != KEY_HOME or event.get_modifiers_mask() != 0:
+		return
+	if _action_log_waiting:
+		_show_latest_action_log()
+	else:
 		action_log_text.scroll_to_line(0)
+	action_log_text.accept_event()
 
 
 func _close_action_log() -> void:
@@ -148,19 +215,25 @@ func _close_action_log() -> void:
 
 func _clear_action_log() -> void:
 	_action_log_entries.clear()
-	_action_log_unread = 0
-	_refresh_action_log_text()
+	_show_latest_action_log()
 
 
-func _append_action_log(text: String, kind: String = "system") -> void:
+func _append_action_log(text: String, kind: String, recovered_turn: int) -> void:
 	if action_log_text == null:
 		return
-	var turn: int = int(game.turn_number) if game != null else 1
+	var turn := recovered_turn if recovered_turn > 0 else (int(game.turn_number) if game != null else 1)
 	_action_log_entries.push_front({"turn": turn, "kind": kind, "text": text.strip_edges()})
 	if _action_log_entries.size() > ACTION_LOG_MAX:
 		_action_log_entries.resize(ACTION_LOG_MAX)
-	if not action_log_panel.visible:
+	var reading_older := action_log_panel.visible and (_action_log_waiting or action_log_text.get_v_scroll_bar().value > 2 or not action_log_text.get_selected_text().is_empty())
+	if not action_log_panel.visible or reading_older:
 		_action_log_unread += 1
+	if reading_older:
+		_action_log_waiting = true
+		_action_log_latest.text = Locale.t("battle.log.view_latest", [_action_log_unread])
+		_action_log_latest.show()
+		_refresh_action_log_button()
+		return
 	_refresh_action_log_text()
 
 
@@ -172,15 +245,20 @@ func _refresh_action_log_text() -> void:
 	for entry in _action_log_entries:
 		var turn := int(entry.get("turn", 1))
 		if turn != previous_turn:
-			parts.append("[color=#c9a965]%s[/color]" % Locale.t("battle.log.turn_header", [turn]))
+			parts.append("[b][color=#c9a965]%s[/color][/b]" % Locale.t("battle.log.turn_header", [turn]))
 			previous_turn = turn
 		var kind := str(entry.get("kind", "system"))
 		var color: Color = FEED_KIND_COLOR.get(kind, FEED_KIND_COLOR["system"])
-		var body := str(entry.get("text", "")).replace("[", "[lb]").replace("]", "[rb]")
-		var kind_label := Locale.t("battle.log.kind_%s" % kind)
-		if kind_label == "battle.log.kind_%s" % kind:
-			kind_label = Locale.t("battle.log.kind_system")
-		parts.append("  [color=#%s]● %s[/color]  %s" % [color.to_html(false), kind_label, body])
+		# Escape opening brackets once; escaping the inserted closing brackets
+		# again corrupts literal UGC names such as [color=red]...[/color].
+		var body := preload("res://presentation/SkillDescription.gd").colored(str(entry.get("text", "")),14,false)
+		var separator := "; " if Locale.language == "en" else "；"
+		var lines := body.split(separator)
+		var heading := str(lines[0])
+		var details := ""
+		for index in range(1, lines.size()):
+			details += "\n" + str(lines[index]).strip_edges()
+		parts.append("[b][color=#%s]%s[/color][/b]%s" % [color.lightened(0.42).to_html(false), heading, details])
 	action_log_text.clear()
 	action_log_text.append_text("\n".join(parts))
 	action_log_text.scroll_to_line(0)
@@ -190,20 +268,84 @@ func _refresh_action_log_text() -> void:
 func _refresh_action_log_button() -> void:
 	if action_log_button == null:
 		return
-	if _action_log_unread > 0:
-		action_log_button.text = Locale.t("battle.action_log_unread", [_action_log_unread])
-	else:
-		action_log_button.text = Locale.t("battle.action_log_count", [_action_log_entries.size()])
+	action_log_button.text = Locale.t("battle.action_log")
+	var dot := action_log_button.get_node_or_null("UnreadDot") as Control
+	if dot == null:
+		dot = preload("res://presentation/UnreadLogDot.gd").new()
+		dot.name = "UnreadDot"
+		dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		action_log_button.add_child(dot)
+		dot.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+		dot.offset_left = -13
+		dot.offset_right = -5
+		dot.offset_top = 5
+		dot.offset_bottom = 13
+	dot.visible = _action_log_unread > 0
+
+var _hero_damage_running: Dictionary = {}
+var _hero_hp_shown: Dictionary = {}
+var _hero_resources_shown: Dictionary = {}
 
 func _show_direct_damage(result: Dictionary):
-	if not result.get("triggered", false):
-		return
-	var total: int = result["total_damage"]
-	if total <= 0:
-		return
-	await get_tree().create_timer(0.3).timeout
-	var vp_size = get_viewport().get_visible_rect().size
-	_spawn_combat_text(Vector2(vp_size.x / 2, vp_size.y / 2 - 80), -total, true)
+	if _defer_random_feedback(_show_direct_damage.bind(result.duplicate(true))): return
+	if not result.get("triggered",false) or int(result.get("total_damage",0)) <= 0: return
+	_record_feedback_event("hero_damage",int(result.get("attacking_player",game.current_player)),-1,{"result":result})
+	var damaged_player := int(result.get("damaged_player",3-game.current_player))
+	var attacking_player := int(result.get("attacking_player",game.current_player))
+	if result.get("resources_before") is Dictionary:
+		_hero_resources_shown[attacking_player] = result.resources_before.duplicate()
+	var target_hud: Panel = player_status_hud if damaged_player == _view_player() else enemy_status_hud
+	var hud_state: Dictionary = _status_hud_state.get(target_hud.get_instance_id(), {})
+	var hp_bar_before: ProgressBar = target_hud.get_node("Margin/Content/HpBar")
+	_hero_hp_shown[damaged_player] = int(hud_state.get("hp", hp_bar_before.value))
+	_hero_damage_running[damaged_player] = int(_hero_damage_running.get(damaged_player,0))+1
+	var last_impact: Tween
+	for hit in result.get("cards_hit",[]):
+		var slot := _slot_ui_for_player(attacking_player,int(hit.get("slot",-1)))
+		if slot == null: continue
+		var hud: Panel = player_status_hud if damaged_player == _view_player() else enemy_status_hud
+		var hp_bar: ProgressBar = hud.get_node("Margin/Content/HpBar")
+		var start := slot.get_global_rect().get_center()
+		var target := hp_bar.get_global_rect().get_center()
+		if hit.get("resources_after") is Dictionary:
+			_hero_resources_shown[attacking_player] = hit.resources_after.duplicate()
+		_update_battle_status_huds()
+		_play_hero_attack_feedback(attacking_player,int(hit.slot))
+		var trail := Line2D.new()
+		trail.name = "HeroStrikeTrail"
+		trail.set_meta("battle_fx_kind","hero_strike")
+		trail.width = 2.5*_ui_scale()
+		trail.default_color = UITheme.COLOR_GOLD
+		trail.z_index = 35
+		$CanvasLayer.add_child(trail)
+		var tween := trail.create_tween()
+		tween.tween_method(func(t: float):
+			trail.points = PackedVector2Array([start.lerp(target,maxf(0,t-0.18)),start.lerp(target,t)])
+		,0.0,1.0,0.22*GamePreferences.battle_animation_duration_scale()).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		await tween.finished
+		if not is_instance_valid(hp_bar):
+			trail.queue_free()
+			_hero_damage_running[damaged_player] = maxi(0,int(_hero_damage_running.get(damaged_player,1))-1)
+			_hero_hp_shown.erase(damaged_player)
+			_hero_resources_shown.erase(attacking_player)
+			return
+		last_impact = BattleFx.status_bar_feedback($CanvasLayer,hp_bar,-int(hit.dmg),"damage",_ui_scale())
+		AppAudio.play("heavy" if int(hit.dmg) >= 4 else "hurt")
+		_hero_hp_shown[damaged_player] = maxi(0, int(_hero_hp_shown[damaged_player]) - maxi(0, int(hit.dmg)))
+		_update_battle_status_huds()
+		trail.queue_free()
+		await get_tree().create_timer(0.07*GamePreferences.battle_animation_duration_scale()).timeout
+	if last_impact != null and last_impact.is_running():
+		await last_impact.finished
+	_hero_damage_running[damaged_player] = maxi(0,int(_hero_damage_running.get(damaged_player,1))-1)
+	_hero_hp_shown.erase(damaged_player)
+	_hero_resources_shown.erase(attacking_player)
+
+
+func _wait_for_direct_damage() -> void:
+	await _wait_for_random_feedback()
+	while _hero_damage_running.values().any(func(count): return int(count) > 0):
+		await get_tree().process_frame
 
 
 func _apply_deaths():
@@ -221,6 +363,11 @@ func _apply_deaths():
 
 
 func _play_death_feedback(slot_ui: Control) -> void:
+	if not _playing_random_action and (_random_feedback_pending>0 or not _random_unbatched_events.is_empty()) and slot_ui != null:
+		var center := slot_ui.get_global_rect().get_center()
+		_defer_random_feedback(_play_random_death_feedback.bind(center,_hold_pile_addition(1)))
+		return
+	AppAudio.play("death")
 	if slot_ui == null:
 		return
 	var card_ui = slot_ui.get("current_card_ui")
@@ -232,13 +379,24 @@ func _play_death_feedback(slot_ui: Control) -> void:
 		card_ui,
 		_ui_scale(),
 		_discard_fly_target(),
-		Callable(self, "_play_death_discard_feedback")
+		Callable(self, "_play_death_discard_feedback").bind(_hold_pile_addition(1))
 	)
 	slot_ui.set_card(null)
 
 
-func _play_death_discard_feedback() -> void:
-	_play_discard_pile_arrival(Color(0.82, 0.52, 0.30, 1.0))
+func _play_random_death_feedback(center: Vector2,token: int) -> void:
+	var origin := Control.new()
+	origin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	origin.position = center
+	$CanvasLayer.add_child(origin)
+	AppAudio.play("death")
+	BattleFx.death_fade($CanvasLayer,origin,_ui_scale(),_discard_fly_target(),Callable(self,"_play_death_discard_feedback").bind(token))
+	origin.queue_free()
+
+
+func _play_death_discard_feedback(token: int = -1) -> void:
+	_finish_pile_addition(token)
+	_play_discard_pile_arrival(UITheme.Tokens.ENEMY)
 
 
 # Incremental hand refresh: hand mutations preserve order (plays remove a
@@ -248,7 +406,7 @@ func _play_death_discard_feedback() -> void:
 # and replayed every entry animation after each action, causing visible
 # flicker and frame spikes.
 func _refresh_hand_ui():
-	var hand: Array = _my_hand()
+	var hand: Array = _deployment_preview()["hand"]
 	var children: Array = hand_container.get_children()
 	# Fast path: identical card sequence — only castability tint can drift.
 	if children.size() == hand.size():
@@ -280,7 +438,11 @@ func _refresh_hand_ui():
 	# Drop unmatched nodes (played/left the hand).
 	for j in range(children.size()):
 		if not matched.has(j):
-			hand_container.remove_child(children[j])
+			# A touch release can still be routed to the drag source after the
+			# drop callback. Retire it from the hand layout while keeping it in
+			# the tree until Godot finishes dispatching the current input.
+			children[j].hide()
+			children[j].reparent(self, false)
 			children[j].queue_free()
 	for i in range(hand.size()):
 		var card_data: CardData = hand[i]
@@ -310,6 +472,7 @@ func _refresh_hand_ui():
 # discard every cached node so no dragged, modified, or removed card face can
 # survive into the restored puzzle state.
 func reset_hand_ui_from_game_state() -> void:
+	_pile_arrivals.clear()
 	if hand_container == null:
 		return
 	for child in hand_container.get_children():
@@ -330,8 +493,8 @@ func _apply_hand_castability(card_ui, card_data: CardData) -> void:
 	if card_data == null:
 		return
 	var affordable: bool = _field_for_player(_view_player()).get_total_mana() >= card_data.cost
-	var color := Color(0.35, 1.0, 0.48) if card_data.is_cost_reduced() \
-		else (Color.WHITE if affordable else Color(1.0, 0.35, 0.3))
+	var color := UITheme.Tokens.CARD_DISCOUNT if card_data.is_cost_reduced() \
+		else (UITheme.Tokens.INK if affordable else UITheme.Tokens.CARD_DANGER)
 	# Re-applying the same theme override marks the label dirty every refresh;
 	# skip when the cached tint still matches (CardUI invalidates on set_card).
 	if color.is_equal_approx(card_ui.get("_last_cost_color")):
@@ -355,7 +518,15 @@ func _hand_index_of(card_ui) -> int:
 
 
 func _play_hand_card_enter_feedback(card_ui: Control) -> void:
+	_finish_hand_arrival(card_ui)
 	BattleFx.hand_card_enter($CanvasLayer, card_ui, _ui_scale())
+
+
+func _finish_hand_arrival(card_ui: Control) -> void:
+	if card_ui.get_meta("tabletop_arriving", false):
+		card_ui.set_meta("tabletop_arriving", false)
+		card_ui.mouse_behavior_recursive = Control.MOUSE_BEHAVIOR_INHERITED
+		card_ui.focus_behavior_recursive = Control.FOCUS_BEHAVIOR_INHERITED
 
 
 func _prepare_hand_entry_ui(card_ui: Control, card_data: CardData) -> void:
@@ -364,13 +535,16 @@ func _prepare_hand_entry_ui(card_ui: Control, card_data: CardData) -> void:
 		var pending = _pending_hand_entry_ids.get(entry_key, {})
 		_pending_hand_entry_ids.erase(entry_key)
 		card_ui.modulate.a = 0.0
+		card_ui.set_meta("tabletop_arriving", true)
+		card_ui.mouse_behavior_recursive = Control.MOUSE_BEHAVIOR_DISABLED
+		card_ui.focus_behavior_recursive = Control.FOCUS_BEHAVIOR_DISABLED
 		if pending is Dictionary and bool(pending.get("deferred", false)):
 			_deferred_hand_arrival_refs[entry_key] = weakref(card_ui)
 			return
 		var reveal_delay := 0.50
 		if pending is Dictionary:
 			reveal_delay = float(pending.get("reveal_delay", reveal_delay))
-		get_tree().create_timer(reveal_delay).timeout.connect(_reveal_arriving_hand_card.bind(weakref(card_ui)))
+		get_tree().create_timer(reveal_delay + _deployment_feedback_delay()).timeout.connect(_reveal_arriving_hand_card.bind(weakref(card_ui)))
 		if pending is Dictionary and pending.has("feedback"):
 			_pending_hand_arrivals.append({
 				"reference": weakref(card_ui),
@@ -414,6 +588,8 @@ func _flush_pending_hand_arrivals() -> void:
 
 
 func _on_hand_entry_resolved(card: CardData, player: int, destination: String, source: String, source_meta: Dictionary) -> void:
+	source_meta = source_meta.duplicate(true)
+	_reserve_hand_pile_arrivals(source_meta,destination,source)
 	var batch_index := maxi(0, int(source_meta.get("batch_index", 0)))
 	var network_meta := source_meta.duplicate(true)
 	# Screen coordinates are local to one client's layout/viewpoint. The remote
@@ -436,8 +612,12 @@ func _on_hand_entry_resolved(card: CardData, player: int, destination: String, s
 		if destination == "hand" and player == _view_player():
 			_pending_hand_entry_ids[_hand_entry_key(card)] = {"deferred": true}
 		return
+	if not _random_unbatched_events.is_empty():
+		_random_unbatched_events.append(entry_event)
+		if destination=="hand" and player==_view_player(): _pending_hand_entry_ids[_hand_entry_key(card)]={"deferred":true}
+		return
 	if destination == "hand" and player == _view_player():
-		var reveal_delay := BattleFx.draw_card_arrival_delay(batch_index) if source == "deck" else BattleFx.travel_card_arrival_delay(batch_index)
+		var reveal_delay := (BattleFx.draw_card_arrival_delay(batch_index) + BattleFx.reshuffle_arrival_delay(int(source_meta.get("reshuffle_count", 0)))) if source == "deck" else BattleFx.travel_card_arrival_delay(batch_index)
 		_pending_hand_entry_ids[_hand_entry_key(card)] = {
 			"reveal_delay": reveal_delay,
 			"feedback": {
@@ -467,14 +647,22 @@ func _play_staged_hand_entry(event: Dictionary) -> void:
 	var card := _find_feedback_card(str(event.get("instance_id", "")))
 	var entry_key := str(event.get("entry_key", event.get("instance_id", "")))
 	if destination == "hand" and player == _view_player():
+		var batch_index := maxi(0, int(source_meta.get("batch_index", 0)))
+		var delay := (BattleFx.draw_card_arrival_delay(batch_index) + BattleFx.reshuffle_arrival_delay(int(source_meta.get("reshuffle_count", 0)))) if source == "deck" else BattleFx.travel_card_arrival_delay(batch_index)
 		var reference: WeakRef = _deferred_hand_arrival_refs.get(entry_key)
 		var card_ui: Control = reference.get_ref() if reference != null else null
+		_deferred_hand_arrival_refs.erase(entry_key)
 		if card_ui != null and is_instance_valid(card_ui):
-			_deferred_hand_arrival_refs.erase(entry_key)
 			_play_hand_resolution_feedback(card, player, destination, source, source_meta, card_ui.global_position + card_ui.size * 0.5)
-			var batch_index := maxi(0, int(source_meta.get("batch_index", 0)))
-			var delay := BattleFx.draw_card_arrival_delay(batch_index) if source == "deck" else BattleFx.travel_card_arrival_delay(batch_index)
-			get_tree().create_timer(delay).timeout.connect(_reveal_arriving_hand_card.bind(weakref(card_ui)))
+			get_tree().create_timer(delay + _deployment_feedback_delay()).timeout.connect(_reveal_arriving_hand_card.bind(weakref(card_ui)))
+			return
+		if _pending_hand_entry_ids.has(entry_key):
+			# The timeline can run before the next hand refresh (for example,
+			# when the AI returns a damaged card to the local hand).
+			_pending_hand_entry_ids[entry_key] = {
+				"reveal_delay": delay,
+				"feedback": {"player": player, "source": source, "source_meta": source_meta},
+			}
 			return
 	_play_hand_resolution_feedback(card, player, destination, source, source_meta)
 	if destination == "discard":
@@ -483,162 +671,6 @@ func _play_staged_hand_entry(event: Dictionary) -> void:
 
 # Replays one action as contiguous causal stages. Consecutive events from the
 # same effect share a frame; returning from a nested trigger starts a new stage.
-func _queue_hp_feedback(events: Array) -> void:
-	_queue_presentation_feedback(events)
-
-
-func _queue_presentation_feedback(events: Array) -> void:
-	if events.is_empty() or battle_finished:
-		return
-	var stage_span := _feedback_stage_span(events)
-	var needs_deferred_hand := false
-	for value in events:
-		if str((value as Dictionary).get("kind", "")) == "hand_entry":
-			needs_deferred_hand = true
-			break
-	if (GamePreferences.animation_acceleration_enabled() and not needs_deferred_hand) \
-			or (stage_span <= 1 and not needs_deferred_hand):
-		for value in events:
-			_play_presentation_event(value)
-		return
-	if not _hp_feedback_running and _hp_feedback_batches.is_empty():
-		_prime_hp_presentation(events)
-	_hp_feedback_batches.append(events.duplicate(true))
-	if stage_span > 1:
-		_ensure_resolution_blocker()
-	if not _hp_feedback_running:
-		_drain_hp_feedback.call_deferred()
-
-
-func _feedback_stage_span(events: Array) -> int:
-	var stage_count := 0
-	var previous_group := -1
-	for value in events:
-		var group := int((value as Dictionary).get("feedback_group", 0))
-		if stage_count == 0 or group != previous_group:
-			stage_count += 1
-			previous_group = group
-	return stage_count
-
-
-func _drain_hp_feedback() -> void:
-	if _hp_feedback_running:
-		return
-	_hp_feedback_running = true
-	while not _hp_feedback_batches.is_empty() and is_inside_tree():
-		var events: Array = _hp_feedback_batches.pop_front()
-		_prime_hp_presentation(events)
-		var previous_group := -1
-		var played_stage := false
-		for value in events:
-			var event: Dictionary = value
-			var group := int(event.get("feedback_group", 0))
-			if played_stage and group != previous_group and not GamePreferences.animation_acceleration_enabled():
-				await get_tree().create_timer(EFFECT_PRESENTATION_GAP).timeout
-			_play_presentation_event(event)
-			previous_group = group
-			played_stage = true
-		_clear_hp_presentation(events)
-	_hp_feedback_running = false
-	if not _resolution_running and _resolution_pending_steps <= 0 and _resolution_blocker != null and is_instance_valid(_resolution_blocker):
-		_resolution_blocker.visible = false
-
-
-func _play_presentation_event(event: Dictionary) -> void:
-	var kind := str(event.get("kind", "hp" if event.has("delta") else "stage"))
-	match kind:
-		"hp":
-			_update_hp_presentation(event)
-			_show_floating_for(
-				int(event.get("player", 0)),
-				int(event.get("slot", -1)),
-				int(event.get("delta", 0)),
-				bool(event.get("zero_damage", false))
-			)
-		"hand_entry":
-			_play_staged_hand_entry(event)
-		"effect":
-			for value in event.get("targets", []):
-				var loc: Dictionary = value
-				var slot_ui := _slot_ui_for_player(int(loc.get("player", 0)), int(loc.get("slot", -1)))
-				var target := _card_feedback_target(slot_ui)
-				if target != null and is_instance_valid(target):
-					BattleFx.skill_cast_pulse($CanvasLayer, target, slot_ui.global_position + slot_ui.size / 2, _ui_scale())
-
-
-func _hp_presentation_key(player: int, slot: int) -> String:
-	return "%d:%d" % [player, slot]
-
-
-func _prime_hp_presentation(events: Array) -> void:
-	for value in events:
-		var event: Dictionary = value
-		if str(event.get("kind", "")) != "hp" or not event.has("before_hp"):
-			continue
-		var player := int(event.get("player", 0))
-		var slot := int(event.get("slot", -1))
-		var key := _hp_presentation_key(player, slot)
-		if _hp_presentation_overrides.has(key):
-			continue
-		_hp_presentation_overrides[key] = {
-			"player": player,
-			"slot": slot,
-			"hp": int(event.get("before_hp", 0)),
-			"max_hp": int(event.get("max_hp", -1)),
-		}
-	_apply_hp_presentation_overrides()
-
-
-func _update_hp_presentation(event: Dictionary) -> void:
-	var player := int(event.get("player", 0))
-	var slot := int(event.get("slot", -1))
-	var key := _hp_presentation_key(player, slot)
-	if not _hp_presentation_overrides.has(key) or not event.has("new_hp"):
-		return
-	_hp_presentation_overrides[key] = {
-		"player": player,
-		"slot": slot,
-		"hp": int(event.get("new_hp", 0)),
-		"max_hp": int(event.get("max_hp", -1)),
-	}
-	_apply_hp_presentation_override(_hp_presentation_overrides[key])
-
-
-func _apply_hp_presentation_overrides() -> void:
-	for value in _hp_presentation_overrides.values():
-		_apply_hp_presentation_override(value)
-
-
-func _apply_hp_presentation_override(value: Dictionary) -> void:
-	var slot_ui := _slot_ui_for_player(int(value.get("player", 0)), int(value.get("slot", -1)))
-	if slot_ui == null:
-		return
-	var card_ui = slot_ui.get("current_card_ui")
-	if card_ui != null and is_instance_valid(card_ui) and card_ui.has_method("set_presentation_hp"):
-		card_ui.set_presentation_hp(int(value.get("hp", 0)), int(value.get("max_hp", -1)))
-
-
-func _clear_hp_presentation(events: Array) -> void:
-	var cleared := {}
-	for value in events:
-		var event: Dictionary = value
-		if str(event.get("kind", "")) != "hp":
-			continue
-		var player := int(event.get("player", 0))
-		var slot := int(event.get("slot", -1))
-		var key := _hp_presentation_key(player, slot)
-		if cleared.has(key):
-			continue
-		cleared[key] = true
-		_hp_presentation_overrides.erase(key)
-		var slot_ui := _slot_ui_for_player(player, slot)
-		if slot_ui == null:
-			continue
-		var card_ui = slot_ui.get("current_card_ui")
-		if card_ui != null and is_instance_valid(card_ui) and card_ui.has_method("clear_presentation_hp"):
-			card_ui.clear_presentation_hp()
-
-
 func _hand_entry_key(card: CardData) -> String:
 	if card == null:
 		return ""
@@ -651,22 +683,36 @@ func _hand_entry_key(card: CardData) -> String:
 
 
 func _play_hand_resolution_feedback(card: CardData, player: int, destination: String, source: String, source_meta: Dictionary, target_override: Vector2 = Vector2.INF) -> void:
+	if _defer_deployment_feedback(_play_hand_resolution_feedback.bind(card, player, destination, source, source_meta, target_override)): return
+	var reshuffle_count := int(source_meta.get("reshuffle_count", 0)) if source == "deck" else 0
+	if reshuffle_count > 0:
+		if int(source_meta.get("batch_index", 0)) == 0:
+			AppAudio.play("shuffle")
+			var token := int(source_meta.get("reshuffle_arrival_token",-1))
+			var remaining: Vector2i = _pile_arrivals.get(token,Vector2i.ZERO)
+			BattleFx.spawn_reshuffle_cards($CanvasLayer, _discard_fly_target(), _hand_resolution_source_position(player, "deck", {}), reshuffle_count, _ui_scale(), _on_reshuffle_icon_arrival.bind(token,remaining.x))
+		var after_shuffle := source_meta.duplicate(true)
+		after_shuffle.erase("reshuffle_count")
+		get_tree().create_timer(BattleFx.reshuffle_arrival_delay(reshuffle_count)).timeout.connect(
+			_play_hand_resolution_feedback.bind(card, player, destination, source, after_shuffle, target_override))
+		return
 	var start := _hand_resolution_source_position(player, source, source_meta)
 	var target := target_override if target_override != Vector2.INF else (_hand_card_target(card, player) if destination == "hand" else _discard_fly_target())
 	var batch_index := maxi(0, int(source_meta.get("batch_index", 0)))
-	var can_show_face := card != null and (destination == "discard" or player == _view_player()) and (source != "deck" or source_meta.has("source_position"))
-	if can_show_face:
-		var ghost = card_ui_scene.instantiate()
-		ghost.set_card(card)
-		ghost.set_battle_layout_preview(true)
-		ghost.is_hand_card = false
-		ghost.apply_ui_scale(0.52 * _ui_scale())
-		_set_ghost_mouse_filter(ghost)
-		BattleFx.travel_card_control($CanvasLayer, ghost, start, target, batch_index, _ui_scale())
-	else:
-		BattleFx.spawn_draw_fly_card($CanvasLayer, start, target, batch_index, _ui_scale())
+	if batch_index == 0:
+		var single_draw := source == "deck" and destination == "hand" and int(source_meta.get("batch_size", 1)) == 1
+		AppAudio.play("draw_single" if single_draw else "draw")
 	if destination == "discard":
-		get_tree().create_timer(BattleFx.travel_card_arrival_delay(batch_index)).timeout.connect(_play_overflow_discard_feedback)
+		var ghost := BattleFx.make_transfer_icon(_ui_scale())
+		var hand_edge := _draw_fly_target_for_player(player) + Vector2(0,-60*_ui_scale())
+		hand_edge.y = clampf(hand_edge.y,80,get_viewport_rect().size.y-90*_ui_scale())
+		BattleFx.overflow_card_control($CanvasLayer,ghost,start,hand_edge,target,batch_index,_ui_scale())
+	elif source == "deck":
+		BattleFx.spawn_draw_fly_card($CanvasLayer,start,target,batch_index,_ui_scale())
+	else:
+		BattleFx.travel_card_control($CanvasLayer,BattleFx.make_transfer_icon(_ui_scale()),start,target,batch_index,_ui_scale())
+	if destination == "discard":
+		get_tree().create_timer(BattleFx.overflow_card_arrival_delay(batch_index)).timeout.connect(_play_overflow_discard_feedback.bind(int(source_meta.get("discard_arrival_token",-1))))
 
 
 func _hand_card_target(card: CardData, player: int) -> Vector2:
@@ -677,8 +723,14 @@ func _hand_card_target(card: CardData, player: int) -> Vector2:
 	return _draw_fly_target_for_player(player)
 
 
-func _play_overflow_discard_feedback() -> void:
-	_play_discard_pile_arrival(Color(1.0, 0.70, 0.42, 1.0))
+func _play_overflow_discard_feedback(token: int = -1) -> void:
+	_finish_pile_addition(token)
+	_play_discard_pile_arrival(UITheme.Tokens.WARNING)
+
+
+func _on_reshuffle_icon_arrival(index: int, icon_count: int, token: int, total: int) -> void:
+	var amount := floori(float(total)*(index+1)/icon_count)-floori(float(total)*index/icon_count)
+	_finish_pile_addition(token,amount)
 
 
 func _play_discard_pile_arrival(tint: Color) -> void:
@@ -779,16 +831,25 @@ func _draw_fly_target_for_player(player: int) -> Vector2:
 
 
 func _spawn_draw_fly_card(start: Vector2, target: Vector2, index: int) -> void:
+	if index == 0: AppAudio.play("draw")
 	BattleFx.spawn_draw_fly_card($CanvasLayer, start, target, index, _ui_scale())
 
 
-func _play_discard_feedback() -> void:
+func _play_discard_feedback(start: Vector2 = Vector2.INF, token: int = -1) -> void:
 	var target: Control = discard_pile_btn if discard_pile_btn != null else discard_zone
 	if target == null or not is_instance_valid(target):
 		return
 	var center: Vector2 = target.global_position + target.size / 2
-	_spawn_combat_text(center + Vector2(0, -10), 1)
-	_play_discard_pile_arrival(Color(0.7, 1.0, 0.72, 1.0))
+	var origin := start if start != Vector2.INF else get_global_mouse_position()
+	if token < 0: token = _hold_pile_addition(1)
+	BattleFx.absorb_discard_card($CanvasLayer,origin,center,_ui_scale(),_on_manual_discard_arrival.bind(token))
+	_update_pile_labels()
+
+
+func _on_manual_discard_arrival(token: int) -> void:
+	_finish_pile_addition(token)
+	AppAudio.play("discard")
+	_play_discard_pile_arrival(UITheme.Tokens.PAPER)
 
 
 func _check_and_show_game_over() -> bool:
@@ -800,12 +861,27 @@ func _check_and_show_game_over() -> bool:
 
 
 func _show_result(result: String):
-	if battle_finished:
+	if battle_finished or _result_waiting_for_feedback:
 		return
+	if PlayerData.is_online_battle():
+		NetworkManager.mark_lan_match_finished()
+	var losing_hud: Control = enemy_status_hud if _did_local_player_win(result) else player_status_hud
+	var hp_bar := losing_hud.get_node("Margin/Content/HpBar") as ProgressBar
+	if _has_result_feedback_pending() or _result_hp_animating(hp_bar):
+		_result_waiting_for_feedback = true
+		abandon_battle_button.disabled = true
+		update_entire_screen()
+		while is_inside_tree() and not battle_finished and (_has_result_feedback_pending() or _result_hp_animating(hp_bar)):
+			await get_tree().process_frame
+		_result_waiting_for_feedback = false
+		if not is_inside_tree() or battle_finished:
+			return
 	battle_finished = true
+	AppAudio.play("victory" if _did_local_player_win(result) else "defeat")
 	practice_ai_running = false
 	cancel_attack()
-	NetworkManager.clear_room_session()
+	if not NetworkManager.has_live_server_room() and not NetworkManager.can_return_to_lan_room() and not PlayerData.is_card_playtest_active():
+		NetworkManager.clear_room_session()
 	if _end_turn_pulse and _end_turn_pulse.is_valid():
 		_end_turn_pulse.kill()
 		_end_turn_pulse = null
@@ -817,113 +893,45 @@ func _show_result(result: String):
 		end_turn_button.disabled = true
 	_show_battle_result_page(result)
 
-# ============================================
-# Skill interaction handlers (view discard/deck, hand cost reduction)
-# ============================================
 
-func _on_shuffle_discard_into_deck() -> void:
-	if game.shared_discard.is_empty():
+func _has_result_feedback_pending() -> bool:
+	return (not _plain_feedback_batches.is_empty() or _hp_feedback_running or not _hp_feedback_batches.is_empty()
+		or _random_feedback_pending > 0 or not _random_unbatched_events.is_empty()
+		or (splash_tween != null and splash_tween.is_running())
+		or _hero_damage_running.values().any(func(count): return int(count) > 0))
+
+
+func _result_hp_animating(hp_bar: ProgressBar) -> bool:
+	var tween: Tween = _status_value_tweens.get(hp_bar.get_instance_id())
+	return tween != null and tween.is_running() and is_zero_approx(float(hp_bar.get_meta("status_animation_target", -1)))
+
+func _prepare_finished_battle_result() -> void:
+	if not battle_finished:
 		return
-	game.shared_deck = game.shared_discard.duplicate()
-	game.shared_discard.clear()
-	game._shuffle_shared_deck()
-	print("[Main] Discard shuffled into deck (%d cards)" % game.shared_deck.size())
-
-
-func _on_view_discard_select(count: int, draw_count: int, current_player: int, hand: Array) -> void:
-	if game.shared_discard.is_empty():
-		return
-	var cards: Array = game.shared_discard
-	if draw_count > 0:
-		cards = cards.slice(0, min(draw_count, cards.size()))
-	_show_pile_selection_popup(cards, count, "discard", hand, current_player)
-
-
-func _on_view_deck_select(count: int, draw_count: int, current_player: int, hand: Array) -> void:
-	if game.shared_deck.is_empty():
-		return
-	var draw_n: int = draw_count if draw_count > 0 else count * 2
-	var display_cards: Array = game.shared_deck.slice(0, min(draw_n, game.shared_deck.size()))
-	_show_pile_selection_popup(display_cards, count, "deck", hand, current_player)
-
-
-func _on_make_zero_cost_select(reduction: int, cost_mode: String, _current_player: int, hand: Array, target: String, _random_count: int) -> void:
-	var candidates: Array = []
-	for card in hand:
-		if card is CardData and card.cost > 0:
-			candidates.append(card)
-	if candidates.is_empty():
-		return
-	_show_zero_cost_selection_popup(candidates, reduction, cost_mode, 1, hand, target)
-
-
-func _show_pile_selection_popup(cards: Array, count: int, source: String, hand: Array, player: int) -> void:
-	var source_label: String = Locale.t("battle.draw_pile") if source == "deck" else Locale.t("battle.discard_pile")
-	var limit := mini(count, cards.size())
-	if limit <= 0:
-		return
-	var on_selected := func(selected_cards: Array, source_positions: Array):
-		var pile: Array = game.shared_deck if source == "deck" else game.shared_discard
-		for index in range(selected_cards.size()):
-			var chosen: CardData = selected_cards[index]
-			if chosen not in pile:
-				continue
-			pile.erase(chosen)
-			var origin: Vector2 = source_positions[index] if index < source_positions.size() else Vector2.ZERO
-			game.resolve_hand_entry_for_player(chosen, source, {
-				"source_position": origin,
-				"source_instance_id": chosen.instance_id,
-			}, player)
-		_refresh_hand_ui()
-		update_entire_screen()
-		if NetworkManager.is_online and NetworkManager.is_authority():
-			_commit_authority_state("pile selection")
-	preload("res://CardCollectionDialog.gd").show_cards(
-		self,
-		cards,
-		Locale.t("battle.choose_keep") + " (" + source_label + ")",
-		limit,
-		on_selected,
-		true
-	)
-
-
-func _show_zero_cost_selection_popup(candidates: Array, reduction: int, cost_mode: String = SkillRegistry.COST_REDUCTION_TURN,
-		count: int = 1, hand: Array = [], target: String = SkillEngine.TARGET_SELF) -> void:
-	var include_sides: bool = target in [SkillEngine.TARGET_SIDES, SkillEngine.TARGET_SELF_SIDES]
-	var actual_hand: Array = hand if not hand.is_empty() else _my_hand()
-	var mode_text := Locale.term("cost_reduction_mode", cost_mode)
-	var title := Locale.t("battle.reduce_cost_title_sides" if include_sides else "battle.reduce_cost_title", [reduction, mode_text])
-	preload("res://CardCollectionDialog.gd").show_cards(self, candidates, title, count,
-		func(selected_cards: Array):
-			var applied: Array = []
-			for chosen: CardData in selected_cards:
-				var index := actual_hand.find(chosen)
-				if index < 0:
-					continue
-				if chosen not in applied:
-					applied.append(chosen)
-				if include_sides:
-					for offset in [-1, 1]:
-						var adjacent: int = index + offset
-						if adjacent >= 0 and adjacent < actual_hand.size():
-							var card: CardData = actual_hand[adjacent]
-							if card not in applied:
-								applied.append(card)
-			for card: CardData in applied:
-				card.apply_cost_reduction(reduction, cost_mode == SkillRegistry.COST_REDUCTION_PERMANENT)
-			_refresh_hand_ui()
-			update_entire_screen()
-	)
+	for popup in get_tree().get_nodes_in_group("battle_modal"):
+		if is_ancestor_of(popup):
+			popup.hide()
+			popup.queue_free()
+	if is_instance_valid(action_log_panel):
+		_close_action_log()
+	if is_instance_valid(turn_wait_hint):
+		turn_wait_hint.hide()
+	if is_instance_valid(turn_cover):
+		turn_cover.hide()
+	get_viewport().gui_cancel_drag()
+	# Battle presentations such as the discard picker have their own canvas.
+	$CanvasLayer.layer = 100
 
 
 func _show_disconnect_result_page(resume_sync_failed: bool = false) -> void:
+	_prepare_finished_battle_result()
 	var old_layer := $CanvasLayer.get_node_or_null("BattleResultLayer")
 	if old_layer:
 		old_layer.queue_free()
 	var layer := Control.new()
 	layer.name = "BattleResultLayer"
-	_disconnect_overlay = layer
+	layer.z_index = 100
+	_disconnect_overlay = null if resume_sync_failed else layer
 	layer.anchor_right = 1.0
 	layer.anchor_bottom = 1.0
 	layer.mouse_filter = Control.MOUSE_FILTER_STOP
@@ -933,17 +941,17 @@ func _show_disconnect_result_page(resume_sync_failed: bool = false) -> void:
 	var bg := ColorRect.new()
 	bg.anchor_right = 1.0
 	bg.anchor_bottom = 1.0
-	bg.color = Color(0.015, 0.018, 0.026, 0.86)
+	bg.color = Color(UITheme.Tokens.PANEL_DARK,0.86)
 	layer.add_child(bg)
 
 	var center := CenterContainer.new()
-	center.anchor_right = 1.0
+	center.anchor_right = 0.68
 	center.anchor_bottom = 1.0
 	layer.add_child(center)
 
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(540, 320) * _ui_scale()
-	UITheme.apply_panel(panel, "gold")
+	panel.custom_minimum_size = Vector2(540, 240) * _ui_scale()
+	UITheme.apply_popup_frame(panel, "dark", false)
 	center.add_child(panel)
 
 	var margin := MarginContainer.new()
@@ -958,59 +966,108 @@ func _show_disconnect_result_page(resume_sync_failed: bool = false) -> void:
 	margin.add_child(box)
 
 	var title := Label.new()
-	title.text = Locale.t("result.resume_failed_title") if resume_sync_failed else Locale.t("result.connection_lost_title")
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.name = "TitleLabel"
+	if resume_sync_failed:
+		title.text = Locale.t("result.resume_failed_title")
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	UITheme.apply_title(title, 36)
 	box.add_child(title)
 
 	var body := Label.new()
-	body.text = Locale.t("result.resume_failed_body") if resume_sync_failed else Locale.t("result.connection_lost_body")
 	body.name = "BodyLabel"
-	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	if resume_sync_failed:
+		body.text = Locale.t("result.resume_failed_body")
+	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	UITheme.apply_label(body, true)
 	body.add_theme_font_size_override("font_size", 18)
 	box.add_child(body)
 
-	var button_row := HBoxContainer.new()
-	button_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	button_row.add_theme_constant_override("separation", 18)
-	box.add_child(button_row)
+	var actions := VBoxContainer.new()
+	actions.add_theme_constant_override("separation", 4)
+	box.add_child(actions)
 
 	if resume_sync_failed:
 		var retry_btn := Button.new()
 		retry_btn.text = Locale.t("result.retry_resume")
-		retry_btn.custom_minimum_size = Vector2(170, 48)
-		UITheme.apply_button(retry_btn, "primary")
+		retry_btn.custom_minimum_size.y = 42
+		UITheme.apply_selection_entry(retry_btn)
+		retry_btn.add_theme_font_size_override("font_size", 20 + 2 * int(AppPreferences.get_value("text_size")))
 		retry_btn.pressed.connect(_on_resume_retry_pressed)
-		button_row.add_child(retry_btn)
+		actions.add_child(retry_btn)
 
 	var multiplayer_btn := Button.new()
-	multiplayer_btn.text = Locale.t("result.back_multiplayer")
-	multiplayer_btn.custom_minimum_size = Vector2(170, 48)
-	UITheme.apply_button(multiplayer_btn, "secondary")
-	multiplayer_btn.pressed.connect(_on_disconnect_back_multiplayer_pressed)
-	button_row.add_child(multiplayer_btn)
-	_disconnect_back_btn = multiplayer_btn
+	multiplayer_btn.custom_minimum_size.y = 42
+	UITheme.apply_selection_entry(multiplayer_btn)
+	multiplayer_btn.add_theme_font_size_override("font_size", 20 + 2 * int(AppPreferences.get_value("text_size")))
+	multiplayer_btn.pressed.connect(_on_online_result_back_pressed)
+	actions.add_child(multiplayer_btn)
+	_online_result_back_btn = multiplayer_btn
+	_refresh_online_result_destination()
 
 	var menu_btn := Button.new()
 	menu_btn.text = Locale.t("result.back_menu")
-	menu_btn.custom_minimum_size = Vector2(160, 48)
-	UITheme.apply_button(menu_btn, "secondary")
-	menu_btn.pressed.connect(_on_result_back_menu_pressed)
-	button_row.add_child(menu_btn)
+	menu_btn.custom_minimum_size.y = 42
+	UITheme.apply_selection_entry(menu_btn)
+	menu_btn.add_theme_font_size_override("font_size", 20 + 2 * int(AppPreferences.get_value("text_size")))
+	menu_btn.pressed.connect(_on_result_back_menu_pressed.bind(menu_btn))
+	actions.add_child(menu_btn)
+	if not resume_sync_failed:
+		layer.set_meta("popup_close", _on_online_result_back_pressed)
+		UIMotion.register_popup(layer)
 
-	layer.modulate.a = 0.0
-	panel.scale = Vector2(0.88, 0.88)
-	var twn := create_tween()
-	twn.set_parallel(true)
-	twn.tween_property(layer, "modulate:a", 1.0, 0.20)
-	twn.tween_property(panel, "scale", Vector2.ONE, 0.24).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
+	UITheme.fade_enter(layer, 0.20)
 
 
-func _on_disconnect_back_multiplayer_pressed() -> void:
+func _refresh_online_result_destination() -> void:
+	if not is_instance_valid(_online_result_back_btn):
+		return
+	var room_available := NetworkManager.has_live_server_room() or NetworkManager.can_return_to_lan_room()
+	_online_result_back_btn.text = Locale.t("result.back_room" if room_available else "result.back_multiplayer")
+	if not is_instance_valid(_disconnect_overlay):
+		var result := $CanvasLayer.get_node_or_null("BattleResultLayer")
+		var room_notice := result.find_child("RoomNotice", true, false) as Label if result else null
+		if room_notice:
+			if NetworkManager.is_dedicated_server:
+				var notice_key := ""
+				if not room_available:
+					notice_key = "result.room_connection_lost_after_match"
+				elif NetworkManager.room_wait_reason == "opponent_connection_lost":
+					notice_key = "result.room_opponent_disconnected"
+				elif NetworkManager.room_wait_reason == "opponent_left":
+					notice_key = "result.lan_guest_left"
+				room_notice.text = Locale.t(notice_key) if not notice_key.is_empty() else ""
+			elif NetworkManager.has_vacant_lan_room_after_match():
+				room_notice.text = Locale.t("result.lan_guest_left")
+			elif NetworkManager.session_mode == NetworkManager.SESSION_MODE_LAN_CLIENT and not NetworkManager.is_online:
+				room_notice.text = Locale.t("result.lan_guest_connection_lost")
+			else:
+				room_notice.text = ""
+			room_notice.visible = not room_notice.text.is_empty()
+		return
+	var title := _disconnect_overlay.find_child("TitleLabel", true, false) as Label
+	var body := _disconnect_overlay.find_child("BodyLabel", true, false) as Label
+	if room_available:
+		var opponent_lost_link := NetworkManager.room_wait_reason == "opponent_connection_lost"
+		title.text = Locale.t("result.opponent_connection_lost_title" if opponent_lost_link else "result.opponent_left_title")
+		body.text = Locale.t("result.opponent_left_body")
+	else:
+		title.text = Locale.t("result.connection_lost_title")
+		body.text = Locale.t("result.room_connection_lost_body" if NetworkManager.is_dedicated_server else "result.connection_lost_body")
+
+
+func _on_online_result_back_pressed() -> void:
+	if NetworkManager.room_departure_pending:
+		return
+	if _return_to_server_room():
+		return
+	if NetworkManager.can_return_to_lan_room():
+		PlayerData.return_to_waiting_room = true
+		UIMotion.replace_scene("res://DirectLobby.tscn", true)
+		return
 	NetworkManager.close_connection()
-	UIMotion.change_scene("res://MultiplayerMenu.tscn")
+	NetworkManager.clear_room_session()
+	UIMotion.replace_scene("res://MainMenu.tscn", true, "online")
 
 
 func _result_winner_player(result: String) -> int:
@@ -1025,7 +1082,7 @@ func _did_local_player_win(result: String) -> bool:
 	var winner := _result_winner_player(result)
 	if winner == 0:
 		return false
-	if NetworkManager.is_online:
+	if PlayerData.is_online_battle():
 		return winner == my_player
 	if PlayerData.battle_mode == "practice":
 		return winner == 1
@@ -1034,7 +1091,7 @@ func _did_local_player_win(result: String) -> bool:
 
 func _result_title(result: String) -> String:
 	var winner := _result_winner_player(result)
-	if NetworkManager.is_online:
+	if PlayerData.is_online_battle():
 		return Locale.t("result.online_win") if _did_local_player_win(result) else Locale.t("result.online_loss")
 	if PlayerData.battle_mode == "practice":
 		return Locale.t("result.practice_win") if winner == 1 else Locale.t("result.practice_loss")
@@ -1046,7 +1103,7 @@ func _result_title(result: String) -> String:
 
 
 func _result_mode_text() -> String:
-	if NetworkManager.is_online:
+	if PlayerData.is_online_battle():
 		return Locale.t("result.mode_online")
 	if PlayerData.battle_mode == "practice":
 		return Locale.t("result.mode_practice")
@@ -1054,7 +1111,8 @@ func _result_mode_text() -> String:
 
 
 func _show_battle_result_page(result: String) -> void:
-	_record_match_history("victory" if _did_local_player_win(result) else ("finished" if not NetworkManager.is_online and PlayerData.battle_mode != "practice" else "defeat"), result)
+	_prepare_finished_battle_result()
+	_record_match_history("victory" if _did_local_player_win(result) else ("finished" if not PlayerData.is_online_battle() and PlayerData.battle_mode != "practice" else "defeat"), result)
 	var old_layer := $CanvasLayer.get_node_or_null("BattleResultLayer")
 	if old_layer:
 		old_layer.queue_free()
@@ -1069,21 +1127,18 @@ func _show_battle_result_page(result: String) -> void:
 	var bg := ColorRect.new()
 	bg.anchor_right = 1.0
 	bg.anchor_bottom = 1.0
-	bg.color = Color(0.015, 0.018, 0.026, 0.82)
+	bg.color = Color(UITheme.Tokens.PANEL_DARK, 0.88)
 	layer.add_child(bg)
 
 	var center := CenterContainer.new()
-	center.anchor_right = 1.0
+	center.anchor_right = 0.68
 	center.anchor_bottom = 1.0
 	layer.add_child(center)
 
 	var panel := PanelContainer.new()
-	panel.custom_minimum_size = Vector2(520, 360) * _ui_scale()
-	UITheme.apply_panel(panel, "gold")
+	panel.custom_minimum_size = Vector2(520, 320) * _ui_scale()
+	UITheme.apply_popup_frame(panel, "dark", false)
 	center.add_child(panel)
-	panel.resized.connect(func():
-		panel.pivot_offset = panel.size / 2
-	)
 
 	var margin := MarginContainer.new()
 	margin.add_theme_constant_override("margin_left", 32)
@@ -1098,148 +1153,245 @@ func _show_battle_result_page(result: String) -> void:
 
 	var title := Label.new()
 	title.text = _result_title(result)
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	UITheme.apply_title(title, 42)
 	box.add_child(title)
-
-	var outcome := Label.new()
-	outcome.text = Locale.t("result.victory") if _did_local_player_win(result) else Locale.t("result.defeat")
-	if not NetworkManager.is_online and PlayerData.battle_mode != "practice":
-		outcome.text = Locale.t("result.finished")
-	outcome.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	UITheme.apply_label(outcome, true)
-	outcome.add_theme_font_size_override("font_size", 18)
-	box.add_child(outcome)
 
 	var mode_label := Label.new()
 	var mode_text := _result_mode_text()
 	if PlayerData.battle_mode == "practice":
-		mode_text = "%s · %s" % [mode_text, Locale.t("menu.ai_%s" % PlayerData.practice_ai_difficulty)]
+		mode_text = "%s（%s）" % [mode_text, Locale.t("menu.ai_%s" % PlayerData.practice_ai_difficulty)]
 	mode_label.text = mode_text
-	mode_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	mode_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	UITheme.apply_label(mode_label, true)
 	box.add_child(mode_label)
 
 	var summary := Label.new()
-	summary.text = Locale.t("result.summary", [game.turn_number, game.player_field.player_hp, game.player2_field.player_hp])
-	summary.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	if PlayerData.is_online_battle() or PlayerData.battle_mode == "practice":
+		summary.text = Locale.t("result.summary_personal", [game.turn_number, _my_field().player_hp, _their_field().player_hp])
+	else:
+		summary.text = Locale.t("result.summary", [game.turn_number, game.player_field.player_hp, game.player2_field.player_hp])
+	summary.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	UITheme.apply_label(summary)
 	summary.add_theme_font_size_override("font_size", 18)
 	box.add_child(summary)
 
-	var button_row := HBoxContainer.new()
-	button_row.alignment = BoxContainer.ALIGNMENT_CENTER
-	button_row.add_theme_constant_override("separation", 18)
-	box.add_child(button_row)
+	if PlayerData.is_online_battle():
+		var room_notice := Label.new()
+		room_notice.name = "RoomNotice"
+		room_notice.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		room_notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		UITheme.apply_label(room_notice, true)
+		room_notice.hide()
+		box.add_child(room_notice)
+
+	var actions := VBoxContainer.new()
+	actions.add_theme_constant_override("separation", 4)
+	box.add_child(actions)
 
 	if PlayerData.is_card_playtest_active():
 		var edit_btn := Button.new()
-		edit_btn.text = Locale.t("result.back_editor")
-		edit_btn.custom_minimum_size = Vector2(170, 48)
-		UITheme.apply_button(edit_btn, "primary")
+		edit_btn.text = Locale.t("common.back") if PlayerData.card_playtest_context.has("exit_scene") else Locale.t("result.back_editor")
+		edit_btn.custom_minimum_size.y = 42
+		UITheme.apply_selection_entry(edit_btn)
+		edit_btn.add_theme_font_size_override("font_size", 20 + 2 * int(AppPreferences.get_value("text_size")))
 		edit_btn.pressed.connect(_on_result_back_editor_pressed)
-		button_row.add_child(edit_btn)
+		actions.add_child(edit_btn)
 
 	var again_btn := Button.new()
-	again_btn.text = Locale.t("result.play_again")
-	again_btn.custom_minimum_size = Vector2(160, 48)
-	UITheme.apply_button(again_btn, "secondary" if PlayerData.is_card_playtest_active() else "primary")
-	again_btn.pressed.connect(_on_result_play_again_pressed)
-	button_row.add_child(again_btn)
+	again_btn.custom_minimum_size.y = 42
+	UITheme.apply_selection_entry(again_btn)
+	again_btn.add_theme_font_size_override("font_size", 20 + 2 * int(AppPreferences.get_value("text_size")))
+	actions.add_child(again_btn)
+	if PlayerData.is_online_battle():
+		_online_result_back_btn = again_btn
+		again_btn.pressed.connect(_on_online_result_back_pressed)
+		_refresh_online_result_destination()
+	else:
+		again_btn.text = Locale.t("result.play_again")
+		again_btn.pressed.connect(func(): UIMotion.replace_scene("res://Main.tscn", true))
 
 	var menu_btn := Button.new()
 	menu_btn.text = Locale.t("result.back_menu")
-	menu_btn.custom_minimum_size = Vector2(160, 48)
-	UITheme.apply_button(menu_btn, "secondary")
-	menu_btn.pressed.connect(_on_result_back_menu_pressed)
-	button_row.add_child(menu_btn)
+	menu_btn.custom_minimum_size.y = 42
+	UITheme.apply_selection_entry(menu_btn)
+	menu_btn.add_theme_font_size_override("font_size", 20 + 2 * int(AppPreferences.get_value("text_size")))
+	menu_btn.pressed.connect(_on_result_back_menu_pressed.bind(menu_btn))
+	actions.add_child(menu_btn)
 
-	layer.modulate.a = 0.0
-	panel.scale = Vector2(0.88, 0.88)
-	var twn := create_tween()
-	twn.set_parallel(true)
-	twn.tween_property(layer, "modulate:a", 1.0, 0.20)
-	twn.tween_property(panel, "scale", Vector2.ONE, 0.24).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	# Victory celebration: confetti rain + warm flash; defeat gets a somber pulse.
+	var back_action := _on_result_back_menu_pressed
+	if PlayerData.is_online_battle():
+		back_action = _on_online_result_back_pressed
+	elif PlayerData.is_card_playtest_active():
+		back_action = _on_result_back_editor_pressed
+	layer.set_meta("popup_close", back_action)
+	UIMotion.register_popup(layer)
+
+	UITheme.fade_enter(layer, 0.20)
+	# Leave the result and its choices as the focus of the settled table.
 	if _did_local_player_win(result):
-		BattleFx.victory_confetti($CanvasLayer, _ui_scale(), get_viewport_rect().size)
-		BattleFx.screen_flash($CanvasLayer, Color(1.0, 0.86, 0.4), 0.22, 0.5)
+		BattleFx.screen_flash($CanvasLayer, UITheme.Tokens.WARNING, 0.12, 0.30)
 	else:
-		BattleFx.screen_flash($CanvasLayer, Color(0.4, 0.22, 0.55), 0.16, 0.5)
+		BattleFx.screen_flash($CanvasLayer, UITheme.Tokens.PRIMARY, 0.12, 0.30)
 
 
-func _on_result_play_again_pressed() -> void:
-	if NetworkManager.is_online:
-		NetworkManager.close_connection()
-		UIMotion.change_scene("res://MainMenu.tscn")
-		return
-	get_tree().reload_current_scene()
+func _return_to_server_room() -> bool:
+	if not NetworkManager.return_to_server_room():
+		return false
+	PlayerData.return_to_waiting_room = true
+	UIMotion.replace_scene("res://DedicatedLobby.tscn", true)
+	return true
 
 
 func _on_result_back_editor_pressed() -> void:
+	var destination := str(PlayerData.card_playtest_context.get("exit_scene","res://CardEditor.tscn"))
 	if PlayerData.restore_after_card_playtest():
-		UIMotion.change_scene("res://CardEditor.tscn")
+		UIMotion.replace_scene(destination,true)
 
 
-func _on_result_back_menu_pressed() -> void:
-	NetworkManager.close_connection()
+func _on_result_back_menu_pressed(menu_button: Button = null) -> void:
+	if NetworkManager.room_departure_pending:
+		return
+	var result := $CanvasLayer.get_node_or_null("BattleResultLayer")
+	var show_departure := is_instance_valid(result) and is_instance_valid(menu_button) and NetworkManager.has_live_server_room()
+	var room_button := _online_result_back_btn
+	if show_departure:
+		result.set_meta("popup_close_locked", true)
+		menu_button.disabled = true
+		menu_button.text = Locale.t("wait.leaving_room")
+		if is_instance_valid(room_button):
+			room_button.disabled = true
+	var departed := await NetworkManager.leave_online_room()
+	if not is_inside_tree():
+		return
+	if not departed:
+		if show_departure and is_instance_valid(result) and is_instance_valid(menu_button):
+			result.remove_meta("popup_close_locked")
+			menu_button.disabled = false
+			menu_button.text = Locale.t("result.back_menu")
+			if is_instance_valid(room_button):
+				room_button.disabled = false
+			menu_button.grab_focus()
+		return
 	PlayerData.restore_after_card_playtest()
-	UIMotion.change_scene("res://MainMenu.tscn")
+	UIMotion.replace_scene("res://MainMenu.tscn",true)
 
 
 # ============================================
 # UI refresh
 # ============================================
 
-func _update_status_hud(hud: Panel, field: BattleField, hand_size: int, enemy: bool, active: bool, player_number: int) -> void:
+func _update_status_hud(hud: Panel, field: BattleField, hand_size: int, enemy: bool, active: bool, player_number: int, preview_mana: int = -1) -> void:
 	if hud == null or field == null:
 		return
 	var content := hud.get_node("Margin/Content") as HBoxContainer
 	(content.get_node("SideLabel") as Label).text = Locale.t("battle.enemy") if enemy else Locale.t("battle.you")
-	if not NetworkManager.is_online and PlayerData.battle_mode == "hotseat":
+	if not PlayerData.is_online_battle() and PlayerData.battle_mode == "hotseat":
 		(content.get_node("SideLabel") as Label).text = Locale.t("battle.hotseat_player", [_opponent_player() if enemy else _view_player()])
-	(content.get_node("HpLabel") as Label).text = Locale.t("battle.hp_value", [field.player_hp, field.max_player_hp])
-	(content.get_node("ManaLabel") as Label).text = Locale.t("battle.mana_value", [field.get_total_mana(), field.max_mana])
-	(content.get_node("HandLabel") as Label).text = Locale.t("battle.hand_count", [hand_size, SkillEngine.MAX_HAND_SIZE])
+	var random_resources: Dictionary = _random_resource_override.get(str(player_number),{})
+	var shown_hp := int(random_resources.get("hp",_hero_hp_shown.get(player_number, field.player_hp)))
+	if shown_hp == 0 and _confirmed_game != null:
+		var confirmed_field: BattleField = _confirmed_game.player_field if player_number == 1 else _confirmed_game.player2_field
+		shown_hp = confirmed_field.player_hp
+	(content.get_node("HpLabel") as Label).text = Locale.t("battle.hp_value", [shown_hp, field.max_player_hp])
+	var shown_mana := preview_mana if preview_mana >= 0 else field.get_total_mana()
+	var resources: Dictionary = _hero_resources_shown.get(player_number,{})
+	if not random_resources.is_empty(): resources = random_resources
+	shown_mana = int(resources.get("mana",shown_mana))
+	var shown_points := int(resources.get("points",field.action_points))
+	(content.get_node("ManaLabel") as Label).text = Locale.t("battle.mana_value", [shown_mana, field.max_mana])
+	var action_label := content.get_node("HandLabel") as Label
+	action_label.text = Locale.t("battle.action_points", [shown_points, field.action_budget]) if game.battle_config.has("action_base") else Locale.t("battle.hand_count", [hand_size, SkillEngine.MAX_HAND_SIZE])
+	action_label.add_theme_color_override("font_color", UITheme.COLOR_GOLD)
+	action_label.tooltip_text = Locale.t("battle.hand_count", [hand_size, SkillEngine.MAX_HAND_SIZE]) + "\n" + Locale.t("battle.action_help")
 
 	var hp_bar := content.get_node("HpBar") as ProgressBar
 	hp_bar.max_value = max(1, field.max_player_hp)
 	var mana_bar := content.get_node("ManaBar") as ProgressBar
-	mana_bar.max_value = max(1, max(field.max_mana, field.get_total_mana()))
-	var hp_value: int = clampi(field.player_hp, 0, field.max_player_hp)
-	var mana_value: int = maxi(0, field.get_total_mana())
+	mana_bar.max_value = max(1, max(field.max_mana, shown_mana))
+	var hp_value: int = clampi(shown_hp, 0, field.max_player_hp)
+	var mana_value: int = maxi(0, shown_mana)
+	# Predictions can update the displayed total, but only confirmed state
+	# and staged authority playback should announce a gain.
+	var feedback_mana := mana_value
+	if _confirmed_game != null and not resources.has("mana"):
+		var confirmed_field: BattleField = _confirmed_game.player_field if player_number == 1 else _confirmed_game.player2_field
+		feedback_mana = maxi(0, confirmed_field.get_total_mana())
+	var action_bar := content.get_node("ActionBar") as ProgressBar
+	action_bar.visible = game.battle_config.has("action_base")
+	action_bar.max_value = max(1, field.action_budget)
+	action_bar.tooltip_text = action_label.text + "\n" + Locale.t("battle.action_help")
 	var hud_key: int = hud.get_instance_id()
 	var previous: Dictionary = _status_hud_state.get(hud_key, {})
 	var same_player: bool = int(previous.get("player", -1)) == player_number
 	var may_animate: bool = same_player and not _suppress_status_feedback_once
 	var hp_delta: int = hp_value - int(previous.get("hp", hp_value)) if same_player else 0
-	var mana_delta: int = mana_value - int(previous.get("mana", mana_value)) if same_player else 0
-	_set_status_bar_value(hp_bar, hp_value, may_animate and hp_delta != 0)
-	_set_status_bar_value(mana_bar, mana_value, may_animate and mana_delta > 0)
-	if may_animate and hp_delta != 0:
+	var mana_delta: int = feedback_mana - int(previous.get("feedback_mana", feedback_mana)) if same_player else 0
+	_set_status_bar_value(hp_bar, hp_value, may_animate and not _hero_hp_shown.has(player_number))
+	_set_status_bar_value(mana_bar, mana_value, may_animate)
+	_set_status_bar_value(action_bar, shown_points, may_animate)
+	if may_animate and hp_delta != 0 and int(_hero_damage_running.get(player_number,0)) == 0:
+		if hp_delta > 0: AppAudio.play("heal")
 		BattleFx.status_bar_feedback($CanvasLayer, hp_bar, hp_delta, "heal" if hp_delta > 0 else "damage", _ui_scale())
 	if may_animate and mana_delta > 0:
+		AppAudio.play("mana")
 		BattleFx.status_bar_feedback($CanvasLayer, mana_bar, mana_delta, "mana", _ui_scale())
-	_status_hud_state[hud_key] = {"player": player_number, "hp": hp_value, "mana": mana_value}
+	_status_hud_state[hud_key] = {"player": player_number, "hp": hp_value, "feedback_mana": feedback_mana, "action": shown_points}
 	_apply_status_hud_theme(hud, enemy, active)
 
 
-func _set_status_bar_value(bar: ProgressBar, target_value: float, animate: bool) -> void:
+func _set_status_bar_value(bar: ProgressBar, target_value: float, animate: bool, duration: float = 0.38) -> void:
 	var key: int = bar.get_instance_id()
 	var old_tween: Tween = _status_value_tweens.get(key)
+	var should_animate: bool = animate and not bool(AppPreferences.get_value("reduced_motion"))
+	if should_animate and old_tween != null and old_tween.is_valid() and old_tween.is_running() \
+			and is_equal_approx(float(bar.get_meta("status_animation_target",bar.value)),target_value):
+		return
 	if old_tween != null and old_tween.is_valid():
 		old_tween.kill()
-	if not animate:
+	bar.scale = Vector2.ONE
+	if not should_animate or is_equal_approx(bar.value,target_value):
 		bar.value = target_value
 		_status_value_tweens.erase(key)
 		return
+	bar.set_meta("status_animation_target",target_value)
 	bar.pivot_offset = bar.size * 0.5
 	var twn := create_tween().set_parallel(true)
 	twn.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	twn.tween_property(bar, "value", target_value, 0.38)
+	twn.tween_property(bar, "value", target_value, duration)
 	twn.tween_property(bar, "scale", Vector2(1.0, 1.16), 0.09)
 	twn.tween_property(bar, "scale", Vector2.ONE, 0.22).set_delay(0.09).set_trans(Tween.TRANS_BACK)
 	_status_value_tweens[key] = twn
+
+
+func _refresh_end_turn_damage_preview() -> void:
+	if game == null or not is_instance_valid(enemy_status_hud): return
+	var content: HBoxContainer = enemy_status_hud.get_node("Margin/Content")
+	var hp_bar: ProgressBar = content.get_node("HpBar")
+	var active: bool = game.is_player_turn and game.current_player == _view_player() and not battle_finished
+	var damage := int(game.preview_end_turn_attacks(face_mana_button.button_pressed).total_damage) if active else 0
+	preload("res://presentation/ResourceCostPreview.gd").update(hp_bar,damage,_their_field().player_hp,false,Color("f4cf61"))
+	var overlay := hp_bar.get_node_or_null("ResourceCostPreview") as Control
+	if damage<=0 or overlay==null: return
+	var amount := overlay.get_node_or_null("DamageAmount") as Label
+	if amount==null:
+		amount = Label.new()
+		amount.name = "DamageAmount"
+		amount.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		amount.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		amount.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		amount.add_theme_font_override("font",UITheme.medium_font())
+		amount.add_theme_color_override("font_color",Color("fff0bc"))
+		amount.add_theme_color_override("font_outline_color",Color("a63730"))
+		overlay.add_child(amount)
+	var font_size := maxi(10,roundi(11*_ui_scale()))
+	amount.add_theme_font_size_override("font_size",font_size)
+	amount.add_theme_constant_override("outline_size",maxi(2,roundi(2*_ui_scale())))
+	amount.text = str(damage)
+	amount.size = Vector2(maxf(32*_ui_scale(),amount.get_minimum_size().x),amount.get_theme_font("font").get_height(font_size)+4)
+	amount.position = Vector2((overlay.size.x-amount.size.x)*0.5,maxf(2,hp_bar.global_position.y-amount.size.y-1)-overlay.global_position.y)
+
 
 
 func _update_battle_status_huds() -> void:
@@ -1247,8 +1399,10 @@ func _update_battle_status_huds() -> void:
 		return
 	var my_turn_active: bool = game.is_player_turn and game.current_player == _view_player()
 	var enemy_turn_active: bool = game.is_player_turn and not my_turn_active
-	_update_status_hud(player_status_hud, _my_field(), _my_hand().size(), false, my_turn_active, _view_player())
+	var preview := _deployment_preview()
+	_update_status_hud(player_status_hud, _my_field(), preview["hand"].size(), false, my_turn_active, _view_player(), preview["mana"])
 	_update_status_hud(enemy_status_hud, _their_field(), _hand_for_player(_opponent_player()).size(), true, enemy_turn_active, _opponent_player())
+	_refresh_end_turn_damage_preview()
 	_suppress_status_feedback_once = false
 
 
@@ -1265,40 +1419,70 @@ func update_entire_screen():
 
 func _do_update_entire_screen() -> void:
 	_screen_refresh_queued = false
+	_update_pile_labels()
+	_sync_face_mana_toggle()
 	if battle_finished:
 		return
+	if _web_playback_allows_input() and not is_resolution_locked() and is_instance_valid(_resolution_blocker):
+		_resolution_blocker.hide()
 	if turn_label:
-		if game.is_player_turn:
+		if _result_waiting_for_feedback:
+			turn_label.text = Locale.t("battle.finishing_match")
+		elif not game.pending_cost_choices.is_empty() and game.pending_cost_choices.front().player != _view_player():
+			turn_label.text = Locale.t("battle.waiting_card_choice")
+		elif game.is_player_turn:
 			var turn_owner := _turn_owner_text()
-			turn_label.text = "%s  ·  %s" % [Locale.t("battle.turn_label", [game.turn_number]), turn_owner]
+			turn_label.text = ("%s，%s" if Locale.language=="zh" else "%s: %s") % [Locale.t("battle.turn_label", [game.turn_number]), turn_owner]
 		else:
 			turn_label.text = Locale.t("battle.switching")
 	_update_battle_status_huds()
 	if end_turn_button:
-		end_turn_button.disabled = match_paused or not game.is_player_turn or (NetworkManager.is_online and (game.current_player != my_player or (not NetworkManager.is_authority() and NetworkManager.pending_game_command_count() > 0)))
+		end_turn_button.disabled = _turn_ending or not _owns_current_turn()
+		end_turn_button.tooltip_text = _end_turn_preview_text()
 
-	var my_field = _my_field()
+	var my_slots := _random_visible_slots(_view_player(),_visible_player_slots())
 	var their_field = _their_field()
+	var their_slots := _random_visible_slots(3-_view_player(),their_field.slots)
 	var p_slots = player_side_ui.get_children()
 	var e_slots = enemy_side_ui.get_children()
 
 	for i in range(5):
 		_scale_control(p_slots[i], BASE_SLOT_SIZE)
 		_scale_control(e_slots[i], BASE_SLOT_SIZE)
-		p_slots[i].set_card(my_field.slots[i])
-		if my_field.slots[i] != null and p_slots[i].current_card_ui != null:
-			p_slots[i].current_card_ui.set_card(my_field.slots[i])
+		p_slots[i].set_card(my_slots[i])
+		if my_slots[i] != null and p_slots[i].current_card_ui != null:
+			p_slots[i].current_card_ui.set_card(my_slots[i])
 			_scale_control(p_slots[i].current_card_ui, BASE_CARD_SIZE)
 
-		e_slots[i].set_card(their_field.slots[i])
-		if their_field.slots[i] != null and e_slots[i].current_card_ui != null:
-			e_slots[i].current_card_ui.set_card(their_field.slots[i])
+		e_slots[i].set_card(their_slots[i])
+		if their_slots[i] != null and e_slots[i].current_card_ui != null:
+			e_slots[i].current_card_ui.set_card(their_slots[i])
 			_scale_control(e_slots[i].current_card_ui, BASE_CARD_SIZE)
+	for slot_index in range(p_slots.size()):
+		var card_ui = p_slots[slot_index].current_card_ui
+		if card_ui == null: continue
+		var interactive: bool = game.is_player_turn and is_my_turn() and game.current_player == _view_player()
+		var ready: Dictionary = game.unit_action_readiness(slot_index)
+		if card_ui.normal_atk_btn != null:
+			card_ui.normal_atk_btn.disabled = not interactive or not ready.attack
+			card_ui.normal_atk_btn.modulate = Color.WHITE
+		for entry in [[card_ui.skill1_btn, 0], [card_ui.skill2_btn, 1], [card_ui.skill3_btn, 2]]:
+			if entry[1] >= card_ui.current_card_data.skills.size(): continue
+			if str(card_ui.current_card_data.skills[entry[1]].get("trigger", "")) != SkillEngine.TRIGGER_ON_ACTIVATE: continue
+			if not interactive or not ready.skills.has(entry[1]):
+				entry[0].disabled = true
+				entry[0].modulate = Color.WHITE
+				if not game.can_pay_action():
+					entry[0].tooltip_text += "\n" + Locale.t("tip.insufficient_action")
+				elif game.turn_number <= 1 and SkillRegistry.skill_changes_enemy_hp_or_presence(card_ui.current_card_data.skills[entry[1]]):
+					entry[0].tooltip_text += "\n" + Locale.t("tip.no_enemy_hp_effect_turn1")
 	_toggle_turn_cover()
 	_update_action_glows()
 	_update_ui_state_motion()
 	_refresh_hand_castability()
 	_apply_hp_presentation_overrides()
+	if _random_board_override.is_empty() and _random_feedback_pending==0 and _random_unbatched_events.is_empty():
+		_random_last_shown_board = _capture_random_board()
 
 
 # Re-applies green/red cost tinting to every hand card so the affordance stays
@@ -1332,14 +1516,18 @@ func _update_ui_state_motion() -> void:
 		_turn_last_text = turn_label.text
 		if _turn_pop_tween and _turn_pop_tween.is_valid():
 			_turn_pop_tween.kill()
-		turn_label.pivot_offset = turn_label.size / 2
+		turn_label.pivot_offset = Vector2(0, turn_label.size.y * 0.5)
 		_turn_pop_tween = create_tween()
 		_turn_pop_tween.tween_property(turn_label, "scale", Vector2(1.06, 1.06), 0.09).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 		_turn_pop_tween.tween_property(turn_label, "scale", Vector2.ONE, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 
 
 func _process(_delta):
+	_sync_face_mana_toggle()
 	_process_resume_sync()
+	if remote_arrow_source >= 0 and (not _can_show_remote_targeting() or Time.get_ticks_msec() >= _remote_arrow_expires_at):
+		remote_arrow_source = -1
+		remote_arrow_target = -1
 	if is_my_turn():
 		var source: int = -1
 		var from_hand: bool = false
@@ -1372,10 +1560,14 @@ func _process(_delta):
 					hovered = i
 					break
 			# Hand-cast aiming is private; only field-source arrows sync to the opponent.
-			if not from_hand and hovered != last_hovered_target:
+			if not from_hand:
+				var hovering_changed := hovered != last_hovered_target
 				last_hovered_target = hovered
-				if NetworkManager.is_online:
-					NetworkManager.rpc_targeting_arrow.rpc(source, hovered, game.current_player)
+				if PlayerData.is_online_battle():
+					var now := Time.get_ticks_msec()
+					if hovering_changed or (hovered >= 0 and now >= _next_targeting_refresh):
+						_next_targeting_refresh = now + TARGETING_ARROW_REFRESH_MS
+						_sync_targeting_state()
 		else:
 			attack_arrow.visible = false
 			last_hovered_target = -1
@@ -1394,125 +1586,6 @@ func _process(_delta):
 	_update_slot_highlights()
 
 
-# Cyan marks every legal destination; the hovered legal target turns gold.
-# A guaranteed lethal outcome overrides both with a red glow. Recomputed every
-# frame, so neither target nor lethal highlights can go stale after cancelling.
-func _update_slot_highlights() -> void:
-	var my_ui: Array = _my_slots_ui()
-	var their_ui: Array = _their_slots_ui()
-	var targets: Array = []  # [slots_ui, index, hovered]
-	var mouse := get_global_mouse_position()
-	if get_viewport().gui_is_dragging():
-		# Field moves and minion summons can only land on our empty slots.
-		for i in range(my_ui.size()):
-			var s: Control = my_ui[i]
-			if s.get("current_card_data") == null:
-				targets.append([my_ui, i, Rect2(s.global_position, s.size).has_point(mouse)])
-	elif current_attacker_idx != -1 or summon_targeting or activate_targeting or cast_targeting or parasite_targeting:
-		var sides: Array = []
-		if parasite_targeting:
-			sides = [my_ui, their_ui]
-		elif _targeting_skill_wants_ally():
-			sides = [my_ui]
-		else:
-			sides = [their_ui]
-		for slots_ui in sides:
-			var player: int = _view_player() if slots_ui == my_ui else _opponent_player()
-			for i in range(slots_ui.size()):
-				var s: Control = slots_ui[i]
-				var card: CardData = _field_for_player(player).slots[i]
-				if card == null:
-					continue
-				var legal := true
-				if slots_ui == their_ui and not parasite_targeting and _their_field().has_any_taunt():
-					legal = card.has_taunt()
-				if legal:
-					targets.append([slots_ui, i, Rect2(s.global_position, s.size).has_point(mouse)])
-	for slots_ui in [my_ui, their_ui]:
-		for s in slots_ui:
-			if s.has_method("set_target_hint"):
-				s.set_target_hint(false)
-			else:
-				s.set_highlighted(false)
-			if s.has_method("set_lethal_hint"):
-				s.set_lethal_hint(false)
-	for entry in targets:
-		var slot = entry[0][entry[1]]
-		if slot.has_method("set_target_hint"):
-			slot.set_target_hint(true, bool(entry[2]))
-		else:
-			slot.set_highlighted(bool(entry[2]))
-		var target_player: int = _view_player() if entry[0] == my_ui else _opponent_player()
-		var target_card: CardData = _field_for_player(target_player).slots[int(entry[1])]
-		if slot.has_method("set_lethal_hint") and _targeting_action_can_kill(target_card, target_player, int(entry[1])):
-			slot.set_lethal_hint(true)
-
-
-func _targeting_action_can_kill(target: CardData, target_player: int, target_slot: int) -> bool:
-	if target == null or parasite_targeting:
-		return false
-	if current_attacker_idx >= 0:
-		var attacker: CardData = _my_field().slots[current_attacker_idx]
-		if attacker == null or target_player != _opponent_player():
-			return false
-		var damage := attacker.effective_atk()
-		damage = maxi(0, int(floor(float(damage) * (1.0 - float(target.get_damage_reduction()) / 100.0))))
-		# One directed hit is fully intercepted by the outermost parasite even
-		# when its damage exceeds the parasite's remaining HP.
-		if ParasiteRules.has_damage_absorber(target) or target.immune_lethal:
-			return false
-		return damage >= target.hp + target.temp_hp
-
-	var skill := _current_targeting_skill()
-	var source := _current_targeting_source_card()
-	if skill.is_empty() or source == null:
-		return false
-	var context: Dictionary = game.make_skill_context_for_player(_view_player(), _current_targeting_source_slot(), target_slot, target_player)
-	return SkillEngine.predicts_target_lethal(skill, source, target, context)
-
-
-func _current_targeting_source_card() -> CardData:
-	var source_slot := _current_targeting_source_slot()
-	if source_slot >= 0:
-		return _my_field().slots[source_slot]
-	if cast_targeting:
-		var hand := _my_hand()
-		return hand[cast_hand_index] if cast_hand_index >= 0 and cast_hand_index < hand.size() else null
-	return null
-
-
-func _current_targeting_source_slot() -> int:
-	if summon_targeting:
-		return summon_source_slot
-	if activate_targeting:
-		return activate_source_slot
-	return -1
-
-
-# Pulsing gold border on friendly cards that can still act this turn.
-func _update_action_glows() -> void:
-	if battle_finished:
-		return
-	var my_ui: Array = _my_slots_ui()
-	var their_ui: Array = _their_slots_ui()
-	for i in range(my_ui.size()):
-		my_ui[i].set_action_glow(_card_can_act(_my_field().slots[i]))
-	for s in their_ui:
-		s.set_action_glow(false)
-
-
-func _card_can_act(card: CardData) -> bool:
-	if card == null or not card.is_alive():
-		return false
-	if not game.is_player_turn or not is_my_turn():
-		return false
-	if card.is_silenced() and not card.attack_ignores_silence:
-		return false
-	if card.has_acted:
-		return false
-	if game.turn_number > 1 and card.effective_atk() > 0:
-		return true
-	for i in range(card.skills.size()):
-		if not card.skills_used.has(i):
-			return true
-	return false
+func _can_show_remote_targeting() -> bool:
+	return game.is_player_turn and game.current_player != _view_player() and not battle_finished \
+		and not _result_waiting_for_feedback and not match_paused and not _waiting_for_room_link()

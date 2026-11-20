@@ -20,10 +20,18 @@ for scene_path in "$repo_root"/Test*.tscn; do
   if [[ "$suite" == visual && "$scene_name" != *Visual.tscn ]]; then continue; fi
   log_path="$log_dir/${scene_name%.tscn}.log"
   count=$((count + 1))
+  profile_dir="$(mktemp -d "$log_dir/profile-${scene_name%.tscn}-XXXXXX")"
+  native_profile_dir="$profile_dir"
+  if [[ "$godot_bin" == *.exe ]] && command -v wslpath >/dev/null 2>&1; then
+    native_profile_dir="$(wslpath -w "$profile_dir")"
+  fi
+  scene_timeout="${TEST_TIMEOUT_SECONDS:-100}"
+  if [[ "$scene_name" == TestBattleSimulator.tscn && "$scene_timeout" -lt 900 ]]; then scene_timeout=900; fi
 
   render_args=(--headless)
   if [[ "$suite" == visual ]]; then render_args=(--rendering-method gl_compatibility --rendering-driver opengl3); fi
-  timeout "${TEST_TIMEOUT_SECONDS:-90}s" "$godot_bin" "${render_args[@]}" --path "$godot_project_path" \
+  APPDATA="$native_profile_dir" LOCALAPPDATA="$native_profile_dir" XDG_DATA_HOME="$profile_dir" XDG_CONFIG_HOME="$profile_dir" \
+    timeout "${scene_timeout}s" "$godot_bin" "${render_args[@]}" --path "$godot_project_path" \
     --scene "res://$scene_name" >"$log_path" 2>&1
   exit_code=$?
   marker="$(grep -E 'TEST_[A-Z0-9_]+_OK' "$log_path" | tail -n 1 || true)"

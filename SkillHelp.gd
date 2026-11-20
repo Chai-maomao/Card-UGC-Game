@@ -18,10 +18,10 @@ const EXTRA := {
 	"logic:and": ["并且：两侧条件都成立时才成立。", "AND: true only if both conditions are true."],
 	"logic:or": ["或者：任意一侧条件成立时就成立。", "OR: true if either condition is true."],
 	"logic:not": ["取反：将条件的成立与不成立互换。", "NOT: reverse the condition's result."],
-	"math:+": ["加法：两侧数值相加。右键可设置结果取整方式。", "Add both values. Right-click to set result rounding."],
-	"math:-": ["减法：左侧数值减去右侧数值。右键可设置结果取整方式。", "Subtract the right value from the left. Right-click for rounding."],
-	"math:*": ["乘法：两侧数值相乘。右键可设置结果取整方式。", "Multiply both values. Right-click for rounding."],
-	"math:/": ["除法：左侧除以右侧，默认四舍五入；右键可改向上或向下取整。除以零返回零。", "Divide left by right; round to nearest by default. Right-click for ceil/floor. Division by zero returns zero."],
+	"math:+": ["加法：两侧数值相加。右键或触屏长按可设置结果取整方式。", "Add both values. Right-click or touch and hold to set result rounding."],
+	"math:-": ["减法：左侧数值减去右侧数值。右键或触屏长按可设置结果取整方式。", "Subtract the right value from the left. Right-click or touch and hold for rounding."],
+	"math:*": ["乘法：两侧数值相乘。右键或触屏长按可设置结果取整方式。", "Multiply both values. Right-click or touch and hold for rounding."],
+	"math:/": ["除法：左侧除以右侧，默认四舍五入；右键或触屏长按可改向上或向下取整。除以零返回零。", "Divide left by right; round to nearest by default. Right-click or touch and hold for ceil/floor. Division by zero returns zero."],
 	"math:rand": ["随机数：在两侧数值之间抽取一个整数，包含两端；上下界写反也可使用。", "Pick an integer between both values, inclusive. Reversed bounds are accepted."],
 	"buff:immune_lethal": ["免死：抵挡一次致命伤害，触发后消耗。", "Survive one lethal hit; consumed when triggered."],
 	"card_type:minion": ["单位卡：消耗圣水部署到战场格子，有生命与攻击，可配置主动或被动技能。", "Unit: deploy into a field slot using mana. Has HP, attack, and active or passive skills."],
@@ -30,8 +30,11 @@ const EXTRA := {
 }
 
 
-static func description(category: String, id: String) -> String:
+static func description(category: String, id: String, card_type: String = "") -> String:
 	if category == "trigger":
+		if card_type.is_empty(): card_type = str(PlayerData.card_draft.get("card_type","minion"))
+		if card_type == "parasite" and ParasiteRules.is_passive_trigger(id):
+			return Locale.t("skill_editor.trigger_help.parasite."+id)
 		return Locale.t("skill_editor.trigger_help." + id)
 	var key := category + ":" + id
 	if EXTRA.has(key):
@@ -41,6 +44,7 @@ static func description(category: String, id: String) -> String:
 
 
 static func palette(block: SkillPaletteBlock) -> String:
+	if block.buff_id != "": return description("buff", block.buff_id)
 	for pair in [["effect", block.effect_id], ["condition", block.condition_id], ["value_var", block.var_id],
 		["boolean", block.boolean_kind], ["math", block.expr_kind], ["logic", block.logic_kind],
 		["target", block.target_kind], ["target_side", block.side_kind]]:

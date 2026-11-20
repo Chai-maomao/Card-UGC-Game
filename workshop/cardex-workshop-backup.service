@@ -1,0 +1,7 @@
+[Unit]
+Description=Back up CARDEX workshop database
+
+[Service]
+Type=oneshot
+UMask=0077
+ExecStart=/usr/bin/python3 /opt/cardex-workshop/backup.py --db /var/lib/cardex-workshop/workshop.sqlite3 --folder /var/backups/cardex-workshop

@@ -17,7 +17,8 @@ var _error_banner: Button
 func collect_errors() -> Array:
 	var errors: Array = []
 	for issue in collect_issues():
-		errors.append(issue.get("message", ""))
+		if not errors.has(issue.get("message", "")):
+			errors.append(issue.get("message", ""))
 	return errors
 
 
@@ -28,7 +29,7 @@ func collect_issues() -> Array:
 		issues.append({"message": Locale.t("skill_editor.error_empty_skill"), "path": [], "kind": "empty"})
 	walk_issues(effect_data, issues, [])
 	var trigger_id := str(editor.get("current_trigger_key"))
-	for issue in collect_semantic_issues(effect_data, trigger_id):
+	for issue in collect_semantic_issues(effect_data, trigger_id, editor.call("_is_talent_mode")):
 		issues.append(issue)
 	for safety_issue in _UgcSafety.validate_skill({"effects": effect_data}):
 		var path: Array = safety_issue.get("path", []).duplicate()
@@ -38,9 +39,9 @@ func collect_issues() -> Array:
 	return issues
 
 
-static func collect_semantic_issues(effects: Array, trigger_id: String = "") -> Array:
+static func collect_semantic_issues(effects: Array, trigger_id: String = "", talent_mode: bool = false) -> Array:
 	var issues: Array = []
-	_walk_semantic_issues(effects, trigger_id, issues, [])
+	_walk_semantic_issues(effects, trigger_id, issues, [], talent_mode)
 	var directed_sides: Dictionary = {}
 	_collect_directed_sides(effects, directed_sides)
 	if directed_sides.has(SkillEngine.TARGET_SIDE_ENEMY) and directed_sides.has(SkillEngine.TARGET_SIDE_ALLY):
@@ -65,7 +66,7 @@ static func _collect_directed_sides(effects: Array, found: Dictionary) -> void:
 				_collect_directed_sides(nested, found)
 
 
-static func _walk_semantic_issues(effects: Array, trigger_id: String, issues: Array, base_path: Array) -> void:
+static func _walk_semantic_issues(effects: Array, trigger_id: String, issues: Array, base_path: Array, talent_mode: bool = false) -> void:
 	for index in range(effects.size()):
 		if not effects[index] is Dictionary:
 			continue
@@ -99,16 +100,27 @@ static func _walk_semantic_issues(effects: Array, trigger_id: String, issues: Ar
 		if effect_id == SkillEngine.EFFECT_CHARM and trigger_id == SkillEngine.TRIGGER_ON_DEATH \
 				and str(eff.get("target", "")) in [SkillEngine.TARGET_SELF, SkillEngine.TARGET_SELF_SIDES]:
 			issues.append({"message": Locale.t("skill_editor.error_death_charm_self"), "path": path, "kind": "target"})
-		var is_talent_trigger := trigger_id in [SkillEngine.TRIGGER_ALWAYS, SkillEngine.TRIGGER_ON_ADDED, SkillEngine.TRIGGER_ON_DISCARDED, SkillEngine.TRIGGER_ON_BOARD_CHANGED]
-		if is_talent_trigger and not SkillRegistry.is_effect_allowed_for_talent_trigger(effect_id, trigger_id):
+		var is_talent_trigger := talent_mode or trigger_id == SkillEngine.TRIGGER_ALWAYS
+		if (is_talent_trigger or SkillRegistry.is_talent_only_effect(effect_id)) and not SkillRegistry.is_effect_allowed_for_talent_trigger(effect_id, trigger_id):
 			issues.append({"message": Locale.t("skill_editor.error_talent_effect_trigger"), "path": path, "kind": "effect"})
 		if effect_id == SkillEngine.EFFECT_ADD_BUFF and str(eff.get("buff_id", "")) == "":
 			issues.append({"message": Locale.t("skill_editor.error_missing_buff"), "path": path, "kind": "buff"})
 		for branch in ["then_effects", "else_effects"]:
 			var nested = eff.get(branch, [])
 			if nested is Array:
-				_walk_semantic_issues(nested, trigger_id, issues, path + ["then" if branch == "then_effects" else "else"])
+				_walk_semantic_issues(nested, trigger_id, issues, path + ["then" if branch == "then_effects" else "else"], talent_mode)
 
+
+static func _missing_condition_slots(cond: Dictionary, path: Array = [], depth: int = 0) -> Array:
+	if depth > _UgcSafety.MAX_EXPRESSION_NESTING_DEPTH: return []
+	if cond.has("logic"):
+		var missing: Array = []
+		var keys: Array = ["child"] if cond.get("logic") == "not" else ["lhs", "rhs"]
+		for key in keys:
+			missing.append_array(_missing_condition_slots(cond.get(key, {}), path + [key], depth + 1))
+		return missing
+	if cond.has("lhs") and cond.has("rhs") or str(cond.get("condition_type", "")) not in ["", SkillEngine.CONDITION_NONE]: return []
+	return [path]
 
 static func _condition_uses_target(cond: Dictionary) -> bool:
 	if SkillRegistry.is_target_relative_condition(str(cond.get("condition_type", ""))):
@@ -152,24 +164,32 @@ func walk_errors(list: Array, errors: Array) -> void:
 	var issues: Array = []
 	walk_issues(list, issues, [])
 	for issue in issues:
-		errors.append(issue.get("message", ""))
+		if not errors.has(issue.get("message", "")):
+			errors.append(issue.get("message", ""))
 
 
-func walk_issues(list: Array, issues: Array, base_path: Array) -> void:
+func walk_issues(list: Array, issues: Array, base_path: Array, talent_mode: bool = false) -> void:
 	for index in range(list.size()):
 		var eff = list[index]
 		var eff_dict: Dictionary = eff
 		var path := base_path.duplicate()
 		path.append(index)
 		var effect_id: String = str(eff_dict.get("effect", ""))
+		if effect_id in [SkillEngine.EFFECT_IF, SkillEngine.EFFECT_IF_ELSE]:
+			_number_issues_in_condition(SkillEngine._condition_dict(eff_dict), issues, path)
+		elif effect_id == SkillEngine.EFFECT_REPEAT and eff_dict.has("repeat_expr"):
+			_number_issues(eff_dict.repeat_expr, issues, path, "repeat")
+		elif effect_id != SkillEngine.EFFECT_REPEAT and SkillRegistry.effect_uses_value(eff_dict):
+			if eff_dict.has("value_expr"):
+				_number_issues(eff_dict.value_expr, issues, path)
+			elif str(eff_dict.get("value_var", "")) == "" and not eff_dict.has("value") and not (eff_dict.has("value_min") and eff_dict.has("value_max")):
+				issues.append({"message":Locale.t("skill_editor.error_missing_value"), "path":path, "kind":"value", "operand":eff_dict})
 		if effect_id == SkillEngine.EFFECT_IF_ELSE or effect_id == SkillEngine.EFFECT_IF:
 			var cond := SkillEngine._condition_dict(eff_dict)
 			# Valid = a dropped boolean comparison / logic block (lhs or logic)
 			# OR a legacy condition reporter with a concrete condition_type.
-			var has_cond: bool = cond.has("lhs") or cond.has("logic") \
-					or str(cond.get("condition_type", "")) not in ["", SkillEngine.CONDITION_NONE]
-			if not has_cond:
-				issues.append({"message": Locale.t("skill_editor.error_missing_condition"), "path": path, "kind": "condition"})
+			for socket_path in _missing_condition_slots(cond):
+				issues.append({"message": Locale.t("skill_editor.error_missing_condition"), "path": path, "kind": "condition", "condition_path":socket_path})
 			var then_path := path.duplicate()
 			then_path.append("then")
 			walk_issues(eff_dict.get("then_effects", []), issues, then_path)
@@ -214,6 +234,21 @@ static func _target_needs_side(target: String) -> bool:
 	return target in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES, SkillEngine.TARGET_ALL,
 			SkillEngine.TARGET_PLAYER, SkillEngine.TARGET_MALE, SkillEngine.TARGET_FEMALE, SkillEngine.TARGET_NONHUMAN]
 
+static func _number_issues(operand: Dictionary, issues: Array, path: Array, kind := "value") -> void:
+	if operand.get("kind") == "expr":
+		_number_issues(operand.get("a", {}), issues, path, kind)
+		_number_issues(operand.get("b", {}), issues, path, kind)
+	elif operand.get("kind") != "var" and not operand.has("value"):
+		issues.append({"message":Locale.t("skill_editor.error_missing_value"), "path":path, "kind":kind, "operand":operand})
+
+static func _number_issues_in_condition(condition: Dictionary, issues: Array, path: Array) -> void:
+	if condition.has("logic"):
+		for key in (["child"] if condition.logic == "not" else ["lhs", "rhs"]):
+			_number_issues_in_condition(condition.get(key, {}), issues, path)
+	elif condition.has("lhs") and condition.get("op") != "has":
+		_number_issues(condition.get("lhs", {}), issues, path)
+		_number_issues(condition.get("rhs", {}), issues, path)
+
 
 # A directed target ("单体" / "目标+相邻") with the side left at 全体 only
 # ever resolves to the enemy field (see SkillTargetResolver), so the config
@@ -223,84 +258,28 @@ static func _target_side_ineffective(target: String, side: String) -> bool:
 			and side == SkillEngine.TARGET_SIDE_ALL
 
 
-# Shows a banner above the script listing every compile error (hidden when
-# the skill is valid). Rebuilt cheaply on every refresh / parameter change.
-# An untouched/empty skill is not an "error" — it gets a soft neutral hint so
-# new users aren't scared by a red warning before they start building.
+# Kept as a cleanup hook for an already-open editor; errors are shown on demand.
 func refresh_banner() -> void:
-	var effects_list: VBoxContainer = editor.get("effects_list")
-	var parent: VBoxContainer = effects_list.get_parent()
-	if _error_banner != null and is_instance_valid(_error_banner):
+	# Validation belongs to explicit Compile/Save actions, not a permanent
+	# document header. Retire any banner retained by an already-open editor.
+	if is_instance_valid(_error_banner):
 		_error_banner.queue_free()
 		_error_banner = null
-	var issues := collect_issues()
-	if issues.is_empty():
-		return
-	var errors: Array = []
-	for issue in issues:
-		errors.append(issue.get("message", ""))
-	var empty_only: bool = issues.size() == 1 and str(issues[0].get("kind", "")) == "empty"
-	_error_banner = Button.new()
-	_error_banner.alignment = HORIZONTAL_ALIGNMENT_LEFT
-	_error_banner.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	if empty_only:
-		_error_banner.text = Locale.t("skill_editor.error_empty_skill")
-		_error_banner.add_theme_font_size_override("font_size", 12)
-		_error_banner.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		var hint_st := StyleBoxFlat.new()
-		hint_st.bg_color = Color(0.16, 0.20, 0.28, 0.90)
-		hint_st.border_color = Color(0.45, 0.52, 0.68, 0.6)
-		hint_st.set_border_width_all(1)
-		hint_st.set_corner_radius_all(4)
-		hint_st.content_margin_left = 8
-		hint_st.content_margin_right = 8
-		hint_st.content_margin_top = 4
-		hint_st.content_margin_bottom = 4
-		_error_banner.add_theme_stylebox_override("normal", hint_st)
-		_error_banner.add_theme_stylebox_override("hover", hint_st)
-		_error_banner.add_theme_color_override("font_color", Color(0.8, 0.85, 0.95))
-	else:
-		_error_banner.text = "%s\n%s\n%s" % [Locale.t("skill_editor.error_title"), "\n".join(errors), Locale.t("skill_editor.error_click_hint")]
-		_error_banner.add_theme_font_size_override("font_size", 12)
-		_error_banner.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		var st := StyleBoxFlat.new()
-		st.bg_color = Color(0.62, 0.16, 0.17, 0.92)
-		st.border_color = Color(0.95, 0.4, 0.4)
-		st.set_border_width_all(1)
-		st.set_corner_radius_all(4)
-		st.content_margin_left = 8
-		st.content_margin_right = 8
-		st.content_margin_top = 4
-		st.content_margin_bottom = 4
-		_error_banner.add_theme_stylebox_override("normal", st)
-		var hover_st: StyleBoxFlat = st.duplicate()
-		hover_st.border_color = Color(1.0, 0.72, 0.42)
-		_error_banner.add_theme_stylebox_override("hover", hover_st)
-		_error_banner.add_theme_color_override("font_color", Color(1, 0.92, 0.92))
-		_error_banner.pressed.connect(func(): editor.call("_focus_issue_path", issues[0].get("path", [])))
-	parent.add_child(_error_banner)
-	parent.move_child(_error_banner, effects_list.get_index())
 
 
-# Paints a red border on every if-block's condition gap that is still empty
-# (Scratch-like: an unfilled boolean hole is visibly "broken").
 func mark_invalid_conditions() -> void:
-	var effects_list: VBoxContainer = editor.get("effects_list")
-	for c in effects_list.find_children("*", "SkillBlock", true, false):
-		var block := c as SkillBlock
-		if block == null or block.cond_slot == null:
-			continue
-		var cond := SkillEngine._condition_dict(block._effect)
-		var has_cond: bool = cond.has("lhs") or cond.has("logic") \
-				or str(cond.get("condition_type", "")) not in ["", SkillEngine.CONDITION_NONE]
-		if not has_cond:
-			var st := StyleBoxFlat.new()
-			st.bg_color = SkillBlock.condition_color()
-			st.border_color = Color(0.95, 0.35, 0.35)
-			st.set_border_width_all(2)
-			st.set_corner_radius_all(14)
-			st.content_margin_left = 8
-			st.content_margin_right = 8
-			st.content_margin_top = 2
-			st.content_margin_bottom = 2
-			block.cond_slot.add_theme_stylebox_override("panel", st)
+	var requested: bool = editor.get("validation_requested")
+	var issues: Array = collect_issues() if requested else []
+	for candidate in editor.effects_list.find_children("*", "SkillBlock", true, false):
+		var block := candidate as SkillBlock
+		if block.is_hat: continue
+		var own_issues: Array = []
+		for issue in issues:
+			var path: Array = issue.get("path", [])
+			if path == block.effect_path:
+				own_issues.append(issue)
+			elif str(issue.get("kind", "")) == "ugc_safety" and path.slice(0,block.effect_path.size()) == block.effect_path:
+				# A structural path can name an expression field within this block.
+				if path.size() > block.effect_path.size() and path[block.effect_path.size()] is String and str(path[block.effect_path.size()]) not in ["then","else"]:
+					own_issues.append(issue)
+		block.mark_validation_fields(own_issues)

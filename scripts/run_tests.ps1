@@ -10,6 +10,7 @@ $logDir = Join-Path $projectPath ".godot/test-logs/$Suite"
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $failed = 0
 $count = 0
+$background = $Suite -eq 'visual' -and $env:OS -eq 'Windows_NT'
 foreach ($file in (Get-ChildItem -LiteralPath $projectPath -Filter $Scene | Sort-Object Name)) {
     $isVisual = $file.BaseName -like '*Visual'
     if (($Suite -eq 'visual') -ne $isVisual) { continue }
@@ -21,9 +22,19 @@ foreach ($file in (Get-ChildItem -LiteralPath $projectPath -Filter $Scene | Sort
     $startInfo.RedirectStandardOutput = $true
     $startInfo.RedirectStandardError = $true
     $startInfo.WorkingDirectory = $projectPath
+    $taskProfilePath = Join-Path $logDir ("profiles/" + $file.BaseName + "-" + [Guid]::NewGuid().ToString('N'))
+    New-Item -ItemType Directory -Force -Path $taskProfilePath | Out-Null
+    foreach ($key in @('APPDATA', 'LOCALAPPDATA', 'XDG_DATA_HOME', 'XDG_CONFIG_HOME')) {
+        $startInfo.EnvironmentVariables[$key] = $taskProfilePath
+    }
     $arguments = @('--path', $projectPath, '--scene', "res://$($file.Name)")
     if ($Suite -eq 'logic') { $arguments += '--headless' }
-    else { $arguments += @('--rendering-method', 'gl_compatibility', '--rendering-driver', 'opengl3') }
+    else {
+        $arguments += @('--rendering-method', 'gl_compatibility', '--rendering-driver', 'opengl3')
+        if ($background) {
+            $arguments += @('--windowed', '--position', '-10000,-10000', '--', '--background-visual-test')
+        }
+    }
     # ProcessStartInfo.ArgumentList (.NET Core 2.0+) is absent on Windows PowerShell 5.1 / .NET Framework;
     # fall back to a quoted Arguments string so the runner works on both.
     if ($null -ne $startInfo.ArgumentList) { foreach ($argument in $arguments) { $startInfo.ArgumentList.Add($argument) } }
@@ -32,9 +43,15 @@ foreach ($file in (Get-ChildItem -LiteralPath $projectPath -Filter $Scene | Sort
     $process.StartInfo = $startInfo
     try {
         [void]$process.Start()
+        if ($background) {
+            $watcher = Join-Path $PSScriptRoot 'keep_godot_windows_behind.ps1'
+            $shell = (Get-Process -Id $PID).Path
+            Start-Process $shell -WindowStyle Hidden -ArgumentList @('-NoProfile', '-File', ('"{0}"' -f $watcher), '-RootProcessId', $process.Id)
+        }
         $stdout = $process.StandardOutput.ReadToEndAsync()
         $stderr = $process.StandardError.ReadToEndAsync()
-        $timedOut = -not $process.WaitForExit($TimeoutSeconds * 1000)
+        $sceneTimeout = if ($file.Name -eq 'TestBattleSimulator.tscn') { [Math]::Max(900, $TimeoutSeconds) } else { $TimeoutSeconds }
+        $timedOut = -not $process.WaitForExit($sceneTimeout * 1000)
         if ($timedOut) { $process.Kill($true); $process.WaitForExit() }
         $content = $stdout.GetAwaiter().GetResult() + $stderr.GetAwaiter().GetResult()
         [System.IO.File]::WriteAllText((Join-Path $logDir "$($file.BaseName).log"), $content)

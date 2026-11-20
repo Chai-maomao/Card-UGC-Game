@@ -1,4 +1,4 @@
 extends Node
 
-const VERSION := "0.12"
-const PROTOCOL_VERSION := 6
+const VERSION := "1.0.0-rc.13"
+const PROTOCOL_VERSION := 18

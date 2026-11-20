@@ -1,0 +1,71 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>CARDEX · 使用说明与许可</title><style>body{max-width:900px;margin:32px auto;padding:0 24px;background:#10191e;color:#efe5ce;font:16px/1.7 system-ui,sans-serif}a{color:#b9a16e}section{margin:48px 0;padding-top:24px;border-top:1px solid #70634a}pre{white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}nav{display:flex;flex-wrap:wrap;gap:24px}h1{font-size:28px}</style><a href="index.html">← CARDEX</a><h1>使用说明与许可 / Information & licenses</h1><p>适用于本地发行候选版本；公共服务运营者信息与原有素材权利仍需核实。当前没有发布新的在线服务。</p><nav>
+<a href="#PRIVACY">隐私 / Privacy</a>
+<a href="#TERMS">条款 / Terms</a>
+<a href="#UGC">创作 / UGC</a>
+<a href="#THIRD_PARTY_NOTICES">素材许可 / Licenses</a>
+</nav>
+<section id="PRIVACY"><pre>CARDEX 隐私说明 / Privacy notice
+更新：2026-11-12 · 适用于当前桌面预发行版本
+
+本地模式：卡库、卡图、牌组、设置、教学进度、战绩、回放与恢复快照保存在本机 user://。没有广告、账号系统、遥测或自动诊断上传。设置 → 支持与说明可打开存档、日志目录。便携包删除不会自动删除这些数据；备份后可手动删除该目录。
+
+联机为主动选择。LAN、直连和自有服务器会向对端或所选服务器传递连接信息、房间标识、指令、对局状态；对端及运营商能够看到连接 IP。双端预测会交换完整手牌与牌堆等隐藏信息，因此目前只适合可信对手，不具备反作弊保密保证。启用卡图传输时，图像也会发给对端/中继；请勿使用含私人信息的图像。
+
+Cloudflare / Sites 中继会处理房间凭据、请求与对局包；第三方基础设施可能处理网络与安全日志。仓库内 CF 实现的房间有效期为创建后一小时，过期数据在后续请求时清理；这不代表运营商日志或备份也在一小时内清除。自建或第三方服务器可采用不同保留策略，请咨询其运营者。Cloudflare 隐私说明：https://www.cloudflare.com/privacypolicy/
+
+诊断摘要仅在你点击“复制诊断”时复制版本、引擎、系统类别、渲染器、显卡、窗口与画质信息。不会复制 IP、房间 token、卡库或原始日志。原始日志可能包含路径、房间或连接信息；提交反馈前请自行检查与删去私密内容。反馈入口为公开 GitHub Issues，不适合提交密码、私钥、个人信息。
+
+当前仓库的公开联系渠道：https://github.com/Chai-maomao/Card-UGC-Game/issues
+若将本版本用作公共服务，运营者须补充其真实身份、联系渠道和实际数据处理政策后再上线。本文件不会替第三方服务器作数据保留承诺。
+
+English
+Local libraries, art, decks, settings, tutorial progress, history, replays and recovery snapshots stay in the local user data folder. No advertising, analytics, accounts or automatic diagnostic uploads are implemented. Deleting the portable application does not erase this folder.
+Online play is optional. Peers/servers receive connection data, room identifiers, commands and match state. Prediction exchanges full hands/decks: play with trusted opponents; hidden information is not protected against modified clients. Enabled card-art transfer also sends your images. Infrastructure operators can observe IP addresses and network/security logs.
+The bundled Cloudflare relay expires rooms after one hour from creation and purges expired rows on later requests. This is not a promise about provider logs/backups. Other operators may use different policies. Review your server operator and Cloudflare privacy policy above.
+Copy diagnostics is explicit and copies only technical summary fields, excluding room credentials, IPs, cards and raw logs. Review raw logs yourself before sharing. The linked public issue tracker is the project contact; never post secrets or personal information. A public service operator must supply its actual identity, contacts and processing policy before launch.
+</pre></section>
+<section id="TERMS"><pre>CARDEX 使用条款 / Terms of use
+更新：2026-11-12 · 桌面预发行版本
+
+这是测试阶段的软件，可能存在错误。请备份卡库、回放及自制内容；联机服务可能暂时不可用。不要将其用于需要可靠服务保证的用途。版本号与协议号独立，不同协议的玩家可能无法联机。
+
+本项目未通过本文件授予源代码、标识或素材的开放源码再许可；各部分权利归各自权利人。第三方组件保留原许可，详见素材许可清单。你对自创内容保留相应权利；导出、分享或向对手发送时，应确认具有必要授权，并理解接收者能保存副本。
+
+禁止上传侵权、违法、骚扰、仇恨、涉及未成年人性剥削、恶意程序或私人敏感信息的内容；不得干扰他人设备、绕过服务配额或滥用服务器。UGC 不代表项目维护者立场。收到问题内容时停止传播，通过反馈入口报告；公开报告不应再次暴露私人信息。
+
+公共服务器运营者须另行说明实际服务主体、适用地区、可用性、收费（如有）、投诉与数据政策；本桌面客户端文本不替其作出保证。本说明不影响适用法律赋予且不可排除的权利。
+
+English
+This is prerelease software and can contain defects. Back up libraries, replays and creations. Online service may be unavailable. Software version and network protocol are separate.
+No open-source relicensing of project code, marks or assets is granted by this document. Rights remain with their respective holders; third-party components retain their licenses. You retain rights in your original creations. Share only content you are authorized to share; recipients can retain copies.
+Do not share unlawful, infringing, harassing, hateful, exploitative, malicious or private sensitive content; do not abuse other devices or server quotas. User content is not endorsed by maintainers. Stop distributing problematic content and report it without exposing further private information.
+Public operators must provide their actual service identity, region, availability, pricing if any, complaints and data policies. This desktop notice does not make promises on their behalf or exclude mandatory rights under applicable law.
+</pre></section>
+<section id="UGC"><pre>CARDEX 创作与分享规范 / UGC guidelines
+
+创作自己的名称、技能说明和插画；使用别人的素材前核对授权与署名条件。不要假冒官方或其他作者。不得传播侵权、违法、仇恨、骚扰、色情剥削、恶意文件或未经允许的个人信息。
+
+导入前检查卡牌内容、技能复杂度与来源；规则预算会限制极端内容，但不保证任何 UGC 平衡。不要把自制内容宣传为官方竞技认证。分享文件和对局可能包含完整卡牌信息与插画；不要把密码、联系方式或定位写入卡图/卡名。
+
+本版本没有公共内容审核平台；直连/房间中玩家互相发送内容。遇到问题可停止导入、删除本地副本、离开房间并向服务器运营者或项目 Issues 报告。投诉请提供内容描述和权利依据，避免公开敏感资料。维护者不能远程删除别人设备上的副本。
+
+Create original names, skill text and art; check rights and attribution before reusing others&#x27; work. Do not impersonate creators or share unlawful, infringing, hateful, harassing, exploitative, malicious or private content. Inspect imports and origins. Complexity budgets do not guarantee balance or official competitive approval. Shared files/matches can expose full card data and images.
+There is no public moderation platform in this desktop build. Players exchange content through rooms. Stop importing, remove local copies, leave the room and report issues to the operator or linked project tracker. Provide a description and rights basis without exposing private data. Maintainers cannot remotely delete copies on other devices.
+</pre></section>
+<section id="THIRD_PARTY_NOTICES"><pre>CARDEX 第三方许可 / Third-party notices
+
+Godot Engine 4.6.3 — MIT. Copyright Godot contributors / Juan Linietsky / Ariel Manzur. License: legal/GODOT_LICENSE.txt; bundled dependency notices: legal/GODOT_COPYRIGHT.txt. Source https://github.com/godotengine/godot/tree/4.6.3-stable . https://godotengine.org/license/
+
+Noto Sans SC — SIL Open Font License 1.1. Copyright 2014–2021 Adobe. Complete license res/fonts/OFL.txt; official source metadata res/fonts/SOURCE_METADATA.pb. Source https://github.com/google/fonts/tree/main/ofl/notosanssc . Embedded without renaming or modification. SHA256 a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da.
+
+res/audio/*.wav — original procedural synthesis created for this project on 2026-11-12. No third-party samples or recordings; generated with Python standard library. The 32-second ambient loop uses additive tones; sound effects use seeded noise and envelopes. Source recipe scripts/generate_audio.py. Original project rights apply.
+
+res/tabletop/unillustrated_card.png — created with built-in image generation on 2026-11-12 for this project. No reference image supplied. Prompt/provenance in res/tabletop/ASSETS.md. No claim of exclusive copyright or guaranteed third-party clearance is made.
+
+Legacy PNG/ICO assets — per-file inventory in legal/ASSET_INVENTORY.json. Their original authorship and distribution grants have not been established from repository evidence. Do not represent this as rights-cleared for public distribution until the project owner supplies provenance or replacements. This is a release blocker, not a license grant.
+
+源码权利说明见根目录 LICENSE。原有图片与图标的授权来源仍待项目权利人确认；本清单不替其补造授权。
+
+Mozilla CA trust bundle — curl.se conversion, Mozilla Public License 2.0. Source https://curl.se/docs/caextract.html ; bundled res/network/cacert.pem and metadata res/network/cacert-source.json; full license legal/MOZILLA_MPL_2_0.txt. SHA256 427c064216761a1e72a8b30f0d954d08cb6e4435a82091fb865afd20c8497285. Public HTTPS certificate validation remains enabled. This application bundle replaces dependence on access to the Windows ROOT store; it does not import local enterprise roots. Refresh and reverify the bundle during each release.
+</pre></section>
+<p>Godot license: <a href="https://godotengine.org/license/">godotengine.org/license</a>. Noto Sans SC: SIL OFL 1.1, bundled in application.</p></html>

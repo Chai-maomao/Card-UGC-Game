@@ -15,6 +15,7 @@ const DEFAULT_PRESET_INDEX := 1
 const SETTINGS_PATH := "user://settings.cfg"
 
 func _ready() -> void:
+	if OS.has_feature("android"): return
 	get_window().unresizable = false
 	_load_resolution.call_deferred()
 
@@ -30,8 +31,8 @@ func get_current_preset_index() -> int:
 func apply_preset(index: int) -> void:
 	if index < 0 or index >= WINDOW_PRESETS.size():
 		return
-	DisplayServer.window_set_size(WINDOW_PRESETS[index])
 	_save_resolution(index)
+	if int(AppPreferences.get_value("window_mode")) == 1: get_window().size = WINDOW_PRESETS[index]
 
 
 func preset_label(index: int) -> String:
@@ -42,22 +43,29 @@ func preset_label(index: int) -> String:
 
 
 func _load_resolution() -> void:
+	if int(AppPreferences.get_value("window_mode")) != 1: return
+	restore_window_size()
+
+func restore_window_size() -> void:
 	var config := ConfigFile.new()
 	if config.load(SETTINGS_PATH) != OK:
+		get_window().size = WINDOW_PRESETS[DEFAULT_PRESET_INDEX]
 		return
 	var saved_size := Vector2i(
 		int(config.get_value("display", "resolution_width", 0)),
 		int(config.get_value("display", "resolution_height", 0))
 	)
 	if saved_size in WINDOW_PRESETS:
-		DisplayServer.window_set_size(saved_size)
+		get_window().size = saved_size
 		return
 	# Versions before responsive-window support persisted only an array index.
 	# Decode that index against the old array so adding presets cannot silently
 	# change a player's selected resolution.
 	var legacy_index: int = int(config.get_value("display", "resolution_preset", -1))
 	if legacy_index >= 0 and legacy_index < LEGACY_WINDOW_PRESETS.size():
-		DisplayServer.window_set_size(LEGACY_WINDOW_PRESETS[legacy_index])
+		get_window().size = LEGACY_WINDOW_PRESETS[legacy_index]
+	else:
+		get_window().size = WINDOW_PRESETS[DEFAULT_PRESET_INDEX]
 
 
 func _save_resolution(index: int) -> void:

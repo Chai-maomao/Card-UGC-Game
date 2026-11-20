@@ -9,7 +9,7 @@ extends PanelContainer
 # Each slot renders as an oval chip showing the current value; clicking it
 # opens a picker, and a matching palette reporter (target_block / side_block)
 # can be dropped in to set it. Dragging the chip back onto the palette
-# restores the default value.
+# leaves an empty socket.
 # Data contract (bound dictionary, shared reference):
 #   side   : data["target_side"] = side_id
 #   target : data["target"]      = target_id
@@ -18,6 +18,7 @@ extends PanelContainer
 const _TargetResolver = preload("res://SkillTargetResolver.gd")
 
 signal changed
+signal selection_updated
 
 var data: Dictionary
 var kind: String = "target"   # "target" | "side"
@@ -34,19 +35,12 @@ func setup(p_data: Dictionary, p_kind: String) -> void:
 
 
 func _apply_slot_style() -> void:
-	var st := StyleBoxFlat.new()
-	var tint := _tint_color()
-	st.bg_color = Color(tint.r, tint.g, tint.b, 0.52 if _drop_highlight else 0.30)
-	st.border_color = Color(0.50, 0.92, 1.0, 1.0) if _drop_highlight else Color(tint.r, tint.g, tint.b, 0.92)
-	st.set_border_width_all(2 if _drop_highlight else 1)
-	st.set_corner_radius_all(10)
-	st.shadow_size = 0
-	st.content_margin_left = 4
-	st.content_margin_right = 4
-	st.content_margin_top = 2
-	st.content_margin_bottom = 2
-	add_theme_stylebox_override("panel", st)
+	# The chip itself owns the material and drop outline. A second shaped
+	# panel adds an empty ring around an already-filled reporter.
+	add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 	custom_minimum_size = Vector2(64, 26)
+	for child in get_children():
+		if child is Button: _apply_button_style(child,_current_value() == "")
 	mouse_filter = Control.MOUSE_FILTER_PASS
 	set_drag_forwarding(
 		Callable(self, "_slot_get_drag_data"),
@@ -76,12 +70,13 @@ func _default_value() -> String:
 func _current_value() -> String:
 	# Unset keys count as empty: the slot renders as an empty socket
 	# ("+ 选择目标" / "+ 选择阵营") until the user picks a value, matching the
-	# _sync_side visibility rule. clear_to_number still writes the default
-	# explicitly when the chip is dragged back to the palette.
+	# _sync_side visibility rule. Removing a chip erases its selection.
 	return str(data.get(_field(), ""))
 
 
 func _ids() -> Array:
+	if has_meta("loose_reporter_key"):
+		return SkillRegistry.TARGET_SIDE_IDS if kind == "side" else SkillRegistry.TARGET_IDS
 	if kind == "side":
 		var forced := SkillRegistry.forced_target_side(str(data.get("effect", "")))
 		if forced != "":
@@ -106,31 +101,14 @@ func _rebuild() -> void:
 	var value := _current_value()
 	var empty := value == ""
 	if empty:
-		btn.text = ValueSlot._clamp_chip(_placeholder_text(), 10)
+		btn.text = ""
 	else:
 		btn.text = ValueSlot._clamp_chip(_value_label(value), 8)
 	# No clip_text: it drops the text from the minimum-size calculation and
 	# collapses the chip; _clamp_chip already keeps the label bounded.
-	btn.add_theme_font_size_override("font_size", 12)
+	btn.add_theme_font_size_override("font_size", 14)
 	btn.add_theme_color_override("font_color", Color(1, 1, 1, 0.9))
-	var st := StyleBoxFlat.new()
-	var tint := _tint_color()
-	# Unset slots look like empty sockets: faint fill, dashed-feel bright edge.
-	# (A directed target with 全体 is no longer grayed out — it is reported as
-	# a compile error by SkillErrorChecker's red banner instead.)
-	st.bg_color = Color(tint.r, tint.g, tint.b, 0.22 if empty else 0.65)
-	st.border_color = Color(tint.r, tint.g, tint.b, 0.55) if empty else tint
-	st.set_border_width_all(2 if empty else 1)
-	st.set_corner_radius_all(12)
-	st.content_margin_left = 8
-	st.content_margin_right = 8
-	st.content_margin_top = 1
-	st.content_margin_bottom = 1
-	btn.add_theme_stylebox_override("normal", st)
-	var hover: StyleBoxFlat = st.duplicate()
-	hover.bg_color = Color(tint.r, tint.g, tint.b, 0.55 if empty else 0.85)
-	btn.add_theme_stylebox_override("hover", hover)
-	btn.add_theme_stylebox_override("pressed", hover)
+	_apply_button_style(btn,empty)
 	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	if empty:
 		btn.tooltip_text = Locale.t("skill_editor.target_pick_hint_tip") if kind == "target" else Locale.t("skill_editor.side_pick_hint_tip")
@@ -139,6 +117,27 @@ func _rebuild() -> void:
 	btn.pressed.connect(func(): _open_menu(btn))
 	_set_param_pass(btn)
 	add_child(btn)
+
+
+func _apply_button_style(btn: Button, empty: bool) -> void:
+	var st := StyleBoxFlat.new()
+	var tint := _tint_color()
+	# Unset slots look like empty sockets: faint fill, dashed-feel bright edge.
+	# (A directed target with 全体 is no longer grayed out — it is reported as
+	# a compile error by SkillErrorChecker's red banner instead.)
+	st.bg_color = Color(tint.r, tint.g, tint.b, 0.35 if empty else 0.78)
+	st.border_color = Color(0.50,0.92,1.0) if _drop_highlight else Color(tint.r,tint.g,tint.b,0.55) if empty else tint
+	st.set_border_width_all(2 if empty or _drop_highlight else 1)
+	st.set_corner_radius_all(12)
+	st.content_margin_left = 8
+	st.content_margin_right = 8
+	st.content_margin_top = 1
+	st.content_margin_bottom = 1
+	btn.add_theme_stylebox_override("normal", preload("res://SkillSocketStyle.gd").from_flat(st, kind))
+	var hover: StyleBoxFlat = st.duplicate()
+	hover.bg_color = Color(tint.r, tint.g, tint.b, 0.55 if empty else 0.92)
+	btn.add_theme_stylebox_override("hover", preload("res://SkillSocketStyle.gd").from_flat(hover, kind))
+	btn.add_theme_stylebox_override("pressed", preload("res://SkillSocketStyle.gd").from_flat(hover, kind))
 
 
 func _placeholder_text() -> String:
@@ -153,9 +152,7 @@ func _open_menu(anchor: Control) -> void:
 		menu.add_item(_value_label(str(ids[i])), i)
 		menu.set_item_tooltip(i, SkillHelp.description("target" if kind == "target" else "target_side", str(ids[i])))
 	menu.id_pressed.connect(func(id: int):
-		var value: String = str(ids[id])
-		data[_field()] = value
-		_rebuild()
+		_set_selection(str(ids[id]))
 		changed.emit()
 	)
 	add_child(menu)
@@ -168,31 +165,25 @@ func _slot_get_drag_data(_pos: Vector2):
 	if value == "":
 		return null
 	if get_viewport().gui_is_dragging():
-		var lbl := Label.new()
-		lbl.text = _value_label(value)
-		lbl.add_theme_font_size_override("font_size", 13)
-		lbl.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
-		var st := StyleBoxFlat.new()
-		var tint := _tint_color()
-		st.bg_color = Color(tint.r, tint.g, tint.b, 0.85)
-		st.border_color = tint
-		st.set_border_width_all(1)
-		st.set_corner_radius_all(12)
-		st.content_margin_left = 8
-		st.content_margin_right = 8
-		st.content_margin_top = 3
-		st.content_margin_bottom = 3
-		lbl.add_theme_stylebox_override("normal", st)
+		var preview := TargetSlot.new()
+		preview.set_meta("drag_preview", true)
+		preview.setup(data.duplicate(true), kind)
+		preview.scale = get_global_transform().get_scale()
+		preview.position = -_pos * preview.scale
+		preview.size = preview.get_combined_minimum_size()
+		preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		for child in preview.find_children("*","Control",true,false): child.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		var wrap := Control.new()
 		wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		wrap.add_child(lbl)
+		wrap.add_child(preview)
 		set_drag_preview(wrap)
 		_dragging = true
-		_animate_slot(Vector2(0.94, 0.94), Color(0.72, 0.76, 0.84, 0.48), 0.07)
+		_animate_slot(Vector2.ONE, Color(0.72,0.76,0.84,0.48),0.07)
 	return {
 		"type": "target_block" if kind == "target" else "side_block",
 		"value": value,
 		"from_slot": self,
+		"grab_offset": [_pos.x,_pos.y],
 	}
 
 
@@ -203,31 +194,47 @@ func _can_drop_var(_pos: Vector2, payload) -> bool:
 	var t: String = str(payload.get("type", ""))
 	var ok := t == ("target_block" if kind == "target" else "side_block") \
 		and str(payload.get("value", "")) in _ids()
+	var source := payload.get("from_slot") as TargetSlot
+	if is_instance_valid(source):
+		var displaced := _current_value()
+		ok = ok and source != self and source.kind == kind and (displaced.is_empty() or displaced in source._ids())
 	_set_drop_highlight(ok)
 	return ok
 
 
 func _drop_var(_pos: Vector2, payload) -> void:
+	if not _can_drop_var(_pos, payload): return
 	_set_drop_highlight(false)
-	# Move semantics: if the reporter came from another slot, reset that slot.
-	var src: Object = payload.get("from_slot", null)
-	if src != null and src != self and is_instance_valid(src) and src.has_method("clear_to_number"):
-		src.call("clear_to_number")
-	var value: String = str(payload.get("value", ""))
-	if value == "" or value not in _ids():
-		return
-	data[_field()] = value
-	_rebuild()
+	var source := payload.get("from_slot") as TargetSlot
+	if is_instance_valid(source):
+		var displaced := _current_value()
+		if displaced.is_empty():
+			source.clear_to_number(false)
+		else:
+			source._set_selection(displaced)
+	_set_selection(str(payload.get("value")))
 	changed.emit()
 	_play_drop_pulse()
 
 
-# Restore the slot to its default value. Also used when the chip is dragged
+# Restore the empty slot. Also used when the chip is dragged
 # onto the palette (drop-to-discard for target / side reporters).
-func clear_to_number() -> void:
-	data[_field()] = _default_value()
+func clear_to_number(notify: bool = true) -> void:
+	if has_meta("loose_reporter_key"):
+		var editor = get_meta("loose_reporter_editor").get_ref()
+		if editor != null: editor._remove_loose_reporter(str(get_meta("loose_reporter_key")), notify)
+		return
+	_set_selection("")
+	if notify: changed.emit()
+
+
+func _set_selection(value: String) -> void:
+	if value.is_empty():
+		data.erase(_field())
+	else:
+		data[_field()] = value
 	_rebuild()
-	changed.emit()
+	selection_updated.emit()
 
 
 func _set_drop_highlight(on: bool) -> void:
@@ -248,11 +255,12 @@ func _animate_slot(target_scale: Vector2, target_modulate: Color, duration: floa
 
 
 func _play_drop_pulse() -> void:
-	scale = Vector2(1.10, 1.10)
+	modulate = Color(1.10,1.10,1.10)
 	_animate_slot(Vector2.ONE, Color.WHITE, 0.16)
 
 
 func _notification(what: int) -> void:
+	if get_meta("drag_preview", false): return
 	if what == NOTIFICATION_DRAG_END:
 		_dragging = false
 		_set_drop_highlight(false)

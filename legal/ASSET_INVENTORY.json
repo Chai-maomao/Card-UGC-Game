@@ -1,0 +1,461 @@
+[
+  {
+    "path": "res/audio/death.wav",
+    "sha256": "b42192e9963e08e668d661912ec6c811776dd0b6b004db2a976be19dde7ca9dd",
+    "provenance": "original procedural synthesis; scripts/generate_audio.py"
+  },
+  {
+    "path": "res/fonts/NotoSansSC.ttf",
+    "sha256": "a3041811a78c361b1de50f953c805e0244951c21c5bd412f7232ef0d899af0da",
+    "provenance": "Google Fonts Noto Sans SC; SIL OFL 1.1; res/fonts/OFL.txt"
+  },
+  {
+    "path": "res/fonts/NotoSerifSC-SemiBold.ttf",
+    "sha256": "90978ad4fa04e32aa0391c0962666db0ec60e7078987424eaebc7ed313db02c6",
+    "source_name": "NotoSerifSC[wght].ttf",
+    "source_sha256": "050080d9255a86808f2945bffac582b31ef32bc36411ce29563b4961670c66f9",
+    "provenance": "Google Fonts Noto Serif SC; static weight 600 instance; SIL OFL 1.1; res/fonts/NotoSerifSC-OFL.txt"
+  },
+  {
+    "path": "res/network/cacert.pem",
+    "sha256": "427c064216761a1e72a8b30f0d954d08cb6e4435a82091fb865afd20c8497285",
+    "provenance": "curl.se Mozilla public CA conversion; MPL-2.0; res/network/cacert-source.json"
+  },
+  {
+    "path": "res/tabletop/unillustrated_card.png",
+    "sha256": "d63afb83fcd9a4c4a615a21bd9c5aa88db656a3d1a79da1c25c8e683eb64470c",
+    "provenance": "built-in image generation; res/tabletop/ASSETS.md"
+  },
+  {
+    "path": "res/ui/icons/cardex_app_icon.ico",
+    "sha256": "2049f739caa7165db7c53249bbfaa33784a261d03bbf4df70ad6515981498f3c",
+    "provenance": "legacy; provenance unverified"
+  },
+  {
+    "path": "res/ui/icons/cardex_app_icon.png",
+    "sha256": "9ebf58ef245bad52ff5de1a171865040d6d1c5ccf13905ff118b8ae569d195b3",
+    "provenance": "legacy; provenance unverified"
+  },
+  {
+    "path": "res/ui_slot_frame_240x320.png",
+    "sha256": "5abd73e1d72b6c1bec59e107051f45099efb8d10bb690f3cf3c055b3c9c3a586",
+    "provenance": "legacy; provenance unverified"
+  },
+  {
+    "path": "res/audio/cardex-title.mp3",
+    "sha256": "1ef081f599ae4cef37c247f23ac5da65aad4a50d5b80482d7b2c127787e15e35",
+    "provenance": "user-provided title/menu music, supplied 2026-11-13; no new license assigned"
+  },
+  {
+    "path": "res/audio/cardex-battle.mp3",
+    "sha256": "336e7541ae5dc9151f6304d3074cf16168e036ff6777ca261d092f29bcb8eea0",
+    "provenance": "user-provided battle music, supplied 2026-11-13; no new license assigned"
+  },
+  {
+    "path": "res/audio/sfx/dark_magic.wav",
+    "sha256": "569ef810aa6ac2322283dee29aef46e2474528997b301b1c93c3686ce2e8fa36",
+    "source_name": "cardex-dark_magic.mp3",
+    "source_sha256": "10817bd18c0dc06c2c66e80ce1a839f768e22c35822b000da1b3ae3cadd4baa0",
+    "provenance": "user-provided sound effect, supplied 2026-11-13; trimmed silence and gain adjusted; no new license assigned",
+    "trim_seconds": [
+      0.025,
+      1.05
+    ],
+    "gain_db": -5.32
+  },
+  {
+    "path": "res/audio/sfx/deploy_card.wav",
+    "sha256": "948430d4ab62f267f7ac4813eb4aa960e61eea2db6e1bf29426b7967cb50aae3",
+    "source_name": "cardex-deploy_card.mp3",
+    "source_sha256": "8f7ee00b651b1e2aea89d191d8a01d03697b283bb667b440a939e877d6ebaef6",
+    "provenance": "user-provided sound effect, supplied 2026-11-13; trimmed silence and gain adjusted; no new license assigned",
+    "trim_seconds": [
+      0.125,
+      0.42
+    ],
+    "gain_db": -5.1
+  },
+  {
+    "path": "res/audio/sfx/deploy_card_2.wav",
+    "sha256": "295f3e3c378682d82717e4b7c3050c67bd91557bdac396259b73d6987305a3fc",
+    "source_name": "cardex-deploy_card_2.mp3",
+    "source_sha256": "2c94037a2b99882a4e193cfa35fe50a9f791b1709a49f2d95631fb8f3700b844",
+    "provenance": "user-provided sound effect, supplied 2026-11-13; trimmed silence and gain adjusted; no new license assigned",
+    "trim_seconds": [
+      0.175,
+      0.504
+    ],
+    "gain_db": 4.64
+  },
+  {
+    "path": "res/audio/sfx/heal.wav",
+    "sha256": "af3754ad801419e68ac43139c28024ff924e421549cc1f97f864d88463c868ed",
+    "source_name": "cardex-heal.mp3",
+    "source_sha256": "bf80bf4cea90123e4aae83efdec812dcc8442c19d2017cc0871e81e4bfe272b5",
+    "provenance": "user-provided sound effect, supplied 2026-11-13; trimmed silence and gain adjusted; no new license assigned",
+    "trim_seconds": [
+      0.125,
+      1.85
+    ],
+    "gain_db": -0.27
+  },
+  {
+    "path": "res/audio/sfx/magic_smite.wav",
+    "sha256": "4e2359bbd610c7fa95a8223d4237b0c52d1e61a8b4fc17cf4b86c1db4cf3cc8a",
+    "source_name": "cardex-magic_smite.mp3",
+    "source_sha256": "1bdc4a0068953f57d9e774a48d16d7523f5330f97b447076e22f507b2004cfda",
+    "provenance": "user-provided sound effect, supplied 2026-11-13; trimmed silence and gain adjusted; no new license assigned",
+    "trim_seconds": [
+      0.675,
+      2.25
+    ],
+    "gain_db": 3.36
+  },
+  {
+    "path": "res/audio/sfx/mouse_over_menu.wav",
+    "sha256": "03a62d4004c9a06eeec5fa5b93343286e0a2a5c5764268508001a772899f0203",
+    "source_name": "cardex-mouse_over_menu.mp3",
+    "source_sha256": "c674ec41f1f2975d712a4fde3b0c4c06a2a79ef7448ce50c1cda4a803e904942",
+    "provenance": "user-provided sound effect, supplied 2026-11-13; trimmed silence and gain adjusted; no new license assigned",
+    "trim_seconds": [
+      0.225,
+      0.58
+    ],
+    "gain_db": 8.83
+  },
+  {
+    "path": "res/audio/sfx/punch.wav",
+    "sha256": "5465fa11730b3aa93c48a820c9e5ad4d3db42c530cac859799437350fb50604e",
+    "source_name": "cardex-punch.mp3",
+    "source_sha256": "c630d23f9542dda52b53e3b162a0b98a2d29e5b3c3bf390b84b6c0279766b7b6",
+    "provenance": "user-provided sound effect, supplied 2026-11-13; trimmed silence and gain adjusted; no new license assigned",
+    "trim_seconds": [
+      0.025,
+      0.47
+    ],
+    "gain_db": -7.82
+  },
+  {
+    "path": "res/audio/sfx/shuffle.wav",
+    "sha256": "2d85a96f86900b239ac423830aed7e4c8a98075649c45e2d0cb3aa8eb8cdb0ab",
+    "source_name": "cardex-shuffle.mp3",
+    "source_sha256": "53cfeb0b154255db8fd6705b926c4eb9506b4c55d711a9e9d27b3ebcec34a78e",
+    "provenance": "user-provided sound effect, supplied 2026-11-13; trimmed silence and gain adjusted; no new license assigned",
+    "trim_seconds": [
+      0.025,
+      0.696
+    ],
+    "gain_db": -2.18
+  },
+  {
+    "path": "res/audio/sfx/shuffle_2.wav",
+    "sha256": "38927ea6086d111c902300eac5cee069bcb438eb65896454a32ed794e1bd3f85",
+    "source_name": "cardex-shuffle_2.mp3",
+    "source_sha256": "3c65826ed4e1d1385b44946d718bb192f8ef209544bb770a7643bcc900e79b57",
+    "provenance": "user-provided sound effect, supplied 2026-11-13; trimmed silence and gain adjusted; no new license assigned",
+    "trim_seconds": [
+      0.175,
+      0.92
+    ],
+    "gain_db": 0.78
+  },
+  {
+    "path": "res/audio/sfx/swoosh.wav",
+    "sha256": "7f56dc82be3024889f8afaece8822205861f011983ac35117b4294a097e2de27",
+    "source_name": "cardex-swoosh.mp3",
+    "source_sha256": "97130c841557c286979d40a1d59c76cc04d08d94a2b91f73c885a43662efcf87",
+    "provenance": "user-provided sound effect, supplied 2026-11-13; trimmed silence and gain adjusted; no new license assigned",
+    "trim_seconds": [
+      0.075,
+      0.324
+    ],
+    "gain_db": -7.11
+  },
+  {
+    "path": "res/audio/sfx/mouse_over_object.wav",
+    "sha256": "e7f6a30ad06d7b9600f78d9c6dafa166307e1e5ce4aff5c4abbccc511d2aac0a",
+    "source_name": "cardex-mouse_over_object.mp3",
+    "source_sha256": "1917edcb943af4110a51eb5912d0eb3634a2ca1fb3800c128d996cf4ac7e359c",
+    "provenance": "user-provided sound effect, supplied 2026-11-13; trimmed silence and gain adjusted; no new license assigned",
+    "trim_seconds": [
+      0.005,
+      0.048
+    ],
+    "gain_db": -10.03
+  },
+  {
+    "path": "res/tabletop/cardex-title.png",
+    "sha256": "51e5d2d8550fd1a55465768c004bc05ca97f05599653d32196dcca740b02ae6b",
+    "provenance": "user-provided title artwork; supplied 2026-11-13; original PNG preserved"
+  },
+  {
+    "path": "res/audio/cardex-ui_deny.mp3",
+    "sha256": "849f23ba8dded6adf835d6147db6dd35332cd44665d595a83c8a12f12c7fd279",
+    "provenance": "user-provided UI denial sound, supplied 2026-11-13; runtime copy dynamically compressed for audibility on 2026-11-14; original Downloads source unchanged; no new license assigned"
+  },
+  {
+    "path": "res/tabletop/unillustrated_card_damaged.png",
+    "sha256": "31bcbf2de23bcc086812533f97ffdb213b878ab4a90a2b231afb59799dc5ded2",
+    "provenance": "Built-in image generation edit of project default illustration; wounded variant with lower clock buried in rubble; 2026-11-14."
+  },
+  {
+    "path": "res/audio/cardex-card_editor_1.mp3",
+    "sha256": "e477546d2c79bb07d3e62761144f4102f05c72e0f934e2085eb12faa1c20a836",
+    "provenance": "user-provided card editor music, supplied 2026-11-14; original bytes preserved; no new license assigned"
+  },
+  {
+    "path": "res/audio/cardex-card_editor_2.mp3",
+    "sha256": "8398c4e875506802e7f78deefc066cecc83ce3eb47f683f313413bcb3c93afad",
+    "provenance": "user-provided card editor music, supplied 2026-11-14; original bytes preserved; no new license assigned"
+  },
+  {
+    "path": "res/audio/sfx/shuffle_3.wav",
+    "sha256": "e6aeba53ec190a3042facd4cf5c03000c1e58e12b2b1ca6aece5684f2e7e7d3f",
+    "source_name": "cardex-shuffle (2).mp3",
+    "source_sha256": "48320fb89f9d5bd21bbc02e848f1e8af9fc8733c0eaf58ecd9d5b99511fe5032",
+    "provenance": "user-provided sound effect, supplied 2026-11-14; trimmed silence, conservative gain matching and short edge fades; no new license assigned",
+    "trim_seconds": [
+      0.013084,
+      0.574286
+    ],
+    "gain_db": -6.133
+  },
+  {
+    "path": "res/audio/sfx/distributing_single.wav",
+    "sha256": "4cac4db68d78ad7172425a59bfd5091135336b4f2d8830387a72f70f3975e7a8",
+    "source_name": "cardex-distributing_single.mp3",
+    "source_sha256": "7742533ef676609d40bebb1cab9170d845fdff9a7e0390d511136b095fcea564",
+    "provenance": "user-provided single-card draw sound, supplied 2026-11-14; trimmed silence, gain matched and short edge fades; no new license assigned",
+    "trim_seconds": [
+      0.012132,
+      0.218345
+    ],
+    "gain_db": -6.151
+  },
+  {
+    "path": "res/audio/sfx/deploy_card_3.wav",
+    "sha256": "17a95ae32fbea6ce046ed22f38a3b6a42cc76edf3f1d1f7dc428b37b5f087c9f",
+    "source_name": "cardex-deploy_card_3.mp3",
+    "source_sha256": "19d15c90c65089036e7ae9fa3764be473202c37af2ecb8e4cb8bb3eb405d536f",
+    "provenance": "user-provided deployment sound, supplied 2026-11-14; trimmed silence, gain matched to existing deployment variants and short edge fades; no new license assigned",
+    "trim_seconds": [
+      0.013129,
+      0.27805
+    ],
+    "gain_db": -7.189
+  },
+  {
+    "path": "res/audio/sfx/distribute_multi.wav",
+    "sha256": "9b2dfc9e7e61a063c56c68bd53dc4621aef58a4027ab16e69a9de15bca799feb",
+    "source_name": "cardex-distribute_multi.mp4",
+    "source_sha256": "4a8b142cba10d7cdb49416b68c2d68b4bc6afd170ab4cb9803d8cd3186fe48dc",
+    "converted_name": "cardex-distribute_multi.mp3",
+    "converted_sha256": "09c1e4a86d7cf8e2803d86705cfee4210808b3b6f6438b0f805db3508dadaadd",
+    "provenance": "user-provided video/audio asset, supplied 2026-11-14; extracted MP3, runtime WAV trimmed, gain matched and edge faded; original MP4 unchanged; no new license assigned",
+    "trim_seconds": [
+      0.077211,
+      2.230113
+    ],
+    "gain_db": 13.308
+  },
+  {
+    "path": "res/ui/cardex-graveyard.png",
+    "sha256": "a5cf918ec157071c61c3c2b3edf92471654fafa33ab40f3836888cbc982b4e48",
+    "provenance": "user-provided graveyard artwork supplied 2026-11-14; original PNG bytes preserved; transparent padding excluded by UI AtlasTexture only; no new license assigned"
+  },
+  {
+    "path": "res/ui/cardex-pile.png",
+    "sha256": "af83340c14541ec430abe2fb07e8888066079c70fd134040eed67532cf73daa9",
+    "provenance": "user-provided draw-pile artwork supplied 2026-11-14; original PNG bytes preserved; transparent padding excluded by UI AtlasTexture; no new license assigned"
+  },
+  {
+    "path": "res/ui/cardex-enemy_card.png",
+    "sha256": "1ed66d68e94941d7175d2bb219c3b31220fdacc077aa19f40c95b5e463b30871",
+    "provenance": "user-provided enemy card-back artwork supplied 2026-11-15; original PNG bytes preserved; card region sampled and rounded in the UI shader; no new license assigned"
+  },
+  {
+    "path": "res/ui/keywords/ap.svg",
+    "sha256": "1ee3f619643a0c4670f3ca27763888421ad9ee3df2461248751c3f8dd6bac952",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/atk_boost.svg",
+    "sha256": "80c22a1198de0456a7c2065f2124a2feac75fb077ba932e455942e2182d9624c",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/attack.svg",
+    "sha256": "e8cee0023ef0d5762eb42ff71dbd2e8910bc1607b23a632af9dae24325ce4db7",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/cap.svg",
+    "sha256": "7c7c243845a6542f02cb74a0cb3cb0e221ffda8fcf8e9e8fb0c6f1e1875c479e",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/charm.svg",
+    "sha256": "7b05f4b8ccf6e3652269eed04e9be19eda9dae303ecd4d8f3390c8e93804a166",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/cleanse.svg",
+    "sha256": "a72e70a90d333051357399b00283e793ec4f545c42953f5865943b07b0486c31",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/clone.svg",
+    "sha256": "e845c4afd635fd143edaad25df23803d20ae7b1a69094f7b40e9b524e9e092c5",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/copy.svg",
+    "sha256": "f6414b3c8eecf3f08fea5717727183237a70d3d2662b88a9536a0179213efcf0",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/cost.svg",
+    "sha256": "fe6bec633bbfe4fe7170876f3c66a23b466fe883fb55bcda6213cfa68947c84a",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/damage.svg",
+    "sha256": "898b4c9e036d22d8c5355bae0dc6b03df45067014d5481451ad32a306933a4a5",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/discard.svg",
+    "sha256": "9256979d21887efb6a0f923311071b46596bfe91d3965cb5c58f68b46cda9fa1",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/discard_pile.svg",
+    "sha256": "2038491154bae7d98ebe5bb85be7c63060a67d31bce583e98c5b3ba6119802d0",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/dispel.svg",
+    "sha256": "b69418564691b5b27b4cac7a57c31cc75195f3e01e7966f60ec54077b40217e8",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/drain.svg",
+    "sha256": "098ede0bfdefeae90c616da8ab1ca8352b8517ac811956f8643a136582ebd657",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/draw.svg",
+    "sha256": "e9a6b4f85f199956d63243cecde70dfd0e7bafff6b6bc7f0fc2827014539caa2",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/draw_pile.svg",
+    "sha256": "0d4e05ab1931db97340981e1c555c71d2feff60dffff491a8e5027297dd29acc",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/elixir.svg",
+    "sha256": "f9c87a0c78fb58886358d2192474b565b7a4018219679a655c0d573da5fb4180",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/execute.svg",
+    "sha256": "a030d830ee97e658211e5b5288fe002e8e3b2e195910ea4ec25fa7a1ead145b6",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/heal.svg",
+    "sha256": "9346e7aca6a5927f3d0fe8d82e611f7bffe9624d09411f0c04e40952c822de50",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/hp.svg",
+    "sha256": "d8114ff523c525463dc9f76a2027fb232512487dfd54abc64e9a71630eeb10b1",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/immune.svg",
+    "sha256": "734c0de3b0fbc4100f79d3eed193cc916c9b09bcf0acf48b775d7200a79e9a37",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/lifesteal.svg",
+    "sha256": "a5744ebfcf6e6840cd1201ad9a64cc3995136402cbcc8a395004072b0a4e70e2",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/max_hp.svg",
+    "sha256": "0b7d7db5d4541e6cc5fc894c17dd2a333c5f6a1d7ae8104a9b12d74c74dc4040",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/misfortune.svg",
+    "sha256": "39e4d4c4f51abc0a51c605f3caa10974f39213f8540e9c2e13fbd9387ee3a129",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/parasite.svg",
+    "sha256": "717fc299e7324ffa60ebf5a95426edb35a585c8df9c54484ee6ec936fc66aa6e",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/poison.svg",
+    "sha256": "1386a35e64a1ffd1d3d7390557eca8f13b6ae4979ba701ee95f61c4e44b764c9",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/reduction.svg",
+    "sha256": "c9265d4ac7bf90d6d86396c00e06c4efda598b396056a91bdad02636efaf5a8d",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/refund.svg",
+    "sha256": "8f0d769408b38801ae47be86b3332c4fba2cef14e79cc3216682a1a5d17c9cfd",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/regen.svg",
+    "sha256": "c04b98fdb85e13a417b68446ab0315f19aebd4a15ec592f69b406c9cf60c7256",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/search.svg",
+    "sha256": "4defa160d554b80deba9d511193923e01a0444f5084e46e61f3a8bfe2cc10f32",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/shield.svg",
+    "sha256": "734b921725085f72ad7ce2b4b629568d0e11d230f0d8c9555939ec0e39d96ff0",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/silence.svg",
+    "sha256": "ab90d27c974f5493dafaf233eaec3655eab555038b853de325f41ac576f8273c",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/stun.svg",
+    "sha256": "343a2a0aa022116739a9075c0908c59d96870d5d456b3429efcc61a64c3f6cb6",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/swap.svg",
+    "sha256": "f71e3dc200fde44cc7d846ec3753f36ab62388e8b83648db369b46bf35be1bc4",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/taunt.svg",
+    "sha256": "3a5f21e56d492ac91dd115159acdb15609c20eb15241601e3c401b313e283f03",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/thorns.svg",
+    "sha256": "10f662c068fec03c8bf31b61f140c75a270b7612c78d27675676aaf3b5e02aa5",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  },
+  {
+    "path": "res/ui/keywords/zero.svg",
+    "sha256": "1725bd3ca1ccea7de5a979af9796989b7fc6f2f69da58c6638b55f2c5e508fdc",
+    "provenance": "original project SVG keyword icon authored 2026-11-15; no external icon library used"
+  }
+]

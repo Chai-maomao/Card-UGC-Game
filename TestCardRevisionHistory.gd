@@ -67,7 +67,7 @@ func _test_editor_restore() -> void:
 	add_child(editor)
 	await get_tree().process_frame
 	await get_tree().process_frame
-	var button: Button = editor.get_node("Panel/MarginContainer/ScrollContainer/VBoxContainer/AnalysisActionsRow/VersionHistoryButton")
+	var button: Button = editor.get("version_history_button")
 	_assert(not button.disabled and button.text == Locale.t("revision.button_count", [2]), "history entry did not show its revision count")
 	_assert(button.get_meta("ui_button_variant", "") == "secondary", "history entry does not use the shared secondary style")
 	var popup: CanvasLayer = editor._open_version_history()
@@ -84,6 +84,19 @@ func _test_editor_restore() -> void:
 	_assert(str(PlayerData.card_draft.get("name", "")) == "旧版本", "old revision was not restored to the draft")
 	_assert(int(PlayerData.card_draft.get("cost", 0)) == 2 and int(PlayerData.card_draft.get("hp", 0)) == 5 and int(PlayerData.card_draft.get("atk", 0)) == 2, "programmatic restore was overwritten by stale form signals")
 	_assert(current.card_name == "当前版本" and current.cost == 4, "restoring a revision changed the saved deck immediately")
+	# Authoring layout must still trigger the discard warning and survive the
+	# actual card save path, while leaving gameplay identity unchanged.
+	current.skills = [{"skill_name":"守护","trigger":SkillEngine.TRIGGER_ON_ATTACK,"effects":[{"effect":SkillEngine.EFFECT_HEAL,"target":SkillEngine.TARGET_SELF,"target_side":SkillEngine.TARGET_SIDE_ALL,"value":1}]}]
+	PlayerData.card_draft = PlayerData.card_to_draft(current)
+	editor._restore_form_from_draft()
+	_assert(not editor._has_unsaved_card_edits(), "unchanged card must not become dirty")
+	PlayerData.card_draft.skill1["_workspace"] = {"version":1,"position":[1200,3400],"groups":{}}
+	_assert(editor._has_unsaved_card_edits(), "layout-only edits must retain the discard warning")
+	var layout_card := PlayerData.build_card_from_draft()
+	_assert(SharePackage.gameplay_signature(PlayerData.serialize_card(current)) == SharePackage.gameplay_signature(PlayerData.serialize_card(layout_card)), "layout must not create different game rules")
+	_assert(PlayerData.update_deck_card("deck_ui_history", current.instance_id, layout_card), "card save must accept editor layout")
+	var stored := PlayerData.find_deck_card("deck_ui_history", current.instance_id)
+	_assert(stored.skills[0].get("_workspace", {}).get("position", []) == [1200,3400], "actual deck save lost the layout")
 	editor.queue_free()
 	await get_tree().process_frame
 	PlayerData.deck_library = backup.decks

@@ -12,6 +12,11 @@ var failures: Array[String] = []
 var progress_path := "user://test_guided_tutorial_progress.cfg"
 
 
+func _enter_tree() -> void:
+	get_window().set_flag(Window.FLAG_NO_FOCUS,true)
+	get_window().set_flag(Window.FLAG_MOUSE_PASSTHROUGH,true)
+
+
 func _ready() -> void:
 	ProgressStore.new(progress_path).clear()
 	var original_draft := {"card_type": "minion", "name": "KEEP-ME", "cost": 4, "hp": 7, "atk": 2}
@@ -62,24 +67,42 @@ func _ready() -> void:
 	_assert(not skill_tutorial.focus_frames.is_empty()
 			and skill_tutorial.instruction_panel.z_index > skill_tutorial.focus_frames[0].z_index,
 			"skill tutorial prompt must render above its highlight frames")
+	for button in skill_editor.palette_vbox.find_children("*","Button",true,false):
+		if button is SkillPaletteBlock and button.effect_id==SkillEngine.EFFECT_VIEW_DECK:
+			_assert(button.disabled and button.get_theme_color("font_disabled_color").a<0.6,"deck selection must be dimmed like the other unavailable tutorial blocks")
 	var colored_block := skill_tutorial._effect_button()
-	var normal_style := colored_block.get_theme_stylebox("normal") as StyleBoxFlat
-	var disabled_style := colored_block.get_theme_stylebox("disabled") as StyleBoxFlat
+	var normal_style := colored_block.get_theme_stylebox("normal")
+	var disabled_style := colored_block.get_theme_stylebox("disabled")
+	var normal_color: Color = normal_style.bg_color if normal_style is StyleBoxFlat else normal_style.fill
+	var disabled_color: Color = disabled_style.bg_color if disabled_style is StyleBoxFlat else disabled_style.fill
 	_assert(colored_block.disabled, "non-current palette blocks must remain functionally unavailable")
-	_assert(normal_style != null and disabled_style != null and normal_style.bg_color.is_equal_approx(disabled_style.bg_color),
+	_assert(normal_style.get_script() == disabled_style.get_script() and normal_color.is_equal_approx(disabled_color),
 			"disabled tutorial blocks must preserve their original category colour")
 
 	skill_tutorial._on_next()
+	await _settle()
+	_assert(not skill_tutorial.instruction_panel.get_global_rect().intersects(skill_editor.skill_name_input.get_global_rect().grow(6)),
+			"name step must leave the actual skill name input unobstructed")
 	skill_editor.skill_name_input.text = "星辉补给"
 	skill_editor._on_skill_name_changed(skill_editor.skill_name_input.text)
 	skill_tutorial._on_next()
+	await _settle()
+	await _settle()
+	_assert(not skill_tutorial.focus_frames.is_empty() and skill_tutorial.focus_frames[0].visible,
+			"On Summon guide must remain visible for the actual palette button")
+	_assert(not skill_editor.palette_search.editable, "guided palette search must not hide the required block")
 	skill_editor._select_trigger(SkillEngine.TRIGGER_ON_ACTIVATE)
 	_assert(skill_tutorial.phase == SkillGuide.Phase.TRIGGER and skill_editor.current_trigger_key != SkillEngine.TRIGGER_ON_ACTIVATE,
 			"wrong trigger must be blocked without advancing")
 	skill_editor._select_trigger(SkillEngine.TRIGGER_ON_SUMMON)
 	_assert(skill_tutorial.phase == SkillGuide.Phase.EFFECT, "real On Summon block must advance the guide")
+	_assert(skill_editor.skill_summary.text.contains(Locale.term("trigger", SkillEngine.TRIGGER_ON_SUMMON)) and skill_editor._build_skill().is_empty(),
+			"incomplete preview must show selected On Summon while compilation still rejects missing effects")
 	await _settle()
-	var palette_scroll := skill_editor.get_node("Panel/Margin/HBox/PalettePanel/Margin/VBox/PaletteScroll") as ScrollContainer
+	await _settle()
+	_assert(not skill_tutorial.focus_frames.is_empty() and skill_tutorial.focus_frames[0].visible,
+			"Draw Cards guide must remain visible for the actual palette block")
+	var palette_scroll := skill_editor.palette_vbox.get_parent() as ScrollContainer
 	var frame_before := skill_tutorial.focus_frames[0].position.y
 	var scroll_before := palette_scroll.scroll_vertical
 	palette_scroll.scroll_vertical = maxi(0, scroll_before - 36)
@@ -90,10 +113,40 @@ func _ready() -> void:
 	skill_editor._add_effect_block(SkillEngine.EFFECT_DAMAGE)
 	_assert(skill_editor.effect_data.is_empty(), "unrelated effects must remain blocked")
 	skill_editor._add_effect_block(SkillEngine.EFFECT_DRAW_CARDS)
-	_assert(skill_tutorial.phase == SkillGuide.Phase.REVIEW and skill_editor.effect_data.size() == 1,
+	_assert(skill_tutorial.phase == SkillGuide.Phase.VALUE and skill_editor.effect_data.size() == 1,
 			"Draw Cards must be assembled into the real script")
+	await _settle()
+	var count_input := skill_tutorial._draw_count_input()
+	_assert(count_input != null and count_input.editable and count_input.text.is_empty() and skill_tutorial.next_button.disabled,
+			"the guide must highlight an editable empty count and wait for input")
+	if count_input != null:
+		_assert(not skill_tutorial.instruction_panel.get_global_rect().intersects(count_input.get_global_rect()),
+				"the count prompt must leave the field unobstructed")
+		if DisplayServer.get_name() != "headless":
+			await RenderingServer.frame_post_draw
+			DirAccess.make_dir_recursive_absolute(ProjectSettings.globalize_path("res://artifacts/first-launch"))
+			var image := get_viewport().get_texture().get_image()
+			_assert(image.save_png("res://artifacts/first-launch/skill-draw-count.png") == OK,
+					"the count step must render for visual inspection")
+		count_input.text = "1"
+		count_input.text_submitted.emit(count_input.text)
+	_assert(not skill_tutorial.next_button.disabled, "committing one card must unlock the preview")
 	skill_tutorial._on_next()
+	await _settle()
+	_assert(not skill_tutorial.instruction_panel.get_global_rect().intersects(skill_editor.workbench.preview_section.get_global_rect().grow(6)),
+			"review step must leave the compiled preview unobstructed")
+	skill_tutorial._on_next()
+	await _settle()
+	_assert(not skill_tutorial.instruction_panel.get_global_rect().intersects(skill_editor.save_button.get_global_rect().grow(6)),
+			"save step must leave the actual save button unobstructed")
 	_assert(skill_editor._collect_errors().is_empty(), "guided skill must pass existing compiler validation")
+	for block in skill_editor.palette_vbox.get_children():
+		if block.get("effect_id") == SkillEngine.EFFECT_VIEW_DECK:
+			palette_scroll.ensure_control_visible(block)
+	await _settle()
+	if DisplayServer.get_name() != "headless":
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png("res://artifacts/ui-refinement-20261113/tutorial-palette-dim.png")
 	skill_editor._on_save_pressed()
 	_assert(PlayerData.skill_tutorial_active and PlayerData.tutorial_editor_stage == "card_review",
 			"saving a skill must return its data to the same tutorial card")
@@ -129,6 +182,12 @@ func _ready() -> void:
 	add_child(battle)
 	await _settle()
 	var battle_tutorial: BattleTutorialController = battle.tutorial_controller
+	if battle_tutorial == null:
+		failures.append("card confirmation must install the tutorial battle controller")
+		for failure in failures:
+			push_error("TEST_GUIDED_TUTORIAL_UX_FAILED: " + failure)
+		get_tree().quit(1)
+		return
 	battle_tutorial.progress_path = progress_path
 	_assert(battle.game.turn_number == 1 and battle.game.player_hand.size() == 1,
 			"custom tutorial card must be guaranteed in the first-turn hand")
@@ -143,18 +202,22 @@ func _ready() -> void:
 	_assert(not battle_tutorial.focus_frames.is_empty()
 			and battle_tutorial.instruction_panel.z_index > battle_tutorial.focus_frames[0].z_index,
 			"battle tutorial prompt must render above its highlight frames")
-	battle_tutorial._on_next()
+	_advance_to(battle_tutorial, BattleGuide.Phase.SUMMON)
 	battle._on_card_drag_summoned(trainee, null, 2)
 	_assert(trainee.skills_used.has(0), "tutorial summon skill must resolve automatically")
+	battle_tutorial._on_next()
 	battle_tutorial._on_next()
 	battle._on_attack_requested(2)
 	var target: CardData = battle.game.player2_field.slots[2]
 	var target_hp := target.hp
 	battle._on_enemy_slot_clicked(2)
 	_assert(target.hp < target_hp, "custom card must use the real first-turn tutorial attack path")
+	_advance_to(battle_tutorial, BattleGuide.Phase.END_TURN)
 	battle._on_end_turn_pressed()
-	await get_tree().create_timer(0.8).timeout
-	_assert(battle_tutorial.phase == BattleGuide.Phase.COMPLETE, "guided battle actions must reach the exit/continue choice")
+	var deadline := Time.get_ticks_msec() + 10000
+	while battle_tutorial.phase != BattleGuide.Phase.COMPLETE and Time.get_ticks_msec() < deadline:
+		await get_tree().process_frame
+	_assert(battle_tutorial.phase == BattleGuide.Phase.COMPLETE, "guided battle actions must reach the exit/continue choice: phase=%s turn_ending=%s deployment=%s resolution=%s playback=%s batches=%s arrivals=%s" % [battle_tutorial.phase,battle._turn_ending,battle._deployment_feedback_delay(),battle.is_resolution_locked(),battle._turn_request_playback_pending(),battle._hp_feedback_batches.size(),battle.hand_container.get_children().map(func(card): return card.get_meta("tabletop_arriving",false))])
 	_assert(battle_tutorial.next_button.text == Locale.t("tutorial.continue_battle")
 			and battle_tutorial.next_button.custom_minimum_size.x >= 164,
 			"continue battle choice must be fully legible")
@@ -163,7 +226,9 @@ func _ready() -> void:
 			and battle_tutorial.exit_button.custom_minimum_size.x >= 96,
 			"completed tutorial must show a clear exit choice without a skip-button trap")
 	battle_tutorial._continue_battle()
-	await get_tree().create_timer(2.2).timeout
+	deadline = Time.get_ticks_msec() + 10000
+	while (battle.game.current_player != 1 or battle.game.turn_number < 2 or battle.practice_ai_running) and Time.get_ticks_msec() < deadline:
+		await get_tree().process_frame
 	_assert(PlayerData.battle_mode == "practice" and battle.tutorial_controller == null,
 			"continue must preserve battle state and remove tutorial restrictions")
 	_assert(battle._tutorial_allows("summon", {"slot": 0}), "free play must allow ordinary battle actions")
@@ -175,6 +240,7 @@ func _ready() -> void:
 	PlayerData.clear_battle_preparation()
 	ProgressStore.new(progress_path).clear()
 	NetworkManager.close_connection()
+	await _test_card_guide_close_lifecycle()
 	if failures.is_empty():
 		print("TEST_GUIDED_TUTORIAL_UX_OK")
 		get_tree().quit(0)
@@ -189,6 +255,38 @@ func _settle() -> void:
 	await get_tree().process_frame
 
 
+func _advance_to(guide: BattleTutorialController, expected: int) -> void:
+	for _step in range(BattleGuide.Phase.size()):
+		if guide.phase == expected: return
+		if guide.next_button.disabled: break
+		guide._on_next()
+	_assert(guide.phase == expected, "battle guide must reach its expected next action")
+
+
 func _assert(condition: bool, message: String) -> void:
 	if not condition:
 		failures.append(message)
+
+
+func _test_card_guide_close_lifecycle() -> void:
+	for route in ["escape","removed_overlay"]:
+		PlayerData.begin_card_tutorial()
+		var ui = CardEditorScene.instantiate()
+		add_child(ui)
+		await _settle()
+		var guide = ui.card_tutorial_controller
+		guide.navigate_on_complete = false
+		# Leave a delayed focus refresh pending while the layer closes.
+		guide.set_phase(CardGuide.Phase.ART)
+		if route=="escape":
+			UIMotion.register_popup(guide.overlay_layer)
+			_assert(UIMotion.close_top_popup(),"Escape's popup dispatch must find the editor tutorial")
+		else: guide.overlay_layer.queue_free()
+		await _settle()
+		await _settle()
+		_assert(guide.focus_frames.is_empty() and not guide.is_processing(),"closing tutorial must stop focus refresh: "+route)
+		if route=="escape": _assert(not PlayerData.skill_tutorial_active,"Escape must cancel the tutorial rather than delete just its view")
+		guide.set_process(false)
+		ui.queue_free()
+		await _settle()
+		PlayerData.cancel_skill_tutorial()

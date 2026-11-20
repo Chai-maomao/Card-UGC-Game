@@ -1,0 +1,7 @@
+[Unit]
+Description=Renew CARDEX workshop IP certificate
+After=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/cardex-acme/bin/certbot renew --quiet --config-dir /etc/cardex-acme --work-dir /var/lib/cardex-acme --logs-dir /var/log/cardex-acme --deploy-hook "/www/server/nginx/sbin/nginx -s reload -c /www/server/nginx/conf/nginx.conf"

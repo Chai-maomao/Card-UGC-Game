@@ -1,0 +1,18 @@
+{
+	"name": "cardex-online-relay",
+	"main": "src/worker.ts",
+	"account_id": "b595dbcbe2f6cdaca7a7b3b95770d317",
+	"compatibility_date": "2026-05-15",
+	"workers_dev": true,
+	"send_metrics": false,
+	"vars": {
+		"BETA_DISABLED": "0"
+	},
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "cardex-online",
+			"database_id": "bfa5593e-5ba6-4457-8b3a-ef1cbe936ec3"
+		}
+	]
+}

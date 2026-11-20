@@ -29,13 +29,36 @@ theme_override_font_sizes/font_size = 24
 text = "Multiplayer"
 horizontal_alignment = 1
 
-[node name="ServerButton" type="Button" parent="CenterContainer/VBoxContainer" unique_id=9000005]
+[node name="DedicatedButton" type="Button" parent="CenterContainer/VBoxContainer"]
 layout_mode = 2
-text = "Connect to Server"
+text = "Dedicated Server"
+
+[node name="DedicatedHintLabel" type="Label" parent="CenterContainer/VBoxContainer"]
+layout_mode = 2
+horizontal_alignment = 1
+autowrap_mode = 3
+
+[node name="ServerButton" type="Button" parent="CenterContainer/VBoxContainer" unique_id=9000005]
+visible = false
+layout_mode = 2
+disabled = true
+text = "Cloudflare Online"
 
 [node name="ServerHintLabel" type="Label" parent="CenterContainer/VBoxContainer" unique_id=9000008]
 layout_mode = 2
-text = "Use a room code through the server."
+text = "Create a cloud room and share its code."
+horizontal_alignment = 1
+autowrap_mode = 3
+
+[node name="BetaButton" type="Button" parent="CenterContainer/VBoxContainer"]
+visible = false
+layout_mode = 2
+disabled = true
+text = "Online Beta"
+
+[node name="BetaHintLabel" type="Label" parent="CenterContainer/VBoxContainer"]
+layout_mode = 2
+text = "Experimental HTTPS rooms. No public IP needed."
 horizontal_alignment = 1
 autowrap_mode = 3
 

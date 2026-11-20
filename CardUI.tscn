@@ -97,7 +97,8 @@ offset_right = 94.0
 offset_bottom = 72.0
 theme_override_font_sizes/font_size = 11
 
-[node name="ActionButtons" type="VBoxContainer" parent="." unique_id=40715393]
+[node name="ActionButtons" type="GridContainer" parent="." unique_id=40715393]
+columns = 2
 layout_mode = 0
 offset_left = 6.0
 offset_top = 90.0
@@ -107,6 +108,7 @@ theme_override_constants/separation = 1
 
 [node name="NormalAtkButton" type="Button" parent="ActionButtons" unique_id=2123122470]
 layout_mode = 2
+size_flags_horizontal = 3
 size_flags_vertical = 3
 text = "Atk"
 clip_text = true
@@ -114,6 +116,7 @@ theme_override_font_sizes/font_size = 11
 
 [node name="Skill1Button" type="Button" parent="ActionButtons" unique_id=1884030330]
 layout_mode = 2
+size_flags_horizontal = 3
 size_flags_vertical = 3
 text = "-"
 clip_text = true
@@ -121,6 +124,7 @@ theme_override_font_sizes/font_size = 11
 
 [node name="Skill2Button" type="Button" parent="ActionButtons" unique_id=1917541539]
 layout_mode = 2
+size_flags_horizontal = 3
 size_flags_vertical = 3
 text = "-"
 clip_text = true
@@ -128,6 +132,7 @@ theme_override_font_sizes/font_size = 11
 
 [node name="Skill3Button" type="Button" parent="ActionButtons"]
 layout_mode = 2
+size_flags_horizontal = 3
 size_flags_vertical = 3
 text = "-"
 clip_text = true

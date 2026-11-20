@@ -16,6 +16,7 @@ func _t(zh: String, en: String) -> String:
 func setup(owner_battle: Node, header: HBoxContainer, selected_challenge_id: String) -> void:
 	battle = owner_battle
 	challenge_id = selected_challenge_id
+	battle.get_viewport().size_changed.connect(_resize_active_popup)
 	var button := Button.new()
 	button.name = "ChallengeObjectiveButton"
 	button.text = _t("挑战目标", "Challenge objective")
@@ -26,6 +27,8 @@ func setup(owner_battle: Node, header: HBoxContainer, selected_challenge_id: Str
 
 
 func _reset() -> void:
+	if battle._turn_ending or battle._resolution_running or battle._resolution_pending_steps > 0:
+		return
 	_close_popup()
 	battle.cancel_attack()
 	PracticeChallenges.configure(battle.game, challenge_id)
@@ -50,11 +53,8 @@ func _show(include_hint := false) -> void:
 	panel.anchor_right = 0.5
 	panel.anchor_top = 0.5
 	panel.anchor_bottom = 0.5
-	panel.offset_left = -350
-	panel.offset_right = 350
-	panel.offset_top = -185
-	panel.offset_bottom = 185
 	popup_layer.add_child(panel)
+	_fit_popup(panel)
 	UITheme.apply_popup_frame(panel, "gold")
 	var margin := MarginContainer.new()
 	for side in ["margin_left", "margin_top", "margin_right", "margin_bottom"]:
@@ -66,8 +66,9 @@ func _show(include_hint := false) -> void:
 	var number := PracticeChallenges.IDS.find(challenge_id) + 1
 	var title := Label.new()
 	title.name = "ChallengeTitle"
-	title.text = "%d/%d · %s · %s" % [number, PracticeChallenges.IDS.size(), PracticeChallenges.title(challenge_id), PracticeChallenges.difficulty(challenge_id)]
+	title.text = "%d/%d  %s" % [number, PracticeChallenges.IDS.size(), PracticeChallenges.title(challenge_id)]
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	UITheme.apply_title(title, 23)
 	box.add_child(title)
 	message_label = Label.new()
@@ -75,17 +76,37 @@ func _show(include_hint := false) -> void:
 	message_label.text = _message(include_hint)
 	message_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	message_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
-	message_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	message_label.custom_minimum_size = Vector2(0, 180)
+	message_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	UITheme.apply_label(message_label)
 	message_label.add_theme_font_size_override("font_size", 16)
-	box.add_child(message_label)
+	var scroll := ScrollContainer.new()
+	scroll.name = "ChallengeTextScroll"
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.custom_minimum_size.y = 160
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	UITheme.apply_scrollbar(scroll.get_v_scroll_bar())
+	box.add_child(scroll)
+	scroll.add_child(message_label)
 	var row := HBoxContainer.new()
 	row.name = "ChallengeActions"
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.add_theme_constant_override("separation", 12)
 	box.add_child(row)
 	_build_actions(row, include_hint)
+
+
+func _fit_popup(panel: Control) -> void:
+	if not is_instance_valid(panel): return
+	var dimensions := Vector2(700, 450).min(panel.get_viewport_rect().size - Vector2(32, 32))
+	panel.offset_left = -dimensions.x / 2
+	panel.offset_right = dimensions.x / 2
+	panel.offset_top = -dimensions.y / 2
+	panel.offset_bottom = dimensions.y / 2
+
+
+func _resize_active_popup() -> void:
+	if is_instance_valid(popup_layer):
+		_fit_popup(popup_layer.get_node("ChallengePopup"))
 
 
 func _message(include_hint: bool) -> String:
@@ -138,7 +159,7 @@ func _return_to_picker() -> void:
 	_close_popup()
 	NetworkManager.close_connection()
 	PlayerData.practice_challenge_id = ""
-	UIMotion.replace_scene("res://MainMenu.tscn", true, "challenge_picker")
+	UIMotion.replace_scene("res://MainMenu.tscn", true, "challenge_picker:" + challenge_id)
 
 
 func _close_popup() -> void:
@@ -150,6 +171,8 @@ func _close_popup() -> void:
 
 func _process(delta: float) -> void:
 	if battle == null or finished:
+		return
+	if battle._turn_ending or battle._resolution_running or battle._resolution_pending_steps > 0:
 		return
 	elapsed += delta
 	if elapsed < 0.25:

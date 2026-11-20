@@ -17,3 +17,9 @@ godot_test.log
 # Server build output
 server-build/
 .mcp/
+
+# Local distributable candidates
+/build/
+/workshop-data/
+/workshop/*.env
+/workshop/review-package.json

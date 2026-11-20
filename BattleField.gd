@@ -18,6 +18,9 @@ var max_player_hp: int = 30
 var current_mana: int = 4
 var max_mana: int = 10
 var temp_mana: int = 0  # 临时圣水（回合结束消失，消耗时优先扣除）
+var action_points: int = 0
+var action_budget: int = 0
+var actions_taken: int = 0
 
 # 5个前台格子 [0..4]，存储 CardData 或 null
 var slots: Array = [null, null, null, null, null]

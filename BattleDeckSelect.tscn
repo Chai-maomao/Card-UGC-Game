@@ -35,28 +35,65 @@ layout_mode = 2
 text = "选择出战卡牌"
 theme_override_font_sizes/font_size = 24
 
-[node name="DeckSelect" type="OptionButton" parent="Panel/VBoxContainer/TopBar"]
-layout_mode = 2
-
 [node name="Spacer" type="Control" parent="Panel/VBoxContainer/TopBar"]
 layout_mode = 2
 size_flags_horizontal = 3
-
-[node name="ConfirmButton" type="Button" parent="Panel/VBoxContainer/TopBar"]
-layout_mode = 2
-text = "确认"
 
 [node name="BackButton" type="Button" parent="Panel/VBoxContainer/TopBar"]
 layout_mode = 2
 text = "返回"
 
-[node name="ScrollContainer" type="ScrollContainer" parent="Panel/VBoxContainer"]
+[node name="Content" type="HBoxContainer" parent="Panel/VBoxContainer"]
 layout_mode = 2
 size_flags_vertical = 3
 
-[node name="CardGrid" type="GridContainer" parent="Panel/VBoxContainer/ScrollContainer"]
+[node name="DeckColumn" type="VBoxContainer" parent="Panel/VBoxContainer/Content"]
 layout_mode = 2
-columns = 4
+size_flags_horizontal = 3
+size_flags_vertical = 0
+theme_override_constants/separation = 12
 
-[connection signal="pressed" from="Panel/VBoxContainer/TopBar/ConfirmButton" to="." method="_on_confirm_pressed"]
+[node name="ScrollContainer" type="ScrollContainer" parent="Panel/VBoxContainer/Content/DeckColumn"]
+layout_mode = 2
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+
+[node name="DeckGrid" type="GridContainer" parent="Panel/VBoxContainer/Content/DeckColumn/ScrollContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[node name="SelectionLabel" type="Label" parent="Panel/VBoxContainer/Content/DeckColumn"]
+layout_mode = 2
+autowrap_mode = 2
+
+[node name="Footer" type="HBoxContainer" parent="Panel/VBoxContainer/Content/DeckColumn"]
+layout_mode = 2
+
+[node name="ConfirmButton" type="Button" parent="Panel/VBoxContainer/Content/DeckColumn/Footer"]
+layout_mode = 2
+
+[node name="ViewButton" type="Button" parent="Panel/VBoxContainer/Content/DeckColumn/Footer"]
+layout_mode = 2
+
+[node name="SettingsPanel" type="PanelContainer" parent="Panel/VBoxContainer/Content"]
+layout_mode = 2
+size_flags_vertical = 0
+
+[node name="Margin" type="MarginContainer" parent="Panel/VBoxContainer/Content/SettingsPanel"]
+layout_mode = 2
+
+[node name="Layout" type="VBoxContainer" parent="Panel/VBoxContainer/Content/SettingsPanel/Margin"]
+layout_mode = 2
+
+[node name="Scroll" type="ScrollContainer" parent="Panel/VBoxContainer/Content/SettingsPanel/Margin/Layout"]
+layout_mode = 2
+size_flags_vertical = 3
+horizontal_scroll_mode = 0
+follow_focus = true
+
+[node name="SettingsBox" type="VBoxContainer" parent="Panel/VBoxContainer/Content/SettingsPanel/Margin/Layout/Scroll"]
+layout_mode = 2
+size_flags_horizontal = 3
+
+[connection signal="pressed" from="Panel/VBoxContainer/Content/DeckColumn/Footer/ConfirmButton" to="." method="_on_confirm_pressed"]
 [connection signal="pressed" from="Panel/VBoxContainer/TopBar/BackButton" to="." method="_on_back_pressed"]

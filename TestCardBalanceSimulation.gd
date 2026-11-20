@@ -7,6 +7,8 @@ var failures := 0
 
 func _ready() -> void:
 	Locale.language = "zh"
+	_test_strength_scores()
+	_test_drain_spell_scores()
 	var candidate := CardData.new("模拟候选", 2, 3, 2, [{
 		"skill_name": "试探",
 		"trigger": SkillEngine.TRIGGER_ON_SUMMON,
@@ -35,6 +37,8 @@ func _ready() -> void:
 		_assert(float(report.get("draw_rate", -1.0)) >= 0.0 and float(report.get("draw_rate", 2.0)) <= 1.0, "%s draw rate is invalid" % kind)
 		_assert(float(report.get("first_player_win_rate", -1.0)) >= 0.0 and float(report.get("first_player_win_rate", 2.0)) <= 1.0, "%s first-player rate is invalid" % kind)
 		_assert((report.get("candidate", {}) as Dictionary).has("plays_per_game"), "%s candidate metrics are missing" % kind)
+		var score: Variant = report.get("strength_score")
+		_assert(score==null or (int(score)>=0 and int(score)<=200),"actual simulation strength must stay within 0–200")
 
 	var deterministic_pool := Simulation.build_pool("units", candidate)
 	var deterministic_baseline := Simulation.build_baseline_pool("units")
@@ -80,7 +84,7 @@ func _check_editor_ui(candidate: CardData) -> void:
 	add_child(editor)
 	await get_tree().process_frame
 	await get_tree().process_frame
-	var button: Button = editor.get_node("Panel/MarginContainer/ScrollContainer/VBoxContainer/AnalysisActionsRow/SimulationButton")
+	var button: Button = editor.get("simulation_button")
 	_assert(button.text == Locale.t("simulation.button"), "simulation entry is not localized")
 	_assert(button.get_meta("ui_button_variant", "") == "secondary", "simulation entry does not use the shared secondary style")
 	var popup: CanvasLayer = editor.call("_open_balance_simulation", candidate, false)
@@ -89,8 +93,22 @@ func _check_editor_ui(candidate: CardData) -> void:
 	var note: Label = panel.find_child("SimulationNote", true, false)
 	var close_button: Button = panel.find_child("SimulationCancelButton", true, false)
 	_assert(panel.get_theme_stylebox("panel") is StyleBoxFlat, "simulation popup does not use the shared panel style")
-	_assert(note.text.contains("共享牌池") and not note.text.contains("shared pool"), "simulation popup mixed languages")
+	_assert(note.text.contains("0–200") and not note.text.contains("Scores range"), "simulation popup mixed languages")
 	_assert(close_button.get_meta("ui_button_variant", "") == "secondary", "simulation close action does not use the shared style")
+
+	var cancelled_popup: CanvasLayer = editor.call("_open_balance_simulation", candidate, true, 2)
+	var cancelled_progress := cancelled_popup.find_child("SimulationProgress", true, false) as ProgressBar
+	var cancel_button := cancelled_popup.find_child("SimulationCancelButton", true, false) as Button
+	cancelled_progress.value_changed.connect(func(value: float):
+		if value == 2.0:
+			cancel_button.pressed.emit.call_deferred()
+	)
+	for _frame in range(120):
+		if not is_instance_valid(cancelled_popup):
+			break
+		await get_tree().process_frame
+	_assert(not is_instance_valid(cancelled_popup), "cancelling at the end of a pool must close the running simulation")
+	await get_tree().process_frame
 
 	var running_popup: CanvasLayer = editor.call("_open_balance_simulation", candidate, true, 2)
 	var running_panel: Panel = running_popup.get_node("CardSimulationPanel")
@@ -103,18 +121,46 @@ func _check_editor_ui(candidate: CardData) -> void:
 	var progress: ProgressBar = running_panel.find_child("SimulationProgress", true, false)
 	var results: VBoxContainer = running_panel.find_child("SimulationResults", true, false)
 	_assert(is_equal_approx(progress.value, 6.0), "simulation progress did not reach all games")
+	_assert(not progress.visible and not status.visible,"completed scores must not retain progress or summary text")
 	var result_count := 0
 	for child in results.get_children():
 		if child.name.begins_with("PoolResult_"):
 			result_count += 1
+			var score_label: Label = child.get_node("StrengthScore")
+			_assert(score_label.text=="—" or (score_label.text.is_valid_int() and int(score_label.text)>=0 and int(score_label.text)<=200),"environment result must show a bounded score or an unscored marker")
 	_assert(result_count == 3, "simulation did not render all three environment reports")
-	var running_close: Button = running_panel.find_child("SimulationCancelButton", true, false)
-	running_close.pressed.emit()
+	var escape := InputEventKey.new()
+	escape.keycode = KEY_ESCAPE
+	escape.pressed = true
+	get_viewport().push_input(escape, true)
 	await get_tree().process_frame
-	_assert(not is_instance_valid(running_popup), "simulation close action did not release the popup")
+	_assert(not is_instance_valid(running_popup) and editor.get("_simulation_ui").is_empty(),
+			"Escape must close the results and clear the simulation state")
 	editor.queue_free()
 	PlayerData.card_draft = old_draft
 	PlayerData.skill_tutorial_active = old_tutorial
+
+
+func _measured_score(candidate_damage: int, reference_damage: int) -> Variant:
+	var metrics := BattleMetrics.new()
+	for entry in [[Simulation.CANDIDATE_METRIC_KEY,candidate_damage],["reference",reference_damage]]:
+		var source := {"name":entry[0],"identity":entry[0]}
+		metrics.record({"kind":"payment","source":source,"action":"summon","mana":2,"points":0})
+		metrics.record({"kind":"damage","source":source,"source_player":1,"target_player":2,"amount":entry[1]})
+	var accumulator := Simulation.new_accumulator("units",1)
+	Simulation.add_game(accumulator,{"stable":true,"cards":metrics.cards,"winner":"draw"})
+	return Simulation.finalize(accumulator).strength_score
+
+
+func _test_strength_scores() -> void:
+	_assert(_measured_score(4,4)==100,"equal observed resource efficiency must score 100")
+	_assert(_measured_score(8,4)>100 and _measured_score(2,4)<100,"observed strength must move the score to the correct side of 100")
+	for amount in [0,1,10000]:
+		var score: int = _measured_score(amount,4)
+		_assert(score>=0 and score<=200,"measured extremes must not escape the score range")
+	var missing := Simulation.new_accumulator("units",1)
+	Simulation.add_game(missing,{"stable":true,"cards":{},"winner":"draw"})
+	_assert(Simulation.finalize(missing).strength_score==null,"unused candidates must not receive a fabricated balanced score")
 
 
 func _assert(condition: bool, message: String) -> void:
@@ -122,3 +168,17 @@ func _assert(condition: bool, message: String) -> void:
 		return
 	failures += 1
 	push_error(message)
+
+func _test_drain_spell_scores() -> void:
+	var spell := CardData.new("Drain and heal",1,1,0,[{"trigger":"on_cast","effects":[{"effect":"mana_drain","target":"self","value":1},{"effect":"heal","target":"target_single","target_side":"ally","value":2}]}])
+	spell.card_type = "spell"
+	for kind in Simulation.POOL_IDS:
+		var accumulator := Simulation.new_accumulator(kind,8)
+		for index in range(8):
+			var pool := Simulation.build_pool(kind,spell)
+			var baseline := Simulation.build_baseline_pool(kind)
+			Simulation.add_game(accumulator,HeadlessBattleSimulator.run_game(baseline,pool,Simulation.seed_for_pool(kind)+index,"normal","normal",30))
+		var report := Simulation.finalize(accumulator)
+		_assert(report.candidate.plays > 0 and report.candidate.mana_drained > 0,"drain spell must actually be played and siphon Elixir in "+kind)
+		_assert(report.strength_score != null,"measured drain and healing spell must produce a reference score in "+kind)
+		print("DRAIN_SPELL_SCORE ",kind," ",report.strength_score)

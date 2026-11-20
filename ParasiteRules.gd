@@ -39,15 +39,17 @@ static func is_passive_trigger(trigger: String) -> bool:
 
 
 static func trigger_host_passives(trigger: String, host: CardData, context: Dictionary) -> void:
-	if host == null or host.is_silenced() or host.parasite_cards.is_empty():
+	if host == null or host.skills_disabled() or host.parasite_cards.is_empty():
 		return
 	for parasite in host.parasite_cards:
 		if not parasite is CardData:
 			continue
-		for skill in parasite.skills:
-			var skill_dict: Dictionary = skill
+		for skill_index in range(parasite.skills.size()):
+			var skill_dict: Dictionary = parasite.skills[skill_index]
 			if skill_dict.get("trigger", "") == trigger and is_passive_trigger(trigger):
-				SkillEngine.trigger_external_skill(skill_dict, host, context)
+				var external_context := context.duplicate()
+				external_context["metric_source_card"] = parasite
+				SkillEngine.trigger_external_skill(skill_dict, host, external_context, parasite, skill_index)
 
 
 static func attach(card: CardData, target: CardData) -> void:
@@ -73,7 +75,7 @@ static func has_damage_absorber(host: CardData) -> bool:
 
 
 # Damage resolution walks attachments from newest to oldest. Returning the
-# same card keeps the HP affordance aligned with the next directed hit.
+# same card keeps the HP affordance aligned with the next intercepted hit.
 static func active_damage_absorber(host: CardData) -> CardData:
 	if host == null:
 		return null
@@ -103,7 +105,7 @@ static func absorb_damage_detail(target: CardData, amount: int, discard_pile: Ar
 		parasite.hp = max(0, parasite.hp - amount)
 		var absorbed: int = before_hp - parasite.hp
 		var destroyed := parasite.hp <= 0
-		result = {"remaining": 0, "absorbed": absorbed, "parasite": parasite, "destroyed": destroyed}
+		result = {"remaining": 0, "prevented": mini(amount,target.hp+target.temp_hp), "absorbed": absorbed, "parasite": parasite, "destroyed": destroyed}
 		_GameplayLog.write("  [Parasite] %s blocks %d for %s (HP: %d/%d)" % [parasite.card_name, amount, target.card_name, parasite.hp, parasite.max_hp])
 		if destroyed:
 			target.parasite_cards.remove_at(i)

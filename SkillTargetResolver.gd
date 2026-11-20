@@ -126,6 +126,10 @@ static func _resolve_directed_target(source_card: CardData, context: Dictionary,
 	var field: BattleField = _directed_target_field(source_card, context, target_side)
 	if field == null:
 		return []
+	# A response targets the actual damage/heal initiator. An incompatible
+	# side or an off-board spell must not select an unrelated same-slot unit.
+	if context.has("reaction_target_card") and (target_slot >= field.slots.size() or field.slots[target_slot] != context.reaction_target_card):
+		return []
 	return _cards_around_slot(field, target_slot, include_sides)
 
 

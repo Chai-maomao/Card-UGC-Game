@@ -2,6 +2,7 @@ class_name BattleRepro
 extends RefCounted
 
 const SCHEMA_VERSION := 1
+const MAX_ACTIONS_PER_TURN := 40
 const GameStateScript = preload("res://GameState.gd")
 
 
@@ -38,7 +39,10 @@ static func export_json(record: Dictionary) -> String:
 
 
 static func import_json(source: String) -> Dictionary:
-	var parsed = JSON.parse_string(source)
+	var parser := JSON.new()
+	if parser.parse(source) != OK:
+		return {"ok": false, "reason": "invalid_json"}
+	var parsed: Variant = parser.data
 	if not (parsed is Dictionary):
 		return {"ok": false, "reason": "invalid_json"}
 	var decoded = _decode_from_json(parsed)
@@ -98,15 +102,27 @@ static func _clone_variant(value: Variant) -> Variant:
 
 
 static func execute_and_record(game: RefCounted, record: Dictionary, action: Dictionary) -> Dictionary:
+	var recorded := action.duplicate(true)
+	# AI selection can consume RNG before the command itself. Record that
+	# boundary so replay need not rerun the planner to reproduce skill rolls.
+	recorded["rng_state_before_action"] = game.game_rng.state
 	var result := apply_action(game, action)
 	if not bool(result.get("ok", false)):
 		return result
-	record["actions"].append(action.duplicate(true))
+	record["actions"].append(recorded)
 	record["state_hashes"].append(state_hash(game))
 	return result
 
 
 static func verify(record: Dictionary) -> Dictionary:
+	var previously_blocked := EventBus.is_blocking_signals()
+	EventBus.set_block_signals(true)
+	var result := _verify_record(record)
+	EventBus.set_block_signals(previously_blocked)
+	return result
+
+
+static func _verify_record(record: Dictionary) -> Dictionary:
 	if int(record.get("schema", 0)) != SCHEMA_VERSION:
 		return {"ok": false, "reason": "unsupported_schema"}
 	var initial = record.get("initial_state", null)
@@ -116,8 +132,13 @@ static func verify(record: Dictionary) -> Dictionary:
 		return {"ok": false, "reason": "invalid_record"}
 	if expected_hashes.size() != actions.size() + 1:
 		return {"ok": false, "reason": "hash_count"}
+	var errors := DataSchema.validate(DataSchema.KIND_MATCH_SNAPSHOT, {"schema": 1, "room_code": "REPLAY", "player": 1, "state": initial})
+	if not errors.is_empty():
+		return {"ok": false, "reason": "invalid_snapshot", "errors": errors}
 	var game := GameStateScript.new()
-	game.apply_initial_state(_clone_variant(initial))
+	game.quiet = true
+	game.apply_initial_state(_clone_variant(initial), false)
+	game.draw_callable = game.draw_cards
 	var restored_state: Dictionary = game.export_initial_state()
 	var actual := hash_state(restored_state)
 	if actual != str(expected_hashes[0]):
@@ -127,6 +148,15 @@ static func verify(record: Dictionary) -> Dictionary:
 				changed_keys.append(str(key))
 		return {"ok": false, "reason": "initial_hash", "step": 0, "expected": expected_hashes[0], "actual": actual, "changed_keys": changed_keys, "input_keys": initial.keys(), "restored_keys": restored_state.keys()}
 	for index in range(actions.size()):
+		if not actions[index] is Dictionary:
+			return {"ok": false, "reason": "invalid_action", "step": index + 1}
+		if actions[index].has("rng_state_before_action"):
+			var rng_state: Variant = actions[index].rng_state_before_action
+			if rng_state is float and rng_state == floor(rng_state) and absf(rng_state) <= 9007199254740991.0:
+				rng_state = int(rng_state)
+			if not rng_state is int:
+				return {"ok": false, "reason": "invalid_rng_state", "step": index + 1}
+			game.game_rng.state = rng_state
 		var result := apply_action(game, actions[index])
 		if not bool(result.get("ok", false)):
 			return {"ok": false, "reason": "action_failed", "step": index + 1, "detail": result}
@@ -139,6 +169,7 @@ static func verify(record: Dictionary) -> Dictionary:
 static func apply_action(game: RefCounted, action: Dictionary) -> Dictionary:
 	var action_type := str(action.get("type", ""))
 	var ok := false
+	var end_details := {}
 	match action_type:
 		"summon":
 			var hand_index := int(action.get("hand_index", -1))
@@ -148,9 +179,14 @@ static func apply_action(game: RefCounted, action: Dictionary) -> Dictionary:
 			if ok:
 				_auto_resolve_summon_skills(game, summon_slot)
 		"discard":
-			var hand_index := int(action.get("hand_index", -1))
-			var hand: Array = game.active_hand()
-			ok = hand_index >= 0 and hand_index < hand.size() and game.discard_card(hand[hand_index])
+			if str(action.get("location", "hand")) == "field":
+				var slot := int(action.get("index", -1))
+				var cards: Array = game.active_field().slots
+				ok = slot >= 0 and slot < cards.size() and cards[slot] != null and game.discard_card(cards[slot])
+			else:
+				var hand_index := int(action.get("hand_index", action.get("index", -1)))
+				var hand: Array = game.active_hand()
+				ok = hand_index >= 0 and hand_index < hand.size() and game.discard_card(hand[hand_index])
 		"cast":
 			ok = game.cast_spell(int(action.get("hand_index", -1)), int(action.get("skill_index", 0)), int(action.get("target_slot", -1)), int(action.get("target_player", 0)))
 		"attach":
@@ -161,18 +197,21 @@ static func apply_action(game: RefCounted, action: Dictionary) -> Dictionary:
 			var source_slot := int(action.get("slot", -1))
 			var skill_index := int(action.get("skill_index", 0))
 			var source: CardData = game.active_field().slots[source_slot] if source_slot >= 0 and source_slot < game.active_field().slots.size() else null
-			if source != null and not source.has_acted and skill_index >= 0 and skill_index < source.skills.size():
+			if source != null and not source.has_attacked and skill_index >= 0 and skill_index < source.skills.size():
 				var active_skill: Dictionary = source.skills[skill_index]
 				var trigger := str(active_skill.get("trigger", ""))
 				if trigger == SkillEngine.TRIGGER_ON_ACTIVATE and not source.skills_used.has(skill_index) \
 						and SkillEngine.has_uses_remaining(source, active_skill, skill_index):
-					game.trigger_activate_skills(source_slot, int(action.get("target_slot", -1)), skill_index, int(action.get("target_player", 0)))
-					ok = true
+					ok = game.trigger_activate_skills(source_slot, int(action.get("target_slot", -1)), skill_index, int(action.get("target_player", 0)))
 		"end_turn":
-			game.end_player_turn()
-			game.start_new_turn()
+			end_details = game.end_player_turn(action.get("allow_face_mana", true) == true)
+			# Measure the ending player after expiry, passives and automatic fees,
+			# before start_new_turn grants income to the other player.
+			end_details["unused_mana"] = game.active_field().get_total_mana()
+			if game.check_game_over().is_empty():
+				game.start_new_turn()
 			ok = true
-		"cleanup":
+		"cleanup", "settle":
 			game.cleanup_deaths()
 			ok = true
 		"draw":
@@ -182,8 +221,14 @@ static func apply_action(game: RefCounted, action: Dictionary) -> Dictionary:
 			return {"ok": false, "reason": "unknown_action", "type": action_type}
 	if not ok:
 		return {"ok": false, "reason": "illegal_action", "type": action_type}
+	if action_type == "settle":
+		# Derived death/lifecycle resolution belongs to the preceding command;
+		# recording it must not invent a new authoritative command revision.
+		return {"ok": true, "type": action_type, "revision": game.state_revision}
 	game.state_revision += 1
-	return {"ok": true, "type": action_type, "revision": game.state_revision}
+	var result := {"ok": true, "type": action_type, "revision": game.state_revision}
+	if action_type == "end_turn": result["end_turn_result"] = end_details
+	return result
 
 
 static func _auto_resolve_summon_skills(game: RefCounted, source_slot: int) -> void:
@@ -198,7 +243,7 @@ static func _auto_resolve_summon_skills(game: RefCounted, source_slot: int) -> v
 			continue
 		if game.turn_number <= 1 and SkillRegistry.skill_changes_enemy_hp_or_presence(skill):
 			continue
-		if card.is_silenced() and str(skill.get("skill_type", SkillEngine.SKILL_TYPE_NORMAL)) != SkillEngine.SKILL_TYPE_TALENT:
+		if card.skills_disabled():
 			continue
 		var target_player: int = int(game.current_player) if _summon_manual_target_side(skill) == SkillEngine.TARGET_SIDE_ALLY else 3 - int(game.current_player)
 		var target_slot := _first_legal_summon_target(game, skill, target_player)

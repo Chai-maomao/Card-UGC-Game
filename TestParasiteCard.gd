@@ -16,7 +16,7 @@ func _ready() -> void:
 	_test_mixed_parasites_use_the_absorbing_one()
 	_test_parasite_uses_host_damage_reduction()
 	_test_directed_skill_damage_hits_parasite_hp_first()
-	_test_aoe_skill_bypasses_parasite()
+	_test_aoe_skill_is_blocked_by_absorbing_parasite()
 	_test_parasite_breaks_to_discard()
 	_test_host_death_discards_attached_parasite()
 	_test_host_death_discards_linked_parasite()
@@ -216,19 +216,27 @@ func _test_directed_skill_damage_hits_parasite_hp_first() -> void:
 		_fail("broken parasite was not discarded after directed skill")
 
 
-func _test_aoe_skill_bypasses_parasite() -> void:
-	var game = _new_game()
-	var caster := _card("Caster", 1, 5, 0, [_damage_skill("Nova", SkillEngine.TARGET_ALL, 2, SkillEngine.TRIGGER_ON_ACTIVATE, SkillEngine.TARGET_SIDE_ENEMY)])
-	var victim := _card("Victim", 1, 5, 0)
-	var parasite := _parasite("AoE Bypass", 1, 3, 0)
-	ParasiteRules.attach(parasite, victim)
-	game.player_field.slots[0] = caster
-	game.player2_field.slots[0] = victim
-	game.trigger_activate_skills(0, -1, 0)
-	if victim.hp != 3:
-		_fail("aoe skill should bypass parasite and damage host directly (host hp=%d)" % victim.hp)
-	if parasite.hp != 3:
-		_fail("aoe skill should not damage parasite (parasite hp=%d)" % parasite.hp)
+func _test_aoe_skill_is_blocked_by_absorbing_parasite() -> void:
+	for damage in [2,4]:
+		var game = _new_game()
+		var caster := _card("Caster",1,5,0,[_damage_skill("Nova",SkillEngine.TARGET_ALL,damage)])
+		var victim := _card("Protected host",1,5,0)
+		var parasite := _parasite("Absorbing",1,3,0)
+		ParasiteRules.attach(parasite,victim)
+		var bare := _card("Bare host",1,5,0)
+		var linked_host := _card("Linked host",1,5,0)
+		var linked := _parasite("Linked",1,3,0,[],CardData.PARASITE_DAMAGE_LINKED)
+		ParasiteRules.attach(linked,linked_host)
+		game.player_field.slots[0] = caster
+		game.player2_field.slots[0] = victim
+		game.player2_field.slots[1] = bare
+		game.player2_field.slots[2] = linked_host
+		if not game.trigger_activate_skills(0,-1,0): _fail("area skill must actually execute")
+		if victim.hp != 5: _fail("absorbing parasite must block the whole area hit, including overflow")
+		if bare.hp != 5-damage or linked_host.hp != 5-damage: _fail("area damage must still hit unprotected and linked hosts")
+		if linked.hp != 3: _fail("linked parasite must retain its non-absorbing behavior")
+		if damage<3 and parasite.hp != 3-damage: _fail("surviving parasite must lose the area damage amount")
+		if damage>=3 and (not game.shared_discard.has(parasite) or victim.parasite_cards.has(parasite)): _fail("area damage must discard a destroyed absorber")
 
 
 func _test_parasite_breaks_to_discard() -> void:
@@ -388,8 +396,8 @@ func _test_silenced_host_disables_parasite_passive() -> void:
 	game.player_field.slots[0] = host
 	game.player2_field.slots[0] = victim
 	game.execute_attack(0, 0)
-	if victim.hp != 8:
-		_fail("silenced host should disable parasite passive")
+	if victim.hp != 7:
+		_fail("silenced host must deal its 1 basic damage while the parasite passive stays disabled")
 
 
 func _test_directed_ally_target_resolves_to_ally_field() -> void:

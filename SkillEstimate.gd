@@ -66,6 +66,8 @@ static func uncertain(value_data: Variant) -> bool:
 
 
 static func condition_weight(effect: Dictionary, depth: int = 0) -> float:
+	if SkillRegistry.is_chance_block(effect):
+		return clampf(float(effect.condition.rhs.value) / 100.0, 0.0, 1.0)
 	if depth >= UgcSafety.MAX_EXPRESSION_NESTING_DEPTH: return 0.5
 	var condition: Dictionary = effect.get("condition", effect)
 	if condition.has("logic"):

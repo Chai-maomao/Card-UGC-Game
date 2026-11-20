@@ -116,13 +116,22 @@ func _test_trigger_effect_target_matrix() -> void:
 					should_reject = should_reject or trigger_id == SkillEngine.TRIGGER_ON_DEATH \
 							and effect_id == SkillEngine.EFFECT_CHARM \
 							and target_id in [SkillEngine.TARGET_SELF, SkillEngine.TARGET_SELF_SIDES]
-					should_reject = should_reject or trigger_id in [SkillEngine.TRIGGER_ALWAYS, SkillEngine.TRIGGER_ON_ADDED, SkillEngine.TRIGGER_ON_DISCARDED, SkillEngine.TRIGGER_ON_BOARD_CHANGED] \
+					should_reject = should_reject or trigger_id == SkillEngine.TRIGGER_ALWAYS \
+							and not SkillRegistry.is_effect_allowed_for_talent_trigger(effect_id, trigger_id)
+					should_reject = should_reject or SkillRegistry.is_talent_only_effect(effect_id) \
 							and not SkillRegistry.is_effect_allowed_for_talent_trigger(effect_id, trigger_id)
 					matrix_cases += 1
 					if should_reject and issues.is_empty():
 						_fail("trigger matrix accepted impossible %s/%s/%s" % [trigger_id, effect_id, target_id])
 					elif not should_reject and not issues.is_empty():
 						_fail("trigger matrix rejected legal %s/%s/%s: %s" % [trigger_id, effect_id, target_id, issues])
+					# The same trigger can belong to a normal skill or a talent.
+					# Talent restrictions must be checked in the actual editor mode.
+					var talent_issues := _ErrorChecker.collect_semantic_issues([eff], trigger_id, true)
+					var talent_reject := should_reject or not SkillRegistry.is_effect_allowed_for_talent_trigger(effect_id, trigger_id)
+					matrix_cases += 1
+					if talent_issues.is_empty() == talent_reject:
+						_fail("talent matrix disagreed for %s/%s/%s: %s" % [trigger_id, effect_id, target_id, talent_issues])
 		var fx := _fixture()
 		var game = fx.game
 		var source: CardData = fx.source

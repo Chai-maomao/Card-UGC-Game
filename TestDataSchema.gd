@@ -45,6 +45,12 @@ func _test_all_schema_entry_points() -> void:
 	_assert(Schema.validate(Schema.KIND_CARD_REVISIONS, revisions).is_empty(), "card revision schema rejected valid history")
 	var snapshot := {"schema": 1, "room_code": "ROOM", "player": 1, "state": {"player_field": {}, "player2_field": {}, "player_hand": [], "player2_hand": [], "shared_deck": [], "state_revision": 1}}
 	_assert(Schema.validate(Schema.KIND_MATCH_SNAPSHOT, snapshot).is_empty(), "snapshot schema rejected valid snapshot")
+	for starting in [1.0, 2.0]:
+		snapshot.state.starting_player = starting
+		_assert(Schema.validate(Schema.KIND_MATCH_SNAPSHOT, snapshot).is_empty(), "JSON must preserve a valid starting seat")
+	for starting in [0, 3, 1.5, "2", true]:
+		snapshot.state.starting_player = starting
+		_assert(not Schema.validate(Schema.KIND_MATCH_SNAPSHOT, snapshot).is_empty(), "an invalid starting seat must be rejected")
 
 
 func _test_invalid_boundaries() -> void:

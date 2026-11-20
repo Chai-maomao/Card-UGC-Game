@@ -13,6 +13,8 @@ signal card_died(card: CardData, slot: int, side: String)
 signal card_summoned(card: CardData, slot: int, side: String)
 @warning_ignore("unused_signal")
 signal hand_entry_resolved(card: CardData, player: int, destination: String, source: String, source_meta: Dictionary)
+@warning_ignore("unused_signal")
+signal enemy_hand_discarded(actor: int, before_count: int, cards: Array)
 
 # Combat events
 @warning_ignore("unused_signal")
@@ -25,6 +27,8 @@ signal damage_resolved(source: CardData, target: CardData, declared: int, actual
 signal parasite_damage_resolved(host: CardData, parasite: CardData, declared: int, actual: int, destroyed: bool)
 @warning_ignore("unused_signal")
 signal skill_roll_failed(source: CardData, skill_name: String, misfortune: int, final_probability: int)
+@warning_ignore("unused_signal")
+signal skill_random_resolved(source: CardData, outcome: Dictionary)
 @warning_ignore("unused_signal")
 signal skill_triggered(skill_name: String, source: CardData)
 @warning_ignore("unused_signal")

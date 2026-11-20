@@ -60,7 +60,7 @@ func _ready() -> void:
 				t_chip = sub as Button
 				break
 		if t_chip != null:
-			_assert(t_chip.text.contains("选择目标"), "unset target slot should show a pick placeholder (got: %s)" % t_chip.text)
+			_assert(t_chip.text == "", "unset target slot must be an empty socket (got: %s)" % t_chip.text)
 	var unit_only_probe := TargetSlot.new()
 	unit_only_probe.setup({"effect": SkillEngine.EFFECT_SHIELD}, "target")
 	_assert(not (unit_only_probe.call("_ids") as Array).has(SkillEngine.TARGET_PLAYER), "unit-only effect picker must hide the player target")
@@ -121,8 +121,8 @@ func _ready() -> void:
 		_assert(sed.call("_can_drop_on_palette", Vector2.ZERO, drag_data), "palette rejects target chip")
 		sed.call("_drop_on_palette", Vector2.ZERO, drag_data)
 	ed = sed.get("effect_data")
-	_assert(str(ed[0].get("target", "")) == SkillEngine.TARGET_SINGLE,
-			"palette drop did not restore target (target=%s)" % str(ed[0].get("target", "?")))
+	_assert(str(ed[0].get("target", "")) == "",
+			"palette drop must leave an empty target (target=%s)" % str(ed[0].get("target", "?")))
 
 	# --- Click-to-pick path writes the same field (menu semantics) -----------
 	# Emulate the menu's selection handler directly on the slot.
@@ -162,12 +162,75 @@ func _ready() -> void:
 	sed.call("_on_save_pressed")
 	await get_tree().process_frame
 	_assert(PlayerData.card_draft["skill2"] == draft_before, "save must not write an invalid skill into the draft")
+	for button: Button in sed.find_children("*", "Button", true, false):
+		if button.text == Locale.t("common.confirm") and button.is_visible_in_tree():
+			button.pressed.emit()
+			break
 
+	await _check_slot_moves(sed)
 	_finish()
 
 
+func _check_slot_moves(sed: Node) -> void:
+	var effects: Array = [
+		{"effect": SkillEngine.EFFECT_DAMAGE, "target": SkillEngine.TARGET_SINGLE, "target_side": SkillEngine.TARGET_SIDE_ENEMY},
+		{"effect": SkillEngine.EFFECT_SHIELD, "target": SkillEngine.TARGET_SELF, "target_side": SkillEngine.TARGET_SIDE_ALL},
+	]
+	sed.set("effect_data", effects)
+	sed.call("_refresh_script")
+	sed.call("_maybe_snapshot")
+	await get_tree().process_frame
+	var damage := _find_effect_block(sed, SkillEngine.EFFECT_DAMAGE)
+	var shield := _find_effect_block(sed, SkillEngine.EFFECT_SHIELD)
+	var source := _find_target_slot(damage, "target")
+	var destination := _find_target_slot(shield, "target")
+	var payload: Variant = source.call("_slot_get_drag_data", Vector2.ZERO)
+	destination.call("_drop_var", Vector2.ZERO, payload)
+	_assert(source.data.get("target") == SkillEngine.TARGET_SELF and destination.data.get("target") == SkillEngine.TARGET_SINGLE,
+			"occupied target slots must exchange both reporters")
+	_assert(not _find_target_slot(damage, "side").visible and _find_target_slot(shield, "side").visible,
+			"both effects must refresh faction visibility after the exchange")
+	sed.call("_undo")
+	await get_tree().process_frame
+	effects = sed.get("effect_data")
+	_assert(effects[0].get("target") == SkillEngine.TARGET_SINGLE and effects[1].get("target") == SkillEngine.TARGET_SELF,
+			"one undo must restore both original targets")
+
+	damage = _find_effect_block(sed, SkillEngine.EFFECT_DAMAGE)
+	shield = _find_effect_block(sed, SkillEngine.EFFECT_SHIELD)
+	source = _find_target_slot(damage, "target")
+	destination = _find_target_slot(shield, "target")
+	source.call("_drop_var", Vector2.ZERO, {"type": "target_block", "value": SkillEngine.TARGET_PLAYER})
+	payload = destination.call("_slot_get_drag_data", Vector2.ZERO)
+	_assert(not source.call("_can_drop_var", Vector2.ZERO, payload), "reverse-incompatible target exchange must be rejected")
+	source.call("_drop_var", Vector2.ZERO, payload)
+	_assert(source.data.get("target") == SkillEngine.TARGET_PLAYER and destination.data.get("target") == SkillEngine.TARGET_SELF,
+			"rejected exchange must keep both targets")
+	destination.clear_to_number()
+	source.call("_drop_var", Vector2.ZERO, {"type": "target_block", "value": SkillEngine.TARGET_SINGLE})
+	payload = source.call("_slot_get_drag_data", Vector2.ZERO)
+	destination.call("_drop_var", Vector2.ZERO, payload)
+	_assert(not source.data.has("target") and destination.data.get("target") == SkillEngine.TARGET_SINGLE,
+			"moving a target into an empty socket must leave the source empty")
+	_assert(not _find_target_slot(damage, "side").visible, "empty source target must hide its faction slot")
+
+	source.call("_drop_var", Vector2.ZERO, {"type": "target_block", "value": SkillEngine.TARGET_SINGLE})
+	var source_side := _find_target_slot(damage, "side")
+	var destination_side := _find_target_slot(shield, "side")
+	source_side.call("_drop_var", Vector2.ZERO, {"type": "side_block", "value": SkillEngine.TARGET_SIDE_ENEMY})
+	destination_side.call("_drop_var", Vector2.ZERO, {"type": "side_block", "value": SkillEngine.TARGET_SIDE_ALLY})
+	payload = source_side.call("_slot_get_drag_data", Vector2.ZERO)
+	destination_side.call("_drop_var", Vector2.ZERO, payload)
+	_assert(source_side.data.get("target_side") == SkillEngine.TARGET_SIDE_ALLY and destination_side.data.get("target_side") == SkillEngine.TARGET_SIDE_ENEMY,
+			"occupied faction slots must exchange both reporters")
+	if DisplayServer.get_name() != "headless" and "--capture-slot-swap" in OS.get_cmdline_user_args():
+		await RenderingServer.frame_post_draw
+		var screenshot := get_viewport().get_texture().get_image()
+		_assert(screenshot.save_png("res://artifacts/target-slot-swap.png") == OK, "could not save target slot screenshot")
+
+
 func _find_effect_block(sed: Node, effect_id: String) -> SkillBlock:
-	var effects_list: VBoxContainer = sed.get_node("Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/EffectsList")
+	var effects_list: VBoxContainer = sed.get("effects_list")
 	if effects_list.get_child_count() == 0:
 		return null
 	var hat: SkillBlock = effects_list.get_child(0)

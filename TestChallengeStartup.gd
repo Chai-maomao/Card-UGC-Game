@@ -13,6 +13,8 @@ func _ready() -> void:
 		"cleanse": ["净化术", "治疗术"],
 		"dispel": ["破法", "净化术"],
 		"execute": ["精准削弱", "仓促射击"],
+		"action_reserve": ["仓促射击"],
+		"action_finish": ["收整"],
 		"parasite": ["共生虫", "新兵"],
 	}
 	PlayerData.configure_hotseat_battle(CardDatabase.beginner_deck(), CardDatabase.beginner_deck())

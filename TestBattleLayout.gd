@@ -50,7 +50,13 @@ func _ready() -> void:
 	_assert(not _overlap(enemy_row, log_panel), "opened battle log must not cover the enemy field")
 	var log_text := battle.get("action_log_text") as RichTextLabel
 	_assert(log_text != null and log_text.selection_enabled and "回合" in log_text.get_parsed_text(), "battle log must group selectable entries by turn")
-	_assert(hand_container.get_child_count() == SkillEngine.MAX_HAND_SIZE, "the legal six-card hand must remain fully represented")
+	battle.call("_show_toast", "tip.insufficient_mana")
+	var toast_feed := battle.get_node_or_null("CanvasLayer/ToastStack") as Control
+	_assert(toast_feed != null and toast_feed.mouse_filter == Control.MOUSE_FILTER_IGNORE,
+			"battle warnings must delegate to the input-transparent message component")
+	var warning := toast_feed.get_child(toast_feed.get_child_count() - 1).get_child(0) as Label
+	_assert(warning.text == Locale.t("tip.insufficient_mana"), "delegated battle warnings must retain localized wording")
+	_assert(hand_container.get_child_count() == SkillEngine.MAX_HAND_SIZE, "the legal eight-card hand must remain fully represented")
 	for card in hand_container.get_children():
 		_assert(_inside((card as Control).get_global_rect(), hand_area.get_global_rect(), 2.0), "a legal hand card exceeds the hand dock")
 
@@ -95,8 +101,9 @@ func _ready() -> void:
 	GamePreferences.set_animation_acceleration(true)
 	var accelerated_minus_one := _count_label_text(layer, "-1")
 	battle.call("_queue_hp_feedback", staged_events)
+	await get_tree().process_frame
 	_assert(_count_label_text(layer, "-1") > accelerated_minus_one and (battle.get("_hp_feedback_batches") as Array).is_empty(),
-			"accelerated mode must play every feedback stage immediately")
+			"accelerated mode must play every non-random stage together after the synchronous trigger chain is collected")
 	GamePreferences.set_animation_acceleration(false)
 	var double_effect := {
 		"skill_name": "Double Effect", "trigger": SkillEngine.TRIGGER_ON_ACTIVATE, "probability": 100,
@@ -211,7 +218,8 @@ func _ready() -> void:
 	battle.set("_action_feedback_group_stack", [])
 	var zero_text_before := _count_label_text(layer, "-0")
 	battle.call("_queue_presentation_feedback", zero_timeline)
-	_assert(_count_label_text(layer, "-0") > zero_text_before, "prevented damage must display a red -0 floating number")
+	await get_tree().process_frame
+	_assert(_count_label_text(layer, "-0") > zero_text_before, "prevented damage must display a -0 floating number")
 	GamePreferences.set_animation_acceleration(prior_acceleration)
 
 	print("TEST_BATTLE_LAYOUT_OK")

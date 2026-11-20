@@ -25,6 +25,7 @@ func _ready() -> void:
 	var original_context := PlayerData.card_playtest_context.duplicate(true)
 	var original_config := PlayerData.battle_config.duplicate(true)
 	NetworkManager.close_connection()
+	await _test_playtest_with_room_connection()
 	_test_beginner_deck()
 	var memory := MemoryPlayerData.new()
 	memory.card_draft = {"name": "未丢失的草稿", "cost": 4}
@@ -42,7 +43,7 @@ func _ready() -> void:
 			"both players need complete support decks")
 		PlayerData._apply_battle_preparation(memory.battle_preparation_snapshot())
 		PlayerData.card_playtest_context = memory.card_playtest_context.duplicate(true)
-		for draw_count in [0, 2, 5, 6]:
+		for draw_count in [0, 2, 5, 6, 8]:
 			PlayerData.battle_config["draw_per_turn"] = draw_count
 			for seed_value in range(40):
 				var game := Game.new()
@@ -52,8 +53,8 @@ func _ready() -> void:
 				_assert(game.player_hand[0].instance_id == specimen.instance_id,
 					"tested card must always be first in player one's hand")
 				_assert(game.player_hand[0].card_type == card_type, "all card types must be preserved")
-				_assert(game.player_hand.size() == clampi(draw_count + 1, 3, 6), "opening must reserve helpers without exceeding six")
-				_assert(game.player2_hand.size() == clampi(draw_count + 1, 3, 6), "both sides must receive the test instruments")
+				_assert(game.player_hand.size() == clampi(draw_count + 1, 3, SkillEngine.MAX_HAND_SIZE), "opening must reserve helpers without exceeding the hand limit")
+				_assert(game.player2_hand.size() == clampi(draw_count + 1, 3, SkillEngine.MAX_HAND_SIZE), "both sides must receive the test instruments")
 				for support_id: String in CardDatabase.PLAYTEST_SUPPORT_IDS:
 					_assert(game.player_hand.any(func(c): return c.card_id == support_id), "player one helper missing")
 					_assert(game.player2_hand.any(func(c): return c.card_id == support_id), "player two helper missing")
@@ -91,11 +92,19 @@ func _ready() -> void:
 	_assert(battle.game.player_field.slots[0] != null, "player one drag summon must work")
 	_assert(battle.game.player_field.slots[0].field_atk_bonus == 1 and battle.game.player_field.slots[0].skills_used.has(0),
 		"non-targeted summon skills must resolve automatically")
+	var ready_deadline := Time.get_ticks_msec()+4000
+	while battle.is_resolution_locked() and Time.get_ticks_msec()<ready_deadline:
+		await get_tree().process_frame
+	_assert(not battle.is_resolution_locked(), "deployment must finish before ending the turn")
 	await battle._on_end_turn_pressed()
+	ready_deadline = Time.get_ticks_msec()+4000
+	while not battle.is_my_turn() and Time.get_ticks_msec()<ready_deadline:
+		await get_tree().process_frame
 	for _frame in range(4):
 		await get_tree().process_frame
 	_assert(battle.game.current_player == 2 and battle._view_player() == 2 and battle.is_my_turn(),
 		"end turn must switch the controllable hand to player two")
+	_assert(not battle.end_turn_button.disabled, "the next hotseat player must have an available End Turn button")
 	_assert(not battle.practice_ai_running, "AI must not take over either side")
 	_assert(battle._turn_owner_text() == Locale.t("battle.hotseat_turn", [2]), "hotseat HUD must identify the acting player")
 	_assert(battle.player_status_hud.get_node("Margin/Content/SideLabel").text == Locale.t("battle.hotseat_player", [2]),
@@ -137,8 +146,38 @@ func _ready() -> void:
 		for failure in failures:
 			push_error("TEST_CARD_PLAYTEST_FAILED: " + failure)
 		get_tree().quit(1)
-
-
+func _test_playtest_with_room_connection() -> void:
+	_assert(NetworkManager.host_game(0) == OK,"room transport must start for the playtest regression")
+	var room_peer := NetworkManager.peer
+	var old_setup := PlayerData.battle_preparation_snapshot()
+	var specimen := CardData.new("房间内测试卡",1,4,2,[])
+	specimen.instance_id = "room-playtest-card"
+	PlayerData.configure_card_playtest(specimen)
+	var opening := PlayerData.card_playtest_opening_card()
+	_assert(opening != null and opening.instance_id == specimen.instance_id,"connected room must not hide the local test card")
+	var battle = Battle.instantiate()
+	add_child(battle)
+	for _frame in range(4): await get_tree().process_frame
+	_assert(battle.my_player == 0,"local playtest must not take a network player seat")
+	_assert(not EventBus.rpc_end_turn_received.is_connected(battle._on_rpc_end_turn),"local test must not subscribe to room battle commands")
+	for expected_player in [2,1,2]:
+		var deadline := Time.get_ticks_msec()+5000
+		while (battle.is_resolution_locked() or battle.hand_container.get_children().any(func(c): return c.get_meta("tabletop_arriving",false))) and Time.get_ticks_msec()<deadline:
+			await get_tree().process_frame
+		await battle._on_end_turn_pressed()
+		deadline = Time.get_ticks_msec()+5000
+		while not battle.is_my_turn() and Time.get_ticks_msec()<deadline: await get_tree().process_frame
+		_assert(battle.game.current_player == expected_player and battle.is_my_turn() and battle._view_player() == expected_player,"room playtest must switch to a controllable P%d instead of waiting remotely" % expected_player)
+		if not battle.is_my_turn(): break
+	_assert(NetworkManager.is_online and NetworkManager.peer == room_peer,"local testing must preserve the existing room transport")
+	if DisplayServer.get_name() != "headless":
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png("res://artifacts/hand-overlap-20261115/room-card-playtest.png")
+	battle.queue_free()
+	await get_tree().process_frame
+	PlayerData.restore_after_card_playtest()
+	_assert(PlayerData.battle_preparation_snapshot() == old_setup,"return from local testing must restore the room's battle setup")
+	NetworkManager.close_connection()
 func _test_beginner_deck() -> void:
 	var cards := CardDatabase.beginner_deck()
 	var curve := {1: 0, 2: 0, 3: 0, 4: 0}
@@ -160,9 +199,20 @@ func _test_beginner_deck() -> void:
 	_assert(_starter_skill_matches(cards, "盾卫", SkillEngine.TRIGGER_ON_SUMMON,
 		SkillEngine.TARGET_SELF, SkillEngine.EFFECT_ADD_BUFF, 1, SkillEngine.BUFF_TAUNT, 2),
 		"guard must teach a self-applied taunt status")
-	_assert(_starter_skill_matches(cards, "弓箭手", SkillEngine.TRIGGER_ON_ACTIVATE,
-		SkillEngine.TARGET_SIDES, SkillEngine.EFFECT_DAMAGE, 1, "", 0, SkillEngine.TARGET_SIDE_ENEMY),
-		"archer skill must be a meaningful adjacent-area alternative to its 2 damage attack")
+	var archer: Dictionary = cards[4].skills[0].effects[0]
+	_assert(archer.target == SkillEngine.TARGET_SIDES and archer.target_side == SkillEngine.TARGET_SIDE_ENEMY
+		and archer.effect == SkillEngine.EFFECT_DAMAGE and archer.get("value_min") == 1 and archer.get("value_max") == 2,
+		"archer must teach both adjacency targeting and variable damage")
+	var readiness: Dictionary = cards[3].skills[0].effects[0]
+	_assert(readiness.effect == SkillEngine.EFFECT_IF_ELSE and readiness.condition.lhs.var_id == SkillEngine.VAR_HAND_COUNT
+		and readiness.then_effects[0].effect == SkillEngine.EFFECT_SHIELD
+		and readiness.else_effects[0].effect == SkillEngine.EFFECT_DRAW_CARDS,
+		"the knight must teach a hand-size comparison with two branches")
+	var sparks: Dictionary = cards[6].skills[0].effects[0]
+	_assert(sparks.effect == SkillEngine.EFFECT_REPEAT and sparks.repeat_count == 2
+		and sparks.then_effects[0].effect == SkillEngine.EFFECT_DAMAGE,
+		"the beginner spell must teach a repeated effect")
+	_test_beginner_effects(cards)
 	_assert(_starter_skill_matches(cards, "医护兵", SkillEngine.TRIGGER_ON_ACTIVATE,
 		SkillEngine.TARGET_SINGLE, SkillEngine.EFFECT_HEAL, 2, "", 0, SkillEngine.TARGET_SIDE_ALLY),
 		"medic must teach targeted allied healing")
@@ -192,6 +242,34 @@ func _test_beginner_deck() -> void:
 		and str(second_sync.get("deck_id", "")) == synced_id and fresh.deck_library.size() == 2,
 		"repeated beginner deck sync must replace in place instead of duplicating it")
 	fresh.free()
+
+
+func _test_beginner_effects(cards: Array) -> void:
+	var game := Game.new()
+	game.initialize_fields({})
+	game.turn_number = 2
+	var knight: CardData = cards[3].duplicate_card()
+	game.player_hand = [knight, cards[0].duplicate_card(), cards[1].duplicate_card(), cards[2].duplicate_card()]
+	_assert(game.summon_card(knight, 0), "the starter knight must be deployable")
+	game.trigger_summon_skills(0, -1, 0)
+	_assert(knight.temp_hp == 2 and game.player_hand.size() == 3,
+		"deploying the starter knight with three cards left must grant two shield")
+
+	game.player_field.current_mana = 4
+	var reserve: CardData = cards[3].duplicate_card()
+	game.player_hand = [reserve]
+	game.shared_deck = [cards[0].duplicate_card()]
+	_assert(game.summon_card(reserve, 1), "the second knight must be deployable")
+	game.trigger_summon_skills(1, -1, 0)
+	_assert(reserve.temp_hp == 0 and game.player_hand.size() == 1 and game.shared_deck.is_empty(),
+		"deploying the starter knight with an empty hand must draw a card")
+
+	game.player_field.current_mana = 4
+	game.player_hand = [cards[6].duplicate_card()]
+	var enemy := CardData.new("测试目标", 2, 5, 1)
+	game.player2_field.slots[0] = enemy
+	_assert(game.cast_spell(0, 0, 0, 2) and enemy.hp == 3,
+		"the starter spell must hit its chosen enemy twice for one damage each")
 
 
 func _starter_skill_matches(cards: Array, card_name: String, trigger: String, target: String,

@@ -30,7 +30,7 @@ static func analyze(draft: Dictionary) -> Dictionary:
 		issues.append({"severity": "error", "key": "usability.no_health"})
 	var manual_actions := 0
 	for skill in skills:
-		if str(skill.get("trigger", "")) in [SkillEngine.TRIGGER_ON_ACTIVATE, SkillEngine.TRIGGER_ON_SUMMON]:
+		if card_type == "minion" and str(skill.get("trigger", "")) == SkillEngine.TRIGGER_ON_ACTIVATE:
 			manual_actions += 1
 	if manual_actions >= 2:
 		issues.append({"severity": "warning", "key": "usability.action_competition", "args": [manual_actions]})

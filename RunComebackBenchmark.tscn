@@ -1,0 +1,6 @@
+[gd_scene load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://RunComebackBenchmark.gd" id="1"]
+
+[node name="RunComebackBenchmark" type="Node"]
+script = ExtResource("1")

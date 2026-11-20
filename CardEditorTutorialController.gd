@@ -28,12 +28,15 @@ var exit_button: Button
 var focus_frames: Array[Panel] = []
 var _focused_controls: Array[Control] = []
 var _panel_tween: Tween
-var progress_path: String = ProgressStore.DEFAULT_PATH
+var progress_path: String = PlayerData.tutorial_progress_path
 var navigate_on_complete := true
+var _active := false
 
 
 func start(owner_editor: Control) -> void:
 	editor = owner_editor
+	_active = true
+	set_process(true)
 	_build_ui()
 	editor.name_input.text_changed.connect(_on_form_changed)
 	editor.gender_select.item_selected.connect(func(_index: int): _on_form_changed(""))
@@ -74,6 +77,7 @@ func handle_confirm(card: CardData) -> bool:
 
 
 func set_phase(next_phase: int) -> void:
+	if not _active: return
 	phase = next_phase
 	_clear_focus()
 	match phase:
@@ -82,7 +86,7 @@ func set_phase(next_phase: int) -> void:
 			_focus_controls([_editor_scroll(), editor.card_preview_panel])
 		Phase.ART:
 			_set_copy("tutorial.card_art_title", "tutorial.card_art_body", true)
-			_focus_controls([editor.art_path_label.get_parent()])
+			_focus_controls([editor.browse_button])
 		Phase.IDENTITY:
 			_set_copy("tutorial.card_identity_title", "tutorial.card_identity_body", _identity_valid())
 			_focus_controls([editor.name_input, editor.gender_select])
@@ -122,6 +126,8 @@ func _set_copy(title_key: String, body_key: String, allow_next: bool) -> void:
 func _build_ui() -> void:
 	overlay_layer = CanvasLayer.new()
 	overlay_layer.layer = 90
+	overlay_layer.set_meta("popup_close",_on_exit)
+	overlay_layer.tree_exiting.connect(_stop_focus_updates)
 	editor.add_child(overlay_layer)
 	overlay_root = Control.new()
 	overlay_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -132,7 +138,7 @@ func _build_ui() -> void:
 	instruction_panel.custom_minimum_size = Vector2(350, 248)
 	instruction_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	instruction_panel.z_index = 10
-	UITheme.apply_panel(instruction_panel, "gold")
+	UITheme.apply_popup_frame(instruction_panel, "gold", false)
 	overlay_root.add_child(instruction_panel)
 	var margin := MarginContainer.new()
 	for side in ["left", "right", "top", "bottom"]:
@@ -207,6 +213,7 @@ func _stats_valid() -> bool:
 
 
 func _on_form_changed(_value = null) -> void:
+	if not _active: return
 	if phase == Phase.IDENTITY:
 		var ready := _identity_valid()
 		next_button.disabled = not ready
@@ -218,6 +225,7 @@ func _on_form_changed(_value = null) -> void:
 
 
 func _on_next() -> void:
+	if not _active: return
 	match phase:
 		Phase.INTRO: set_phase(Phase.ART)
 		Phase.ART: set_phase(Phase.IDENTITY)
@@ -229,18 +237,25 @@ func _on_next() -> void:
 
 func _on_skip() -> void:
 	ProgressStore.new(progress_path).mark_skipped()
-	PlayerData.cancel_skill_tutorial()
-	if navigate_on_complete:
-		UIMotion.go_back("res://MainMenu.tscn")
+	_on_exit()
 
 
 func _on_exit() -> void:
+	_stop_focus_updates()
+	if is_instance_valid(overlay_layer): overlay_layer.hide()
 	PlayerData.cancel_skill_tutorial()
 	if navigate_on_complete:
 		UIMotion.go_back("res://MainMenu.tscn")
 
 
+func _stop_focus_updates() -> void:
+	_active = false
+	set_process(false)
+	_clear_focus()
+
+
 func _editor_scroll() -> ScrollContainer:
+	if not is_instance_valid(editor): return null
 	return editor.get_node_or_null("Panel/MarginContainer/ScrollContainer") as ScrollContainer
 
 
@@ -263,7 +278,7 @@ func _focus_controls(controls: Array) -> void:
 			style.set_border_width_all(4)
 			style.set_corner_radius_all(10)
 			style.shadow_color = Color(UITheme.COLOR_GOLD.r, UITheme.COLOR_GOLD.g, UITheme.COLOR_GOLD.b, 0.38)
-			style.shadow_size = 8
+			style.shadow_size = 0
 			frame.add_theme_stylebox_override("panel", style)
 			overlay_root.add_child(frame)
 			focus_frames.append(frame)
@@ -280,33 +295,41 @@ func _process(_delta: float) -> void:
 
 
 func _refresh_focus() -> void:
+	if not _active or not is_instance_valid(editor): return
 	for index in range(mini(_focused_controls.size(), focus_frames.size())):
+		var frame := focus_frames[index]
+		if not is_instance_valid(frame) or frame.is_queued_for_deletion(): continue
 		var control := _focused_controls[index]
 		if control == null or not is_instance_valid(control):
-			focus_frames[index].visible = false
+			frame.visible = false
 			continue
 		var frame_rect := control.get_global_rect().grow(6.0)
 		var scroll := _editor_scroll()
 		if scroll != null and scroll.is_ancestor_of(control):
 			var clip_rect := scroll.get_global_rect()
 			if not frame_rect.intersects(clip_rect):
-				focus_frames[index].visible = false
+				frame.visible = false
 				continue
 			frame_rect = frame_rect.intersection(clip_rect)
-		focus_frames[index].visible = frame_rect.size.x > 1.0 and frame_rect.size.y > 1.0
-		focus_frames[index].position = frame_rect.position
-		focus_frames[index].size = frame_rect.size
+		frame.visible = frame_rect.size.x > 1.0 and frame_rect.size.y > 1.0
+		frame.position = frame_rect.position
+		frame.size = frame_rect.size
 
 
 func _refresh_focus_deferred() -> void:
+	if not _active or not is_inside_tree(): return
+	var requested_phase := phase
 	await get_tree().process_frame
+	if not _active or phase != requested_phase or not is_instance_valid(editor): return
 	var scroll := _editor_scroll()
-	if phase == Phase.INTRO and scroll != null:
+	if phase == Phase.INTRO and is_instance_valid(scroll):
 		scroll.scroll_vertical = 0
 		await get_tree().process_frame
-	if scroll != null and not _focused_controls.is_empty() and scroll.is_ancestor_of(_focused_controls[0]):
+		if not _active or phase != requested_phase: return
+	if is_instance_valid(scroll) and not _focused_controls.is_empty() and is_instance_valid(_focused_controls[0]) and scroll.is_ancestor_of(_focused_controls[0]):
 		scroll.ensure_control_visible(_focused_controls[0])
 		await get_tree().process_frame
+		if not _active or phase != requested_phase: return
 	_refresh_focus()
 
 
@@ -319,7 +342,7 @@ func _clear_focus() -> void:
 
 
 func _remind() -> void:
-	if instruction_panel == null:
+	if not _active or not is_instance_valid(instruction_panel):
 		return
 	if _panel_tween and _panel_tween.is_valid():
 		_panel_tween.kill()

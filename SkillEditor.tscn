@@ -83,6 +83,10 @@ layout_mode = 2
 size_flags_horizontal = 3
 theme_override_constants/separation = 5
 
+[node name="ColumnSeparator" type="VSeparator" parent="Panel/Margin/HBox"]
+layout_mode = 2
+mouse_filter = 2
+
 [node name="MainPanel" type="Panel" parent="Panel/Margin/HBox" unique_id=2000300]
 layout_mode = 2
 size_flags_horizontal = 3
@@ -128,7 +132,7 @@ text = "Skill Name:"
 
 [node name="SkillNameInput" type="LineEdit" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox" unique_id=2000027]
 layout_mode = 2
-placeholder_text = "e.g. Railgun"
+placeholder_text = ""
 
 [node name="TriggerLabel" type="Label" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox" unique_id=2000007]
 layout_mode = 2
@@ -174,6 +178,10 @@ autowrap_mode = 3
 [node name="EffectsList" type="VBoxContainer" parent="Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox" unique_id=2001001]
 layout_mode = 2
 theme_override_constants/separation = 3
+
+[node name="PreviewSeparator" type="HSeparator" parent="Panel/Margin/HBox/MainPanel/Margin"]
+layout_mode = 2
+mouse_filter = 2
 
 [node name="PreviewPanel" type="PanelContainer" parent="Panel/Margin/HBox/MainPanel/Margin"]
 layout_mode = 2

@@ -44,7 +44,7 @@ func _fill_hand(game, count: int) -> void:
 func _test_split_draw_and_reset() -> void:
 	resolution_events.clear()
 	var game = _new_game()
-	_fill_hand(game, 5)
+	_fill_hand(game, SkillEngine.MAX_HAND_SIZE - 1)
 	var admitted := _card("入手")
 	var overflow := _card("溢出", 7, 3)
 	overflow.max_hp = 12
@@ -55,7 +55,7 @@ func _test_split_draw_and_reset() -> void:
 	game.shared_deck = [admitted, overflow]
 	var drawn: Array = game.draw_cards_for_player(2, 1)
 	_assert(drawn == [admitted], "two-card draw with one vacancy must admit only the first card")
-	_assert(game.player_hand.size() == 6 and game.player_hand.back() == admitted, "admitted card must occupy the sole vacancy")
+	_assert(game.player_hand.size() == SkillEngine.MAX_HAND_SIZE and game.player_hand.back() == admitted, "admitted card must occupy the sole vacancy")
 	_assert(game.shared_discard == [overflow], "the second card must move to discard instead of disappearing")
 	_assert(overflow.hp == 7 and overflow.max_hp == 7 and overflow.effective_atk() == 3 and overflow.temp_hp == 0 and overflow.turn_cost_reduction == 0,
 		"overflow must restore HP, max HP, attack, shield and turn cost before discard")
@@ -107,7 +107,7 @@ func _test_charm_and_clone_overflow() -> void:
 
 func _test_copy_hand_splits_per_card() -> void:
 	var game = _new_game()
-	_fill_hand(game, 5)
+	_fill_hand(game, SkillEngine.MAX_HAND_SIZE - 1)
 	SkillEffectApplier._apply_copy_hand(null, 2, {}, game.make_skill_context())
 	_assert(game.player_hand.size() == SkillEngine.MAX_HAND_SIZE, "the first of two copies must fill the one open hand slot")
 	_assert(game.shared_discard.size() == 1, "the second of two copies must overflow independently into discard")

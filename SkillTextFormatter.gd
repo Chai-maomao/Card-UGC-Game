@@ -23,8 +23,10 @@ static func format_buff_value(buff_id: String, value_text: String, is_zh: bool =
 			return "嘲讽" if is_zh else "taunt"
 		SkillEngine.BUFF_SILENCE:
 			return "沉默" if is_zh else "silence"
+		SkillEngine.BUFF_STUN:
+			return "眩晕" if is_zh else "stun"
 		SkillEngine.BUFF_MISFORTUNE:
-			return "触发概率 -%s%%" % value_text if is_zh else "-%s%% trigger chance" % value_text
+			return "技能发动概率 -%s%%" % value_text if is_zh else "-%s%% skill activation chance" % value_text
 		SkillEngine.BUFF_IMMUNE_LETHAL:
 			return "免疫致命伤害" if is_zh else "immune to lethal damage"
 	return value_text
@@ -47,7 +49,7 @@ static func format_effect_sentence(eff: Dictionary) -> String:
 	# Sentence templates are registered per effect in Locale (effect_sentence),
 	# with {target}/{value}/{draw}/{keep}/{buff}/{buff_value}/{duration} placeholders.
 	var template_key := _sentence_template_key(normalized)
-	var template: String = Locale.term("effect_sentence", template_key)
+	var template: String = _value_template(Locale.term("effect_sentence", template_key), normalized)
 	if template == template_key:
 		# No template registered — fallback: "{target} {effect_name} {value}".
 		sentence = "%s %s %s" % [target, Locale.term("effect", effect_id), vstr]
@@ -75,6 +77,8 @@ static func format_effect_sentence(eff: Dictionary) -> String:
 # Recursive human-readable form for control blocks, used by the skill preview
 # and card tooltips: "如果 [条件] 那么：a；b" / "重复 N 次：a" / "跳出当前条件".
 static func format_control_sentence(eff: Dictionary) -> String:
+	if SkillRegistry.is_chance_block(eff):
+		return Locale.t("skill_editor.chance_sentence") % [int(eff.condition.rhs.value), _format_sub_effects(eff.get("then_effects", []))]
 	var effect_id: String = str(eff.get("effect", ""))
 	match effect_id:
 		SkillEngine.EFFECT_IF:
@@ -104,7 +108,7 @@ static func describe_repeat_count(eff: Dictionary) -> String:
 	var var_id: String = eff.get("repeat_var", "")
 	if var_id != "":
 		return "(%s)" % Locale.term("value_var", var_id)
-	return str(int(eff.get("repeat_count", 2)))
+	return str(int(eff.repeat_count)) if eff.has("repeat_count") else ""
 
 
 # Picks the Locale effect_sentence template key for an effect, resolving the
@@ -151,6 +155,13 @@ static func _render_sentence(template: String, eff: Dictionary, target: String, 
 # "draw" | "buff" | "duration"} which the block UI turns into editable
 # controls. "value"/"keep"/"buff_value" all edit the "value" field; "draw"
 # edits "random_count".
+static func _value_template(template: String, effect: Dictionary) -> String:
+	if effect.get("effect") == SkillEngine.EFFECT_ADD_BUFF and not SkillRegistry.buff_uses_duration(str(effect.get("buff_id", ""))):
+		template = template.replace("，持续 {duration} 回合", "，至下个己方回合结束").replace(" for {duration} turn(s)", " until the end of the target's next turn")
+	if effect.get("effect") == SkillEngine.EFFECT_ADD_BUFF and not SkillRegistry.effect_uses_value(effect):
+		return template.replace("（{buff_value}）", "").replace(" ({buff_value})", "").replace("({buff_value})", "")
+	return template
+
 static func effect_sentence_tokens(eff: Dictionary) -> Array:
 	var normalized := _TargetResolver.normalize_effect_target(eff)
 	var effect_id: String = normalized.get("effect", "")
@@ -160,7 +171,9 @@ static func effect_sentence_tokens(eff: Dictionary) -> Array:
 			SkillEngine.EFFECT_REPEAT, SkillEngine.EFFECT_STOP]:
 		return [{"type": "text", "text": format_control_sentence(normalized)}]
 	var template_key := _sentence_template_key(normalized)
-	var template: String = Locale.term("effect_sentence", template_key)
+	var template: String = _value_template(Locale.term("effect_sentence", template_key), normalized)
+	if effect_id == SkillEngine.EFFECT_CHARM:
+		template = Locale.term("effect_block_sentence", effect_id)
 	var tokens: Array = []
 	if template == template_key:
 		# No template — fallback "{target} {effect_name} {value}".
@@ -276,6 +289,7 @@ static func _format_boolean_sentence(cond: Dictionary) -> String:
 
 
 static func _format_operand(opd: Dictionary) -> String:
+	if opd.is_empty(): return ""
 	var kind: String = str(opd.get("kind", "num"))
 	match kind:
 		"var":
@@ -285,13 +299,13 @@ static func _format_operand(opd: Dictionary) -> String:
 			var a := _format_operand(opd.get("a", {}))
 			var b := _format_operand(opd.get("b", {}))
 			if op == "rand":
-				return "%s(%s~%s)" % [Locale.t("skill_editor.op_random"), a, b]
+				return "%s~%s" % [a, b]
 			var expression := "%s %s %s" % [a, _op_symbol(op), b]
 			match str(opd.get("rounding", "round")):
 				"ceil": return "⌈%s⌉" % expression
 				"floor": return "⌊%s⌋" % expression
 			return "(%s)" % expression
-	return str(int(opd.get("value", 0)))
+	return str(int(opd.value)) if opd.has("value") else ""
 
 
 static func _op_symbol(op: String) -> String:
@@ -306,11 +320,16 @@ static func _op_symbol(op: String) -> String:
 			return "+"
 
 
-static func format_skill_tooltip(skill: Dictionary) -> String:
+static func skill_display_name(skill: Dictionary, index: int = -1) -> String:
+	var value := str(skill.get("skill_name", "")).strip_edges()
+	return value if not value.is_empty() else (Locale.t("mycards.skill_fallback", [index+1]) if index >= 0 else Locale.t("editor.unnamed"))
+
+
+static func format_skill_tooltip(skill: Dictionary, index: int = -1) -> String:
 	if skill.is_empty():
 		return ""
 
-	var sname: String = skill.get("skill_name", Locale.t("editor.unnamed"))
+	var sname := skill_display_name(skill, index)
 	var trig: String = Locale.term("trigger", skill.get("trigger", ""))
 	var result: String = "[%s] %s\n" % [sname, trig]
 	var skill_probability: int = int(skill.get("probability", 100))
@@ -344,6 +363,7 @@ static func _format_target_name(eff: Dictionary) -> String:
 
 
 static func describe_value(eff: Dictionary) -> String:
+	if eff.has("effect") and not SkillRegistry.effect_uses_value(eff): return ""
 	if eff.has("value_expr"):
 		return _format_operand(eff.get("value_expr", {}))
 	var var_id: String = eff.get("value_var", "")
@@ -360,5 +380,5 @@ static func describe_value(eff: Dictionary) -> String:
 		var vmax: int = int(eff.get("value_max", 1))
 		if vmin == vmax:
 			return str(vmin)
-		return "%d-%d" % [vmin, vmax]
-	return str(int(eff.get("value", 0)))
+		return "%d~%d" % [vmin, vmax]
+	return str(int(eff.value)) if eff.has("value") else ""

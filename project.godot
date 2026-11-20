@@ -14,6 +14,7 @@ config/name="CardUGCGame"
 run/main_scene="res://Bootstrap.tscn"
 config/features=PackedStringArray("4.6", "Forward Plus")
 config/icon="res://res/ui/icons/cardex_app_icon.png"
+config/quit_on_go_back.android=false
 
 [autoload]
 
@@ -21,25 +22,41 @@ PlayerData="*uid://bluk0ihmmqv4x"
 EventBus="*uid://duavhufhthawd"
 NetworkManager="*res://NetworkManager.gd"
 Locale="*res://Locale.gd"
+AppPreferences="*res://AppPreferences.gd"
+AppAudio="*res://AppAudio.gd"
 BattleFx="*res://BattleFx.gd"
 UIMotion="*res://UIMotion.gd"
 WindowSizeController="*res://WindowSizeController.gd"
 AppVersion="*res://AppVersion.gd"
+AppDiagnostics="*res://AppDiagnostics.gd"
+DevConsole="*res://DevConsole.gd"
+
+[debug]
+
+file_logging/enable_file_logging=true
+gameplay_verbose_logging=false
 
 [display]
 
 window/size/window_width_override=1280
 window/size/window_height_override=720
 window/stretch/mode="canvas_items"
-
-[debug]
-
-gameplay_verbose_logging=false
+window/stretch/aspect.android="expand"
+window/handheld/orientation.android=4
 
 [gui]
 
 timers/tooltip_delay_sec=86400.0
 
+[input_devices]
+
+pointing/android/enable_long_press_as_right_click=true
+pointing/android/enable_pan_and_scale_gestures=true
+
+[network]
+
+tls/certificate_bundle_override="res://res/network/cacert.pem"
+
 [rendering]
 
-rendering_device/driver.windows="d3d12"
+textures/vram_compression/import_etc2_astc=true

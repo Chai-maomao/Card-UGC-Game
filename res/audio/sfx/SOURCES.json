@@ -1,0 +1,184 @@
+[
+  {
+    "path": "res/audio/sfx/dark_magic.wav",
+    "sha256": "569ef810aa6ac2322283dee29aef46e2474528997b301b1c93c3686ce2e8fa36",
+    "source_name": "cardex-dark_magic.mp3",
+    "source_sha256": "10817bd18c0dc06c2c66e80ce1a839f768e22c35822b000da1b3ae3cadd4baa0",
+    "provenance": "user-provided sound effect, supplied 2026-11-13; trimmed silence and gain adjusted; no new license assigned",
+    "trim_seconds": [
+      0.025,
+      1.05
+    ],
+    "gain_db": -5.32
+  },
+  {
+    "path": "res/audio/sfx/deploy_card.wav",
+    "sha256": "948430d4ab62f267f7ac4813eb4aa960e61eea2db6e1bf29426b7967cb50aae3",
+    "source_name": "cardex-deploy_card.mp3",
+    "source_sha256": "8f7ee00b651b1e2aea89d191d8a01d03697b283bb667b440a939e877d6ebaef6",
+    "provenance": "user-provided sound effect, supplied 2026-11-13; trimmed silence and gain adjusted; no new license assigned",
+    "trim_seconds": [
+      0.125,
+      0.42
+    ],
+    "gain_db": -5.1
+  },
+  {
+    "path": "res/audio/sfx/deploy_card_2.wav",
+    "sha256": "295f3e3c378682d82717e4b7c3050c67bd91557bdac396259b73d6987305a3fc",
+    "source_name": "cardex-deploy_card_2.mp3",
+    "source_sha256": "2c94037a2b99882a4e193cfa35fe50a9f791b1709a49f2d95631fb8f3700b844",
+    "provenance": "user-provided sound effect, supplied 2026-11-13; trimmed silence and gain adjusted; no new license assigned",
+    "trim_seconds": [
+      0.175,
+      0.504
+    ],
+    "gain_db": 4.64
+  },
+  {
+    "path": "res/audio/sfx/heal.wav",
+    "sha256": "af3754ad801419e68ac43139c28024ff924e421549cc1f97f864d88463c868ed",
+    "source_name": "cardex-heal.mp3",
+    "source_sha256": "bf80bf4cea90123e4aae83efdec812dcc8442c19d2017cc0871e81e4bfe272b5",
+    "provenance": "user-provided sound effect, supplied 2026-11-13; trimmed silence and gain adjusted; no new license assigned",
+    "trim_seconds": [
+      0.125,
+      1.85
+    ],
+    "gain_db": -0.27
+  },
+  {
+    "path": "res/audio/sfx/magic_smite.wav",
+    "sha256": "4e2359bbd610c7fa95a8223d4237b0c52d1e61a8b4fc17cf4b86c1db4cf3cc8a",
+    "source_name": "cardex-magic_smite.mp3",
+    "source_sha256": "1bdc4a0068953f57d9e774a48d16d7523f5330f97b447076e22f507b2004cfda",
+    "provenance": "user-provided sound effect, supplied 2026-11-13; trimmed silence and gain adjusted; no new license assigned",
+    "trim_seconds": [
+      0.675,
+      2.25
+    ],
+    "gain_db": 3.36
+  },
+  {
+    "path": "res/audio/sfx/mouse_over_menu.wav",
+    "sha256": "03a62d4004c9a06eeec5fa5b93343286e0a2a5c5764268508001a772899f0203",
+    "source_name": "cardex-mouse_over_menu.mp3",
+    "source_sha256": "c674ec41f1f2975d712a4fde3b0c4c06a2a79ef7448ce50c1cda4a803e904942",
+    "provenance": "user-provided sound effect, supplied 2026-11-13; trimmed silence and gain adjusted; no new license assigned",
+    "trim_seconds": [
+      0.225,
+      0.58
+    ],
+    "gain_db": 8.83
+  },
+  {
+    "path": "res/audio/sfx/punch.wav",
+    "sha256": "5465fa11730b3aa93c48a820c9e5ad4d3db42c530cac859799437350fb50604e",
+    "source_name": "cardex-punch.mp3",
+    "source_sha256": "c630d23f9542dda52b53e3b162a0b98a2d29e5b3c3bf390b84b6c0279766b7b6",
+    "provenance": "user-provided sound effect, supplied 2026-11-13; trimmed silence and gain adjusted; no new license assigned",
+    "trim_seconds": [
+      0.025,
+      0.47
+    ],
+    "gain_db": -7.82
+  },
+  {
+    "path": "res/audio/sfx/shuffle.wav",
+    "sha256": "2d85a96f86900b239ac423830aed7e4c8a98075649c45e2d0cb3aa8eb8cdb0ab",
+    "source_name": "cardex-shuffle.mp3",
+    "source_sha256": "53cfeb0b154255db8fd6705b926c4eb9506b4c55d711a9e9d27b3ebcec34a78e",
+    "provenance": "user-provided sound effect, supplied 2026-11-13; trimmed silence and gain adjusted; no new license assigned",
+    "trim_seconds": [
+      0.025,
+      0.696
+    ],
+    "gain_db": -2.18
+  },
+  {
+    "path": "res/audio/sfx/shuffle_2.wav",
+    "sha256": "38927ea6086d111c902300eac5cee069bcb438eb65896454a32ed794e1bd3f85",
+    "source_name": "cardex-shuffle_2.mp3",
+    "source_sha256": "3c65826ed4e1d1385b44946d718bb192f8ef209544bb770a7643bcc900e79b57",
+    "provenance": "user-provided sound effect, supplied 2026-11-13; trimmed silence and gain adjusted; no new license assigned",
+    "trim_seconds": [
+      0.175,
+      0.92
+    ],
+    "gain_db": 0.78
+  },
+  {
+    "path": "res/audio/sfx/swoosh.wav",
+    "sha256": "7f56dc82be3024889f8afaece8822205861f011983ac35117b4294a097e2de27",
+    "source_name": "cardex-swoosh.mp3",
+    "source_sha256": "97130c841557c286979d40a1d59c76cc04d08d94a2b91f73c885a43662efcf87",
+    "provenance": "user-provided sound effect, supplied 2026-11-13; trimmed silence and gain adjusted; no new license assigned",
+    "trim_seconds": [
+      0.075,
+      0.324
+    ],
+    "gain_db": -7.11
+  },
+  {
+    "path": "res/audio/sfx/mouse_over_object.wav",
+    "sha256": "e7f6a30ad06d7b9600f78d9c6dafa166307e1e5ce4aff5c4abbccc511d2aac0a",
+    "source_name": "cardex-mouse_over_object.mp3",
+    "source_sha256": "1917edcb943af4110a51eb5912d0eb3634a2ca1fb3800c128d996cf4ac7e359c",
+    "provenance": "user-provided sound effect, supplied 2026-11-13; trimmed silence and gain adjusted; no new license assigned",
+    "trim_seconds": [
+      0.005,
+      0.048
+    ],
+    "gain_db": -10.03
+  },
+  {
+    "path": "res/audio/sfx/shuffle_3.wav",
+    "sha256": "e6aeba53ec190a3042facd4cf5c03000c1e58e12b2b1ca6aece5684f2e7e7d3f",
+    "source_name": "cardex-shuffle (2).mp3",
+    "source_sha256": "48320fb89f9d5bd21bbc02e848f1e8af9fc8733c0eaf58ecd9d5b99511fe5032",
+    "provenance": "user-provided sound effect, supplied 2026-11-14; trimmed silence, conservative gain matching and short edge fades; no new license assigned",
+    "trim_seconds": [
+      0.013084,
+      0.574286
+    ],
+    "gain_db": -6.133
+  },
+  {
+    "path": "res/audio/sfx/distributing_single.wav",
+    "sha256": "4cac4db68d78ad7172425a59bfd5091135336b4f2d8830387a72f70f3975e7a8",
+    "source_name": "cardex-distributing_single.mp3",
+    "source_sha256": "7742533ef676609d40bebb1cab9170d845fdff9a7e0390d511136b095fcea564",
+    "provenance": "user-provided single-card draw sound, supplied 2026-11-14; trimmed silence, gain matched and short edge fades; no new license assigned",
+    "trim_seconds": [
+      0.012132,
+      0.218345
+    ],
+    "gain_db": -6.151
+  },
+  {
+    "path": "res/audio/sfx/deploy_card_3.wav",
+    "sha256": "17a95ae32fbea6ce046ed22f38a3b6a42cc76edf3f1d1f7dc428b37b5f087c9f",
+    "source_name": "cardex-deploy_card_3.mp3",
+    "source_sha256": "19d15c90c65089036e7ae9fa3764be473202c37af2ecb8e4cb8bb3eb405d536f",
+    "provenance": "user-provided deployment sound, supplied 2026-11-14; trimmed silence, gain matched to existing deployment variants and short edge fades; no new license assigned",
+    "trim_seconds": [
+      0.013129,
+      0.27805
+    ],
+    "gain_db": -7.189
+  },
+  {
+    "path": "res/audio/sfx/distribute_multi.wav",
+    "sha256": "9b2dfc9e7e61a063c56c68bd53dc4621aef58a4027ab16e69a9de15bca799feb",
+    "source_name": "cardex-distribute_multi.mp4",
+    "source_sha256": "4a8b142cba10d7cdb49416b68c2d68b4bc6afd170ab4cb9803d8cd3186fe48dc",
+    "converted_name": "cardex-distribute_multi.mp3",
+    "converted_sha256": "09c1e4a86d7cf8e2803d86705cfee4210808b3b6f6438b0f805db3508dadaadd",
+    "provenance": "user-provided video/audio asset, supplied 2026-11-14; extracted MP3, runtime WAV trimmed, gain matched and edge faded; original MP4 unchanged; no new license assigned",
+    "trim_seconds": [
+      0.077211,
+      2.230113
+    ],
+    "gain_db": 13.308
+  }
+]

@@ -12,6 +12,7 @@ const UITheme = preload("res://UITheme.gd")
 const _TargetResolver = preload("res://SkillTargetResolver.gd")
 const _TextFormatter = preload("res://SkillTextFormatter.gd")
 const _TutorialController = preload("res://SkillEditorTutorialController.gd")
+const _UgcSafety = preload("res://UgcSafety.gd")
 
 @onready var title_label = $Panel/Margin/HBox/MainPanel/Margin/TitleLabel
 @onready var help_label = $Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/HelpLabel
@@ -36,6 +37,9 @@ const _TutorialController = preload("res://SkillEditorTutorialController.gd")
 @onready var palette_search = $Panel/Margin/HBox/PalettePanel/Margin/VBox/PaletteSearch
 @onready var palette_vbox = $Panel/Margin/HBox/PalettePanel/Margin/VBox/PaletteScroll/PaletteVBox
 
+var _opening_editor_state: Dictionary = {}
+var _opening_skill_name := ""
+var _discard_dialog: ConfirmationDialog
 var effect_data: Array = []        # [{target, effect, value, buff_id, duration, ...}, ...]
 var editing_effect_path: Array = [] # [] = none; last element -1 = append to the list at path
 var current_trigger_key: String = SkillEngine.TRIGGER_ON_ATTACK
@@ -54,8 +58,15 @@ var _redo_btn: Button
 var _template_btn: Button
 var skill_tutorial_controller: SkillEditorTutorialController
 var _drag_in_progress: bool = false
+var _pointer_down: bool = false
 var _script_refresh_pending: bool = false
 var _palette_drop_overlay: Control
+var workbench: RefCounted
+var loose_groups: Dictionary = {}
+var loose_reporters: Dictionary = {}
+var workspace_script_position := Vector2.ZERO
+var validation_requested := false
+var _drag_hidden: Array[WeakRef] = []
 
 
 # ============================================
@@ -69,6 +80,9 @@ func _editor_state() -> Dictionary:
 		"trigger": current_trigger_key,
 		"trigger_side": current_trigger_side,
 		"effects": effect_data.duplicate(true),
+		"loose_groups": loose_groups.duplicate(true),
+		"loose_reporters": loose_reporters.duplicate(true),
+		"workspace_position": [workspace_script_position.x, workspace_script_position.y],
 		"probability": int(skill_prob_spin.value) if skill_prob_spin != null else 100,
 		"max_uses": int(max_uses_spin.value) if max_uses_spin != null else 0,
 		"skill_type": int(skill_type_select.selected) if skill_type_select != null else 0,
@@ -79,6 +93,10 @@ func _apply_state(s: Dictionary) -> void:
 	current_trigger_key = str(s.get("trigger", current_trigger_key))
 	current_trigger_side = str(s.get("trigger_side", current_trigger_side))
 	effect_data = (s.get("effects", []) as Array).duplicate(true)
+	loose_groups = (s.get("loose_groups", {}) as Dictionary).duplicate(true)
+	loose_reporters = (s.get("loose_reporters", {}) as Dictionary).duplicate(true)
+	var point: Array = s.get("workspace_position", [0, 0])
+	workspace_script_position = Vector2(float(point[0]), float(point[1]))
 	if skill_prob_spin != null:
 		skill_prob_spin.set_value_no_signal(float(s.get("probability", 100)))
 	if max_uses_spin != null:
@@ -98,14 +116,22 @@ func _apply_state(s: Dictionary) -> void:
 func _maybe_snapshot() -> void:
 	_undo_mgr.maybe_snapshot(_editor_state())
 	_refresh_undo_buttons()
+	if workbench != null:
+		workbench.invalidate_preview()
 
 
 func _undo() -> void:
+	if not _undo_mgr.can_undo():
+		UITheme.reject_button(_undo_btn)
+		return
 	var undid: Variant = _undo_mgr.undo(_editor_state())
 	_apply_state(undid)
 
 
 func _redo() -> void:
+	if not _undo_mgr.can_redo():
+		UITheme.reject_button(_redo_btn)
+		return
 	_apply_state(_undo_mgr.redo(_editor_state()))
 
 
@@ -165,14 +191,16 @@ func _apply_texts() -> void:
 	var is_spell := _is_spell()
 	title_label.text = Locale.t("skill_editor.title_spell") if is_spell else (Locale.t("skill_editor.title_talent") if _is_talent_mode() else Locale.t("skill_editor.title", [skill_index + 1]))
 	help_label.text = Locale.t("skill_editor.help_spell" if is_spell else ("skill_editor.help_talent" if _is_talent_mode() else "skill_editor.help"))
+	help_label.hide()
 	palette_title.text = Locale.t("skill_editor.palette_title")
 	palette_search.placeholder_text = Locale.t("skill_editor.palette_search")
 	effects_label.text = Locale.t("skill_editor.effects" if not is_spell else "skill_editor.spell_effects")
 	effects_hint_label.text = Locale.t("skill_editor.effects_hint" if not is_spell else "skill_editor.effects_hint_spell")
+	effects_hint_label.hide()
 	settings_label.text = Locale.t("skill_editor.settings")
 	preview_label.text = Locale.t("skill_editor.preview" if not is_spell else "skill_editor.spell_preview")
 	save_button.text = Locale.t("skill_editor.save")
-	cancel_button.text = Locale.t("skill_editor.cancel")
+	cancel_button.text = Locale.t("common.back")
 
 	# Spell skills have no name / trigger — hide those rows.
 	skill_name_label.visible = not is_spell
@@ -199,12 +227,32 @@ func _ui_scale() -> float:
 
 
 func _apply_responsive_layout() -> void:
+	if workbench != null:
+		workbench.layout()
+		return
 	var s := _ui_scale()
 	var panel := $Panel
-	panel.offset_left = -460.0 * s
-	panel.offset_top = -320.0 * s
-	panel.offset_right = 460.0 * s
-	panel.offset_bottom = 320.0 * s
+	panel.custom_minimum_size = Vector2.ZERO
+	panel.grow_vertical = Control.GROW_DIRECTION_END
+	panel.offset_left = -540.0 * s
+	panel.anchor_top = 0
+	panel.anchor_bottom = 1
+	panel.offset_top = 80
+	panel.offset_right = 540.0 * s
+	panel.offset_bottom = -24
+	UITheme.place_page_back(self, cancel_button)
+	var inset := maxf(16.0,20.0*s)
+	var main_content: Control = $Panel/Margin/HBox/MainPanel/Margin
+	main_content.offset_left = inset
+	main_content.offset_top = inset
+	main_content.offset_right = -inset
+	main_content.offset_bottom = -inset
+	main_content.add_theme_constant_override("separation",maxi(10,roundi(8*s)))
+	for side in ["left","right","top","bottom"]:
+		$Panel/Margin.add_theme_constant_override("margin_"+side,maxi(12,roundi(14*s)))
+		$Panel/Margin/HBox/PalettePanel/Margin.add_theme_constant_override("margin_"+side,maxi(12,roundi(12*s)))
+	$Panel/Margin/HBox.add_theme_constant_override("separation",maxi(12,roundi(10*s)))
+	$Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox.add_theme_constant_override("separation",maxi(10,roundi(8*s)))
 	$Panel/Margin/HBox/PalettePanel.custom_minimum_size = Vector2(250 * s, 0)
 	for label in [title_label, help_label, skill_name_label, trigger_label, trigger_preview_label, trigger_side_label,
 			settings_label, effects_label, effects_hint_label, preview_label, skill_summary, palette_title]:
@@ -219,19 +267,16 @@ func _apply_responsive_layout() -> void:
 
 func _apply_theme() -> void:
 	UITheme.apply_app_background(self)
-	UITheme.apply_panel($Panel, "gold")
-	UITheme.apply_panel($Panel/Margin/HBox/PalettePanel, "dark")
-	UITheme.apply_panel($Panel/Margin/HBox/MainPanel, "dark")
-	# Preview card: soft recessed panel so the pinned summary reads as a
-	# distinct "live result" area rather than free-floating text.
-	var pv_style := StyleBoxFlat.new()
-	pv_style.bg_color = Color(0.06, 0.07, 0.095, 0.98)
-	pv_style.border_color = Color(0.55, 0.44, 0.24, 0.55)
-	pv_style.set_border_width_all(1)
-	pv_style.set_corner_radius_all(8)
-	pv_style.shadow_color = Color(0, 0, 0, 0.25)
-	pv_style.shadow_size = 2
-	preview_panel.add_theme_stylebox_override("panel", pv_style)
+	UITheme.apply_app_background($Panel)
+	# Internal sections use spacing and rules; only the page has a frame.
+	for inner_panel in [$Panel/Margin/HBox/PalettePanel,$Panel/Margin/HBox/MainPanel,preview_panel]:
+		inner_panel.add_theme_stylebox_override("panel",StyleBoxEmpty.new())
+	var scroll_inset := StyleBoxEmpty.new()
+	scroll_inset.content_margin_right = 12
+	$Panel/Margin/HBox/MainPanel/Margin/Scroll.add_theme_stylebox_override("panel",scroll_inset)
+	for side in ["left","right"]:
+		$Panel/Margin/HBox/MainPanel/Margin/PreviewPanel/Margin.add_theme_constant_override("margin_"+side,0)
+	$Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/SeparatorMid.visible = not _is_spell()
 	UITheme.apply_title(title_label, max(14, int(18 * _ui_scale())))
 	UITheme.apply_title(palette_title, max(13, int(15 * _ui_scale())))
 	UITheme.apply_input(palette_search)
@@ -259,6 +304,8 @@ func _build_palette() -> void:
 	_palette_builder.editor = self
 	_palette_builder.build()
 	_filter_palette(palette_search.text if palette_search != null else "")
+	if workbench != null:
+		workbench.refresh_categories()
 
 
 func _filter_palette(query: String) -> void:
@@ -281,6 +328,7 @@ func _filter_palette(query: String) -> void:
 			any_match = any_match or matches
 		header.visible = needle == "" or any_match
 		box.visible = any_match if needle != "" else bool(header.get_meta("user_open", true))
+	if workbench != null: workbench._sync_category.call_deferred()
 
 
 func _select_trigger(trigger_key: String) -> void:
@@ -299,10 +347,10 @@ func _select_trigger(trigger_key: String) -> void:
 		skill_tutorial_controller.notify_action("trigger", {"id": trigger_key})
 
 
-func _add_effect_block(effect_id: String) -> void:
+func _add_effect_block(effect_id: String, buff_id: String = "") -> void:
 	if skill_tutorial_controller and not skill_tutorial_controller.allows("effect", {"id": effect_id}):
 		return
-	effect_data.append(_default_effect(effect_id))
+	effect_data.append(_default_effect(effect_id, buff_id))
 	_refresh_script()
 	_update_summary()
 	_maybe_snapshot()
@@ -346,6 +394,7 @@ func _flush_script_refresh_after_drag() -> void:
 
 
 func _refresh_script_now() -> void:
+	_cleanup_loose_reporters()
 	for child in effects_list.get_children():
 		child.queue_free()
 	if _is_spell():
@@ -356,12 +405,17 @@ func _refresh_script_now() -> void:
 		# The whole skill lives inside one event hat block (Scratch-style).
 		var event_block := SkillBlock.new()
 		event_block.setup_event_block(current_trigger_key, current_trigger_side)
+		if workbench != null:
+			event_block.set_meta("skill_workspace",workbench.workspace)
+			event_block.mouse_default_cursor_shape = Control.CURSOR_DRAG
 		effects_list.add_child(event_block)
 		_render_effects(effect_data, event_block.body_container, [], true)
 		_maybe_add_slot_hint(event_block.body_container)
 		_setup_slot_drop(event_block.body_container, [])
 	_refresh_error_banner()
 	_mark_invalid_conditions()
+	if workbench != null:
+		workbench.render_loose_groups()
 
 
 # ============================================
@@ -379,6 +433,11 @@ func _collect_errors() -> Array:
 func _refresh_error_banner() -> void:
 	_error_checker.editor = self
 	_error_checker.refresh_banner()
+	_mark_invalid_conditions()
+
+func _exit_tree() -> void:
+	if is_instance_valid(_insertion_line) and _insertion_line.get_parent() == null:
+		_insertion_line.free()
 
 
 func _mark_invalid_conditions() -> void:
@@ -386,15 +445,29 @@ func _mark_invalid_conditions() -> void:
 	_error_checker.mark_invalid_conditions()
 
 
-func _focus_issue_path(path: Array) -> void:
+func _focus_issue_path(path: Array, condition_path: Variant = null) -> void:
 	if path.is_empty():
 		return
 	for candidate in effects_list.find_children("*", "SkillBlock", true, false):
 		var block := candidate as SkillBlock
 		if block != null and block.effect_path == path:
-			var scroll := $Panel/Margin/HBox/MainPanel/Margin/Scroll as ScrollContainer
-			scroll.ensure_control_visible(block)
-			UITheme.reject_shake(block)
+			var target: Control = block
+			if condition_path is Array:
+				for socket in block.find_children("*", "PanelContainer", true, false):
+					if socket.get_script() == preload("res://SkillConditionSocket.gd") and socket.condition_path == condition_path:
+						target = socket
+						break
+			if workbench != null:
+				var canvas: Control = workbench.workspace
+				if block.get_global_rect().size.x+64 <= canvas.size.x and block.get_global_rect().size.y+80 <= canvas.size.y:
+					canvas.reveal(block)
+				else:
+					canvas.pan += canvas.get_global_rect().get_center()-target.get_global_rect().get_center()
+					canvas._sync_view()
+			else:
+				var scroll := $Panel/Margin/HBox/MainPanel/Margin/Scroll as ScrollContainer
+				scroll.ensure_control_visible(block)
+			UITheme.reject_shake(target)
 			return
 
 
@@ -409,7 +482,10 @@ func _render_effects(list: Array, container: VBoxContainer, base_path: Array, to
 		var effect_id: String = str(eff.get("effect", ""))
 		if effect_id == SkillEngine.EFFECT_IF_ELSE or effect_id == SkillEngine.EFFECT_IF:
 			var block := SkillBlock.new()
-			block.setup_if_else(eff, path)
+			if SkillRegistry.is_chance_block(eff):
+				block.setup_chance_block(eff, path)
+			else:
+				block.setup_if_else(eff, path)
 			block.draggable = true
 			_connect_block_signals(block)
 			container.add_child(block)
@@ -418,13 +494,11 @@ func _render_effects(list: Array, container: VBoxContainer, base_path: Array, to
 			var then_path: Array = path.duplicate()
 			then_path.append("then")
 			_render_effects(eff.get("then_effects", []), block.then_container, then_path, false)
-			_maybe_add_slot_hint(block.then_container)
 			_setup_slot_drop(block.then_container, then_path)
 			if block.has_else:
 				var else_path: Array = path.duplicate()
 				else_path.append("else")
 				_render_effects(eff.get("else_effects", []), block.else_container, else_path, false)
-				_maybe_add_slot_hint(block.else_container)
 				_setup_slot_drop(block.else_container, else_path)
 		elif effect_id == SkillEngine.EFFECT_REPEAT:
 			var block := SkillBlock.new()
@@ -437,7 +511,6 @@ func _render_effects(list: Array, container: VBoxContainer, base_path: Array, to
 			var loop_path: Array = path.duplicate()
 			loop_path.append("then")
 			_render_effects(eff.get("then_effects", []), block.then_container, loop_path, false)
-			_maybe_add_slot_hint(block.then_container)
 			_setup_slot_drop(block.then_container, loop_path)
 		elif effect_id == SkillEngine.EFFECT_STOP:
 			var block := SkillBlock.new()
@@ -463,27 +536,11 @@ func _render_effects(list: Array, container: VBoxContainer, base_path: Array, to
 func _maybe_add_slot_hint(slot: VBoxContainer) -> void:
 	if slot.get_child_count() > 0:
 		return
-	var hint := Label.new()
-	hint.text = Locale.t("skill_editor.slot_hint")
-	hint.add_theme_font_size_override("font_size", 11)
-	hint.add_theme_color_override("font_color", Color(1, 1, 1, 0.5))
-	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	slot.add_child(hint)
-	var panel := slot.get_parent()
-	if panel is PanelContainer:
-		var st := StyleBoxFlat.new()
-		st.bg_color = Color(0, 0, 0, 0.16)
-		st.border_color = Color(0.45, 0.70, 0.88, 0.65)
-		st.set_border_width_all(1)
-		st.set_corner_radius_all(5)
-		st.content_margin_left = 6
-		st.content_margin_right = 6
-		st.content_margin_top = 4
-		st.content_margin_bottom = 4
-		(panel as PanelContainer).add_theme_stylebox_override("panel", st)
+	slot.custom_minimum_size.y = 36
 
 
 func _connect_block_signals(block: SkillBlock) -> void:
+	if workbench != null: block.set_meta("skill_workspace",workbench.workspace)
 	block.edit_requested.connect(_on_block_edit_path)
 	block.delete_requested.connect(_on_block_delete_path)
 	block.move_requested.connect(_on_block_move_path)
@@ -491,6 +548,7 @@ func _connect_block_signals(block: SkillBlock) -> void:
 	block.changed.connect(_on_block_changed)
 	block.context_requested.connect(_on_block_context_requested)
 	block.condition_dropped.connect(_on_block_condition_dropped)
+	block.condition_inserted.connect(_on_block_condition_inserted)
 	block.insertion_requested.connect(_on_block_insertion_requested)
 	block.insertion_hidden.connect(_hide_insertion_line)
 
@@ -547,13 +605,19 @@ func _get_drag_data_from_list(_pos: Vector2):
 # insertion line at the position the block would land, and glow the target
 # slot. Cleaned up on drop and by _process once the GUI drag ends.
 var _insertion_line: Control
+var _stack_snap: RefCounted
+var _trigger_snap_target: SkillBlock
 var _highlighted_slot: VBoxContainer
 var _slot_orig_style: StyleBox
 var _palette_discard_highlight: bool = false
+var _palette_orig_z_index := 0
 var _palette_orig_style: StyleBox
 
 
 func _can_drop_on_slot(vbox: VBoxContainer, _pos: Vector2, data) -> bool:
+	if workbench != null:
+		return _preview_stack_drop(data)
+	_pos = _slot_pointer(vbox, _pos)
 	var ok: bool = data is Dictionary and data.get("type", "") == "effect_block"
 	if ok:
 		_activate_slot_highlight(vbox)
@@ -561,6 +625,88 @@ func _can_drop_on_slot(vbox: VBoxContainer, _pos: Vector2, data) -> bool:
 	else:
 		_hide_insertion_line()
 	return ok
+
+
+func _preview_stack_drop(data: Variant) -> bool:
+	if _stack_snap == null: _stack_snap = preload("res://SkillStackSnap.gd").new(self)
+	return _stack_snap.preview(data)
+
+func _commit_stack_drop(data: Dictionary) -> bool:
+	if _stack_snap == null: _stack_snap = preload("res://SkillStackSnap.gd").new(self)
+	return _stack_snap.commit(data)
+
+func _preview_trigger_attachment() -> SkillBlock:
+	var canvas: Control = workbench.workspace
+	var best: SkillBlock
+	var best_distance := INF
+	if effect_data.is_empty() and Rect2(Vector2.ZERO, canvas.size).has_point(canvas.last_pointer):
+		var anchor := _trigger_body_anchor()
+		for group in canvas.loose_views:
+			if group.get_child_count() == 0: continue
+			var first := group.get_child(0) as SkillBlock
+			if first == null or not first.is_visible_in_tree(): continue
+			var delta := first.get_global_rect().position - anchor
+			if absf(delta.x) > 40.0 or absf(delta.y) > 24.0: continue
+			var distance := delta.length_squared()
+			if distance < best_distance:
+				best = first
+				best_distance = distance
+	if _trigger_snap_target != best:
+		_clear_trigger_attachment()
+		_trigger_snap_target = best
+		if best != null: best._set_drag_highlight(true)
+	return best
+
+func _trigger_body_anchor() -> Vector2:
+	var body: Control = effects_list if _is_spell() else effects_list.get_child(0).body_container
+	return body.get_global_rect().position
+
+func _clear_trigger_attachment() -> void:
+	if is_instance_valid(_trigger_snap_target):
+		_trigger_snap_target._set_drag_highlight(false)
+	_trigger_snap_target = null
+
+func _finish_trigger_drag(at: Vector2, allow_attachment: bool) -> void:
+	workspace_script_position = at
+	var target := _preview_trigger_attachment() if allow_attachment else null
+	_clear_trigger_attachment()
+	if target != null:
+		var world: Control = workbench.workspace.world
+		var inverse := world.get_global_transform().affine_inverse()
+		workspace_script_position += (inverse * target.global_position) - (inverse * _trigger_body_anchor())
+		var path: Array = target.effect_path
+		_move_effect(path, [], 0, true)
+		_show_connection_feedback.call_deferred([0])
+	else:
+		_maybe_snapshot()
+
+func _show_connection_feedback(path: Array, condition_socket: Variant = null) -> void:
+	for candidate in workbench.workspace.world.find_children("*", "SkillBlock", true, false):
+		var ancestor: Node = candidate
+		var retiring := false
+		while ancestor != workbench.workspace.world:
+			if ancestor.is_queued_for_deletion(): retiring = true
+			ancestor = ancestor.get_parent()
+		if retiring: continue
+		if not candidate.get_meta("drag_preview", false) and candidate.effect_path == path:
+			if condition_socket is Array:
+				if not is_instance_valid(candidate.cond_slot):
+					return
+				if condition_socket.is_empty():
+					candidate.cond_slot.flash_attachment()
+				else:
+					for socket in candidate.cond_slot.find_children("*", "PanelContainer", true, false):
+						if socket.get_script() == preload("res://SkillConditionSocket.gd") and socket.condition_path == condition_socket:
+							socket.flash_attachment()
+							break
+				return
+			candidate._set_drag_highlight(true)
+			candidate._play_drop_pulse()
+			var reference: WeakRef = weakref(candidate)
+			get_tree().create_timer(0.38).timeout.connect(func():
+				var block = reference.get_ref()
+				if block != null: block._set_drag_highlight(false))
+			break
 
 
 func _activate_slot_highlight(vbox: VBoxContainer) -> void:
@@ -573,19 +719,33 @@ func _activate_slot_highlight(vbox: VBoxContainer) -> void:
 
 
 func _show_insertion_line(vbox: VBoxContainer, index: int) -> void:
+	if _insertion_line != null and _insertion_line.get_parent() == vbox and _insertion_line.get_meta("index", -1) == index:
+		return
 	if _insertion_line == null:
 		_insertion_line = PanelContainer.new()
-		var st := StyleBoxFlat.new()
-		st.bg_color = Color(0.34, 0.92, 1.0)
-		st.border_color = Color(0.82, 0.98, 1.0, 0.95)
-		st.set_border_width_all(1)
-		st.set_corner_radius_all(2)
-		st.shadow_color = Color(0.15, 0.78, 1.0, 0.75)
-		st.shadow_size = 6
-		_insertion_line.add_theme_stylebox_override("panel", st)
+		_insertion_line.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 		_insertion_line.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		_insertion_line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_insertion_line.custom_minimum_size = Vector2(40, 5)
+		var data = get_viewport().gui_get_drag_data()
+		var effect: Dictionary = {}
+		if data is Dictionary:
+			effect = data.get("effect", {})
+			if effect.is_empty(): effect = _new_block_for(str(data.get("effect_id", SkillEngine.EFFECT_DAMAGE)), str(data.get("buff_id", "")))
+		if effect.is_empty(): effect = _new_block_for(SkillEngine.EFFECT_DAMAGE)
+		var column := VBoxContainer.new()
+		column.add_theme_constant_override("separation", -preload("res://SkillSocketStyle.gd").JOIN_OVERLAP)
+		column.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_insertion_line.add_child(column)
+		var effects: Array = [effect]
+		if data is Dictionary and data.get("tail", false) and not data.get("from_path", []).is_empty():
+			var path: Array = data.from_path
+			effects = _effect_list_at(path).slice(int(path.back()))
+		for item in effects:
+			var ghost := SkillBlock.make_preview(item)
+			ghost.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+			ghost.modulate = Color(1,1,1,0.62)
+			ghost._set_drag_highlight(true)
+			column.add_child(ghost)
+	_insertion_line.set_meta("index", index)
 	if _insertion_line.get_parent() != null:
 		_insertion_line.get_parent().remove_child(_insertion_line)
 	vbox.add_child(_insertion_line)
@@ -608,28 +768,8 @@ func _show_insertion_line(vbox: VBoxContainer, index: int) -> void:
 # unmistakable. Restores the original style (incl. the empty-slot border) on
 # leave/drop.
 func _highlight_slot(vbox: VBoxContainer, on: bool) -> void:
-	var panel := vbox.get_parent()
-	if not (panel is PanelContainer):
-		return
-	if on:
-		_slot_orig_style = (panel as PanelContainer).get_theme_stylebox("panel")
-		var st := StyleBoxFlat.new()
-		st.bg_color = Color(0.10, 0.48, 0.66, 0.38)
-		st.border_color = Color(0.42, 0.90, 1.0, 0.98)
-		st.set_border_width_all(2)
-		st.set_corner_radius_all(5)
-		st.shadow_size = 0
-		st.content_margin_left = 6
-		st.content_margin_right = 6
-		st.content_margin_top = 4
-		st.content_margin_bottom = 4
-		(panel as PanelContainer).add_theme_stylebox_override("panel", st)
-	else:
-		if _slot_orig_style != null:
-			(panel as PanelContainer).add_theme_stylebox_override("panel", _slot_orig_style)
-		else:
-			(panel as PanelContainer).remove_theme_stylebox_override("panel")
-
+	for child in vbox.get_children():
+		if child is Label: child.visible = not on
 
 func _hide_insertion_line() -> void:
 	if _highlighted_slot != null:
@@ -637,13 +777,17 @@ func _hide_insertion_line() -> void:
 		_highlighted_slot = null
 	if _insertion_line != null and _insertion_line.get_parent() != null:
 		_insertion_line.get_parent().remove_child(_insertion_line)
+	if _insertion_line != null:
+		_insertion_line.queue_free()
+		_insertion_line = null
 
 
 func _process(_delta: float) -> void:
-	# If Windows/Godot lost the release notification while rebuilding GUI
-	# controls, the global button state is already up even though the viewport
-	# may still believe a drag is active. Repair that state immediately.
-	if _is_editor_drag_active() and not Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+	if workbench != null and get_viewport().gui_is_dragging():
+		_preview_stack_drop(get_viewport().gui_get_drag_data())
+	# Track the editor viewport's press/release events. Forwarded editor input
+	# does not necessarily update Input's OS-level mouse-button state.
+	if _is_editor_drag_active() and not _pointer_down:
 		_recover_pointer_after_drag()
 	elif Input.mouse_mode != Input.MOUSE_MODE_VISIBLE:
 		_restore_pointer_visibility()
@@ -662,6 +806,8 @@ func _process(_delta: float) -> void:
 
 func _input(event: InputEvent) -> void:
 	var mouse_button := event as InputEventMouseButton
+	if mouse_button != null and mouse_button.button_index == MOUSE_BUTTON_LEFT:
+		_pointer_down = mouse_button.pressed
 	if mouse_button != null and mouse_button.button_index == MOUSE_BUTTON_LEFT \
 			and not mouse_button.pressed and _drag_in_progress:
 		# Run after the viewport has had a chance to perform the normal drop. If
@@ -674,11 +820,16 @@ func _notification(what: int) -> void:
 		_drag_in_progress = true
 		_set_palette_drop_overlay_active(true)
 	elif what == NOTIFICATION_DRAG_END:
+		if _stack_snap != null: _stack_snap.clear()
+		_hide_insertion_line()
+		_restore_drag_views()
 		_drag_in_progress = false
 		_set_palette_drop_overlay_active(false)
 		_restore_pointer_visibility.call_deferred()
 	elif what == NOTIFICATION_APPLICATION_FOCUS_OUT:
-		_recover_pointer_after_drag()
+		# Cancelling a GUI drag removes its preview. The focus notification can
+		# arrive while Godot is still changing the window's children.
+		_recover_pointer_after_drag.call_deferred()
 
 
 func _is_editor_drag_active() -> bool:
@@ -692,6 +843,8 @@ func _recover_pointer_after_drag() -> void:
 	if viewport != null and viewport.gui_is_dragging():
 		viewport.gui_cancel_drag()
 	_drag_in_progress = false
+	_restore_drag_views()
+	_pointer_down = false
 	_set_palette_drop_overlay_active(false)
 	_hide_insertion_line()
 	_set_palette_discard_highlight(false)
@@ -736,12 +889,14 @@ func _set_palette_discard_highlight(on: bool) -> void:
 	var panel: Panel = $Panel/Margin/HBox/PalettePanel
 	if on:
 		_palette_orig_style = panel.get_theme_stylebox("panel")
+		_palette_orig_z_index = panel.z_index
+		panel.z_index = maxi(1,panel.z_index)
 		var st := StyleBoxFlat.new()
-		st.bg_color = Color(0.22, 0.055, 0.075, 0.97)
-		st.border_color = Color(0.96, 0.34, 0.40, 0.98)
+		st.bg_color = Color(UITheme.Tokens.DANGER_PRESSED,0.97)
+		st.border_color = Color(UITheme.Tokens.ENEMY,0.98)
 		st.set_border_width_all(2)
 		st.set_corner_radius_all(8)
-		st.shadow_color = Color(0.85, 0.12, 0.20, 0.40)
+		st.shadow_color = Color(UITheme.Tokens.ENEMY,0.4)
 		st.shadow_size = 8
 		st.content_margin_left = 10
 		st.content_margin_right = 10
@@ -750,6 +905,7 @@ func _set_palette_discard_highlight(on: bool) -> void:
 		panel.add_theme_stylebox_override("panel", st)
 	elif _palette_orig_style != null:
 		panel.add_theme_stylebox_override("panel", _palette_orig_style)
+		panel.z_index = _palette_orig_z_index
 
 
 func _drop_on_palette(_pos: Vector2, data) -> void:
@@ -758,7 +914,14 @@ func _drop_on_palette(_pos: Vector2, data) -> void:
 	if t == "effect_block":
 		var from_path: Array = data.get("from_path", [])
 		if from_path.size() > 0:
-			_on_block_delete_path(from_path)
+			if data.get("tail",false):
+				var list := _effect_list_at(from_path)
+				list.resize(int(from_path.back()))
+				_cleanup_loose_groups()
+				_refresh_script()
+				_update_summary()
+				_maybe_snapshot()
+			else: _on_block_delete_path(from_path)
 		return
 	if data.has("from_slot"):
 		# Dragging a variable / math reporter back to the palette restores the
@@ -771,21 +934,30 @@ func _drop_on_palette(_pos: Vector2, data) -> void:
 		var block: SkillBlock = data["from_cond_slot"]
 		if block != null and is_instance_valid(block):
 			var eff := _effect_at(block.effect_path)
-			eff.erase("condition")
-			eff.erase("condition_type")
-			eff.erase("condition_op")
-			eff.erase("condition_value")
-			eff.erase("condition_buff_id")
+			var root := SkillEngine._condition_dict(eff)
+			_write_condition(eff, _replace_condition_at(root, data.get("from_condition_path", []), {}))
+			_cleanup_loose_reporters()
 			_refresh_script()
 			_update_summary()
 			_maybe_snapshot()
 
 
 func _drop_on_slot(vbox: VBoxContainer, pos: Vector2, data) -> void:
+	if workbench != null:
+		_commit_stack_drop(data)
+		return
+	pos = _slot_pointer(vbox, pos)
 	_hide_insertion_line()
 	var list_path: Array = vbox.get_meta("list_path", [])
 	var index := _insertion_index_at(vbox, pos)
 	_apply_drop(data, list_path, index)
+
+func _slot_pointer(control: Control, fallback: Vector2) -> Vector2:
+	if workbench == null: return fallback
+	# Forwarded input can leave a drop callback using the OS cursor location.
+	# Convert the pointer observed by this viewport into the target's coordinates.
+	var workspace: Control = workbench.workspace
+	return control.get_global_transform().affine_inverse() * (workspace.get_global_transform() * workspace.last_pointer)
 
 
 # Computes the insertion index under the mouse by comparing against each
@@ -794,7 +966,7 @@ func _insertion_index_at(vbox: VBoxContainer, pos: Vector2) -> int:
 	var block_idx := 0
 	for child in vbox.get_children():
 		if child is SkillBlock:
-			if pos.y < child.position.y + child.size.y * 0.5:
+			if child.visible and pos.y < child.position.y + child.size.y * 0.5:
 				return block_idx
 			block_idx += 1
 	return block_idx
@@ -805,20 +977,20 @@ func _insertion_index_at(vbox: VBoxContainer, pos: Vector2) -> int:
 func _apply_drop(data, list_path: Array, index: int) -> void:
 	var from_path: Array = data.get("from_path", [])
 	if from_path.size() > 0:
-		_move_effect(from_path, list_path, index)
+		_move_effect(from_path, list_path, index, bool(data.get("tail",false)))
 	else:
 		var effect_id: String = str(data.get("effect_id", ""))
 		if effect_id == "":
 			return
 		var list := _list_at(list_path)
-		var eff := _new_block_for(effect_id)
+		var eff := _new_block_for(effect_id, str(data.get("buff_id", "")))
 		list.insert(clamp(index, 0, list.size()), eff)
 		_refresh_script()
 	_update_summary()
 	_maybe_snapshot()
 
 
-func _move_effect(from_path: Array, list_path: Array, index: int) -> void:
+func _move_effect(from_path: Array, list_path: Array, index: int, move_tail: bool = false) -> void:
 	# Reject moving a block into its own subtree (would create a cycle).
 	if _is_path_prefix(from_path, list_path):
 		return
@@ -827,14 +999,20 @@ func _move_effect(from_path: Array, list_path: Array, index: int) -> void:
 	var src_list := _list_at(from_parent)
 	if from_idx < 0 or from_idx >= src_list.size():
 		return
+	var count := src_list.size()-from_idx if move_tail else 1
+	for i in range(from_idx,from_idx+count):
+		if _is_path_prefix(from_parent+[i],list_path): return
 	var dst_list := _list_at(list_path)
-	var eff: Dictionary = src_list[from_idx]
-	src_list.remove_at(from_idx)
+	var moved: Array = src_list.slice(from_idx,from_idx+count)
+	for i in range(count): src_list.remove_at(from_idx)
 	# When reordering within the same list, shifting left affects the index.
 	if from_parent == list_path and from_idx < index:
-		index -= 1
-	dst_list.insert(clamp(index, 0, dst_list.size()), eff)
+		index -= count
+	index = clampi(index,0,dst_list.size())
+	for i in range(moved.size()): dst_list.insert(index+i,moved[i])
+	_cleanup_loose_groups()
 	_refresh_script()
+	_update_summary()
 	_maybe_snapshot()
 
 
@@ -855,9 +1033,13 @@ func _is_path_prefix(prefix: Array, path: Array) -> bool:
 # Returns the effect list identified by a list path: [] = top-level,
 # [0, "then"] = first block's then_effects, [0, "then", 1, "else"] = ...
 func _list_at(list_path: Array) -> Array:
+	var root: Array = effect_data
+	if not list_path.is_empty() and list_path[0] is String and list_path[0] == "loose":
+		root = loose_groups[str(list_path[1])]["effects"]
+		list_path = list_path.slice(2)
 	if list_path.is_empty():
-		return effect_data
-	var eff: Dictionary = effect_data[list_path[0]]
+		return root
+	var eff: Dictionary = root[list_path[0]]
 	var i := 1
 	while i + 1 < list_path.size():
 		var sub: Array = eff.get(str(list_path[i]) + "_effects", [])
@@ -879,13 +1061,125 @@ func _effect_list_at(path: Array) -> Array:
 
 
 func _effect_at(path: Array) -> Dictionary:
+	if path.size() == 2 and path[0] == "reporter": return loose_reporters[str(path[1])].value
 	if path.size() == 1:
 		return effect_data[path[0]]
 	var list := _effect_list_at(path)
 	return list[path[path.size() - 1]]
 
 
-func _new_block_for(effect_id: String) -> Dictionary:
+func _cleanup_loose_groups() -> void:
+	for key in loose_groups.keys():
+		if loose_groups[key]["effects"].is_empty(): loose_groups.erase(key)
+
+func hide_drag_tail(block: SkillBlock) -> void:
+	if _stack_snap != null: _stack_snap.clear()
+	_restore_drag_views()
+	var following := false
+	for sibling in block.get_parent().get_children():
+		if sibling == block: following = true
+		if following and sibling is SkillBlock:
+			_drag_hidden.append(weakref(sibling))
+			sibling.hide()
+	_hide_insertion_line()
+
+func _restore_drag_views() -> void:
+	for reference in _drag_hidden:
+		var view = reference.get_ref()
+		if view != null and not view.is_queued_for_deletion(): view.show()
+	_drag_hidden.clear()
+
+
+func _drop_on_workspace(local_point: Vector2, data: Dictionary) -> void:
+	if data.get("type", "") != "effect_block":
+		_drop_reporter_on_workspace(local_point, data)
+		return
+	if _commit_stack_drop(data): return
+	_hide_insertion_line()
+	var point: Vector2 = workbench.workspace.to_world(local_point)
+	var grab: Array = data.get("grab_offset", [12, 12])
+	point -= Vector2(float(grab[0]),float(grab[1]))
+	var from: Array = data.get("from_path", [])
+	# Move a free group without replacing its effect data or executable order.
+	# A dragged child carries the remaining siblings below it.
+	if from.size() == 3 and from[0] is String and from[0] == "loose" and int(from.back()) == 0 and (bool(data.get("tail",false)) or _effect_list_at(from).size() == 1):
+		loose_groups[str(from[1])]["position"] = [point.x,point.y]
+	else:
+		var moved: Array = []
+		if not from.is_empty():
+			var source := _effect_list_at(from)
+			var index: int = from.back()
+			if index < 0 or index >= source.size(): return
+			var count := source.size()-index if bool(data.get("tail",false)) else 1
+			moved = source.slice(index,index+count)
+			for i in range(count): source.remove_at(index)
+		else:
+			var id := str(data.get("effect_id", ""))
+			if id.is_empty(): return
+			moved = [_new_block_for(id, str(data.get("buff_id", "")))]
+		var key := "g%d" % Time.get_ticks_usec()
+		loose_groups[key] = {"position":[point.x,point.y], "effects":moved}
+	_cleanup_loose_groups()
+	_refresh_script()
+	_update_summary()
+	_maybe_snapshot()
+
+
+func _restore_workspace(raw: Variant) -> void:
+	loose_groups.clear()
+	loose_reporters.clear()
+	workspace_script_position = Vector2.ZERO
+	if not raw is Dictionary: return
+	var units := 100.0 if raw.get("version",0) == 1 else 1.0
+	var pos: Variant = raw.get("position", [0,0])
+	if pos is Array and pos.size() == 2 and (pos[0] is float or pos[0] is int) and (pos[1] is float or pos[1] is int):
+		if is_finite(float(pos[0])) and is_finite(float(pos[1])):
+			workspace_script_position = Vector2(clampf(float(pos[0])/units,-100000,100000),clampf(float(pos[1])/units,-100000,100000))
+	var groups: Variant = raw.get("groups", {})
+	if not groups is Dictionary: return
+	for key in groups:
+		if loose_groups.size() >= 100: break
+		var group: Variant = groups[key]
+		if not group is Dictionary: continue
+		var effects: Variant = group.get("effects", [])
+		var point: Variant = group.get("position", [])
+		if not effects is Array or effects.is_empty() or not point is Array or point.size() != 2: continue
+		if not _UgcSafety.validate_skill({"effects":effects}).is_empty(): continue
+		if not (point[0] is int or point[0] is float) or not (point[1] is int or point[1] is float): continue
+		if not is_finite(float(point[0])) or not is_finite(float(point[1])): continue
+		loose_groups[str(key)] = {"position":[clampf(float(point[0])/units,-100000,100000),clampf(float(point[1])/units,-100000,100000)],"effects":effects.duplicate(true)}
+
+	var reporters: Variant = raw.get("reporters", {})
+	if reporters is Dictionary:
+		for key in reporters:
+			if loose_reporters.size() >= 100: break
+			var record: Variant = reporters[key]
+			if not record is Dictionary or not record.get("value") is Dictionary: continue
+			var point: Variant = record.get("position")
+			if not point is Array or point.size() != 2: continue
+			if not (point[0] is int or point[0] is float) or not (point[1] is int or point[1] is float): continue
+			if not is_finite(float(point[0])) or not is_finite(float(point[1])): continue
+			if not _valid_loose_reporter(record): continue
+			loose_reporters[str(key)] = record.duplicate(true)
+			loose_reporters[str(key)].position = [clampf(float(point[0])/units,-100000,100000),clampf(float(point[1])/units,-100000,100000)]
+
+func _workspace_metadata() -> Dictionary:
+	# Integer hundredths keep placement stable through JSON round trips without
+	# giving editor coordinates any role in the executable skill definition.
+	var groups: Dictionary = loose_groups.duplicate(true)
+	for key in groups:
+		var point: Array = groups[key]["position"]
+		groups[key]["position"] = [roundi(float(point[0])*100),roundi(float(point[1])*100)]
+	var reporters := loose_reporters.duplicate(true)
+	for key in reporters:
+		var point: Array = reporters[key].position
+		reporters[key].position = [roundi(float(point[0])*100),roundi(float(point[1])*100)]
+	return {"version":1,"position":[roundi(workspace_script_position.x*100),roundi(workspace_script_position.y*100)],"groups":groups,"reporters":reporters}
+
+
+func _new_block_for(effect_id: String, buff_id: String = "") -> Dictionary:
+	if effect_id == SkillRegistry.CHANCE_PALETTE_ID:
+		return SkillRegistry.make_chance_block()
 	if effect_id == SkillEngine.EFFECT_IF_ELSE:
 		return _default_if_else()
 	if effect_id == SkillEngine.EFFECT_IF:
@@ -894,7 +1188,7 @@ func _new_block_for(effect_id: String) -> Dictionary:
 		return _default_repeat()
 	if effect_id == SkillEngine.EFFECT_STOP:
 		return {"effect": SkillEngine.EFFECT_STOP}
-	return _default_effect(effect_id)
+	return _default_effect(effect_id, buff_id)
 
 
 func _on_block_edit_path(path: Array) -> void:
@@ -911,6 +1205,7 @@ func _on_block_delete_path(path: Array) -> void:
 	if idx < 0 or idx >= list.size():
 		return
 	list.remove_at(idx)
+	_cleanup_loose_groups()
 	_refresh_script()
 	_update_summary()
 	_maybe_snapshot()
@@ -941,6 +1236,8 @@ func _on_block_changed(_path: Array) -> void:
 	# references); only the summary needs refreshing, not the whole script.
 	_update_summary()
 	_maybe_snapshot()
+	if skill_tutorial_controller:
+		skill_tutorial_controller.notify_action("value")
 
 
 func _on_block_context_requested(path: Array, at: Vector2) -> void:
@@ -948,14 +1245,25 @@ func _on_block_context_requested(path: Array, at: Vector2) -> void:
 	menu.popup_hide.connect(menu.queue_free)
 	menu.add_item(Locale.t("skill_editor.duplicate"), 0)
 	menu.add_item(Locale.t("skill_editor.delete"), 1)
+	if not SkillRegistry.is_control_effect(str(_effect_at(path).get("effect", ""))): menu.add_item(Locale.t("skill_editor.btn_edit"), 2)
+	menu.add_separator()
+	menu.add_item(Locale.t("skill_editor.btn_up"), 3)
+	menu.add_item(Locale.t("skill_editor.btn_down"), 4)
+	var siblings := _effect_list_at(path)
+	var index: int = path.back()
+	menu.set_item_disabled(menu.get_item_index(3), index <= 0)
+	menu.set_item_disabled(menu.get_item_index(4), index >= siblings.size() - 1)
 	menu.id_pressed.connect(func(id: int):
 		if id == 0:
 			_duplicate_effect(path)
 		elif id == 1:
 			_on_block_delete_path(path)
+		elif id == 2: _on_block_edit_path(path)
+		elif id == 3: _on_block_move_path(path, -1)
+		elif id == 4: _on_block_move_path(path, 1)
 	)
 	add_child(menu)
-	menu.position = Vector2i(get_viewport().get_mouse_position())
+	menu.position = Vector2i(at)
 	menu.popup()
 
 
@@ -1001,7 +1309,7 @@ func _on_effect_form_confirmed(eff: Dictionary):
 	_maybe_snapshot()
 
 
-func _default_effect(effect_id: String) -> Dictionary:
+func _default_effect(effect_id: String, buff_id: String = "") -> Dictionary:
 	# Target selection starts EMPTY: the block shows a "+ 选择目标" placeholder
 	# so the user actively picks (rather than silently inheriting a default
 	# like "敌方单体"). force_self effects never show a target slot.
@@ -1009,7 +1317,6 @@ func _default_effect(effect_id: String) -> Dictionary:
 		"target": "",
 		"target_side": "",
 		"effect": effect_id,
-		"value": 1,
 		"buff_id": "",
 		"duration": 0,
 		"random_count": 0,
@@ -1019,7 +1326,7 @@ func _default_effect(effect_id: String) -> Dictionary:
 		eff["target"] = SkillEngine.TARGET_SELF
 		eff["target_side"] = SkillEngine.TARGET_SIDE_ALL
 	if effect_id == SkillEngine.EFFECT_ADD_BUFF:
-		eff["buff_id"] = SkillEngine.BUFF_ATK_BOOST
+		eff["buff_id"] = buff_id if buff_id in SkillRegistry.BUFF_IDS else SkillEngine.BUFF_ATK_BOOST
 		eff["duration"] = 2
 	if effect_id == SkillEngine.EFFECT_ZERO_COST:
 		# The selector shape describes cards in the active hand, not a battlefield
@@ -1028,9 +1335,6 @@ func _default_effect(effect_id: String) -> Dictionary:
 		eff["target"] = SkillEngine.TARGET_SINGLE
 		eff["target_side"] = SkillEngine.TARGET_SIDE_ALL
 		eff["cost_reduction_mode"] = SkillRegistry.COST_REDUCTION_TURN
-	if effect_id == SkillEngine.EFFECT_CLONE_ENEMY:
-		eff["target"] = SkillEngine.TARGET_SINGLE
-		eff["target_side"] = SkillEngine.TARGET_SIDE_ENEMY
 	# Passive talents never interrupt battle flow with a manual target picker.
 	# Their effect target is the talent card itself; the board-side choice, when
 	# relevant, belongs to the trigger rather than to the effect block.
@@ -1089,7 +1393,6 @@ func _add_stop_block() -> void:
 func _default_repeat() -> Dictionary:
 	return {
 		"effect": SkillEngine.EFFECT_REPEAT,
-		"repeat_count": 2,
 		"then_effects": [],
 	}
 
@@ -1103,10 +1406,43 @@ func _add_repeat_block() -> void:
 	_maybe_snapshot()
 
 
-# A condition reporter was dropped into an if block's condition gap: write it
-# back as the nested "condition" dict (clearing any legacy direct fields).
-# When the reporter came from another if gap (from_path set), clear that gap
-# too — Scratch-style dragging moves the reporter instead of copying it.
+# Write condition changes through one nested dictionary, including older skills.
+func _replace_condition_at(root: Dictionary, path: Array, value: Dictionary) -> Dictionary:
+	if path.is_empty(): return value.duplicate(true)
+	var result := root.duplicate(true)
+	var cursor := result
+	for key in path.slice(0, path.size() - 1):
+		if not cursor.get(key) is Dictionary: return result
+		cursor = cursor[key]
+	cursor[path.back()] = value.duplicate(true)
+	return result
+
+func _write_condition(effect: Dictionary, root: Dictionary) -> void:
+	for key in ["condition_type", "condition_op", "condition_value", "condition_buff_id"]: effect.erase(key)
+	if root.is_empty(): effect.erase("condition")
+	else: effect["condition"] = root.duplicate(true)
+
+func _on_block_condition_inserted(path: Array, socket_path: Array, payload: Dictionary) -> void:
+	var effect := _effect_at(path)
+	var root: Dictionary = SkillEngine._condition_dict(effect).duplicate(true)
+	var source: Object = payload.get("from_cond_slot")
+	if source != null and is_instance_valid(source):
+		var source_path: Array = payload.get("from_condition_path", [])
+		var displaced := SkillBlock.condition_at_path(root, socket_path).duplicate(true)
+		if source.effect_path == path:
+			if SkillBlock.condition_path_prefix(source_path, socket_path) or SkillBlock.condition_path_prefix(socket_path, source_path):
+				return
+			root = _replace_condition_at(root, source_path, displaced)
+		else:
+			var source_effect := _effect_at(source.effect_path)
+			_write_condition(source_effect, _replace_condition_at(SkillEngine._condition_dict(source_effect), source_path, displaced))
+	_write_condition(effect, _replace_condition_at(root, socket_path, payload.get("boolean", {})))
+	_cleanup_loose_reporters()
+	_refresh_script()
+	_update_summary()
+	_maybe_snapshot()
+	_show_connection_feedback.call_deferred(path, socket_path)
+
 func _on_block_condition_dropped(path: Array, cond: Dictionary, from_path: Array = []) -> void:
 	if not from_path.is_empty():
 		var src_eff := _effect_at(from_path)
@@ -1121,6 +1457,7 @@ func _on_block_condition_dropped(path: Array, cond: Dictionary, from_path: Array
 	eff.erase("condition_value")
 	eff.erase("condition_buff_id")
 	eff["condition"] = cond.duplicate(true)
+	_cleanup_loose_reporters()
 	_refresh_script()
 	_update_summary()
 	_maybe_snapshot()
@@ -1133,7 +1470,7 @@ func _open_if_condition_popup(path: Array):
 	var layer: CanvasLayer = popup.get("layer")
 	var size := Vector2(380, 300) * s
 	var panel := Panel.new()
-	UITheme.apply_panel(panel, "gold")
+	UITheme.apply_popup_frame(panel, "gold", false)
 	panel.custom_minimum_size = size
 	panel.anchor_left = 0.5
 	panel.anchor_right = 0.5
@@ -1207,8 +1544,7 @@ func _open_if_condition_popup(path: Array):
 	buff_row.add_child(buff_label)
 	var cond_buff_sel := OptionButton.new()
 	cond_buff_sel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	for i in range(SkillRegistry.BUFF_IDS.size()):
-		cond_buff_sel.add_item(Locale.term("buff", SkillRegistry.BUFF_IDS[i]), i)
+	preload("res://SkillStatusPicker.gd").fill(cond_buff_sel, SkillEngine.BUFF_ATK_BOOST)
 	UITheme.apply_button(cond_buff_sel, "secondary")
 	buff_row.add_child(cond_buff_sel)
 	buff_row.visible = false
@@ -1220,7 +1556,7 @@ func _open_if_condition_popup(path: Array):
 	cond_sel.selected = _idx_of(cur_type, SkillRegistry.CONDITION_IDS)
 	cond_op_sel.selected = _idx_of(existing.get("condition_op", SkillEngine.CONDITION_OP_GTE), SkillRegistry.CONDITION_OP_IDS)
 	cond_value_spin.value = float(existing.get("condition_value", 1))
-	cond_buff_sel.selected = _idx_of(existing.get("condition_buff_id", SkillEngine.BUFF_ATK_BOOST), SkillRegistry.BUFF_IDS)
+	preload("res://SkillStatusPicker.gd").fill(cond_buff_sel, existing.get("condition_buff_id", SkillEngine.BUFF_ATK_BOOST))
 	var _sync_condition = func():
 		var ctype: String = SkillRegistry.CONDITION_IDS[cond_sel.selected]
 		var uses_buff: bool = ctype == SkillEngine.CONDITION_TARGET_HAS_BUFF
@@ -1249,7 +1585,7 @@ func _open_if_condition_popup(path: Array):
 				"condition_type": ctype,
 			}
 			if ctype == SkillEngine.CONDITION_TARGET_HAS_BUFF:
-				eff["condition"]["condition_buff_id"] = SkillRegistry.BUFF_IDS[cond_buff_sel.selected]
+				eff["condition"]["condition_buff_id"] = preload("res://SkillStatusPicker.gd").value(cond_buff_sel)
 			else:
 				eff["condition"]["condition_op"] = SkillRegistry.CONDITION_OP_IDS[cond_op_sel.selected]
 				eff["condition"]["condition_value"] = int(cond_value_spin.value)
@@ -1280,18 +1616,11 @@ func _idx_of(key: String, keys: Array) -> int:
 func _build_settings_row() -> void:
 	var s := _ui_scale()
 
-	# Settings live in a subtle inset card so the tuning fields read as one
-	# group, distinct from the effect blocks below.
+	# The section label already groups these fields; a second frame adds noise.
 	var card := PanelContainer.new()
-	var card_st := StyleBoxFlat.new()
-	card_st.bg_color = Color(0.05, 0.06, 0.09, 0.55)
-	card_st.border_color = Color(0.30, 0.36, 0.48, 0.40)
-	card_st.set_border_width_all(1)
-	card_st.set_corner_radius_all(6)
-	card_st.content_margin_left = 8
+	var card_st := StyleBoxEmpty.new()
 	card_st.content_margin_top = 4
-	card_st.content_margin_right = 8
-	card_st.content_margin_bottom = 4
+	card_st.content_margin_bottom = 8
 	card.add_theme_stylebox_override("panel", card_st)
 	settings_row.add_child(card)
 
@@ -1414,7 +1743,7 @@ func _update_trigger_preview() -> void:
 	if trigger_preview_label == null:
 		return
 	var trigger_key: String = _selected_trigger_key()
-	trigger_preview_label.text = Locale.t("skill_editor.trigger_help.%s" % trigger_key)
+	trigger_preview_label.text = SkillHelp.description("trigger",trigger_key)
 	_update_trigger_side_visibility()
 
 
@@ -1450,6 +1779,7 @@ func _update_trigger_side_visibility() -> void:
 # ============================================
 
 func _load_skill(skill: Dictionary):
+	_restore_workspace(skill.get("_workspace", {}))
 	skill_name_input.text = skill.get("skill_name", "")
 	if _is_spell():
 		current_trigger_key = SkillEngine.TRIGGER_ON_CAST
@@ -1478,8 +1808,8 @@ func _load_skill(skill: Dictionary):
 	_refresh_script()
 
 
-func _build_skill() -> Dictionary:
-	if effect_data.is_empty():
+func _build_skill(include_empty := false) -> Dictionary:
+	if effect_data.is_empty() and not include_empty:
 		return {}
 	var is_spell := _is_spell()
 	var trigger_key: String = _selected_trigger_key()
@@ -1494,13 +1824,29 @@ func _build_skill() -> Dictionary:
 	}
 	if trigger_key == SkillEngine.TRIGGER_ON_BOARD_CHANGED:
 		result["trigger_side"] = current_trigger_side
+	if not loose_groups.is_empty() or not loose_reporters.is_empty() or not workspace_script_position.is_zero_approx():
+		result["_workspace"] = _workspace_metadata()
 	return result
+
+
+func interrupted_skill_workspace() -> Dictionary:
+	if not is_node_ready() or (_editor_state() == _opening_editor_state and skill_name_input.text == _opening_skill_name):
+		return {}
+	var skill := _build_skill(true)
+	skill["skill_name"] = skill_name_input.text
+	return {"index": PlayerData.editing_skill_index, "skill": skill}
 
 
 func _update_summary():
 	var skill: Dictionary = _build_skill()
+	if skill.is_empty():
+		# An unfinished script is still invalid to save, but its preview must
+		# reflect the trigger/name already selected instead of defaulting to Attack.
+		skill = {"skill_name": skill_name_input.text, "trigger": _selected_trigger_key(), "trigger_side": current_trigger_side, "effects": []}
 	skill_summary.text = _format_skill(skill)
 	_refresh_error_banner()
+	if workbench != null:
+		workbench.invalidate_preview()
 
 
 func _format_skill(skill: Dictionary) -> String:
@@ -1573,11 +1919,20 @@ func _ready():
 	_refresh_script()
 	_update_summary()
 	_apply_responsive_layout()
+	workbench = preload("res://SkillEditorWorkbench.gd").new()
+	workbench.install(self)
 	if PlayerData.skill_tutorial_active:
 		skill_tutorial_controller = _TutorialController.new()
 		add_child(skill_tutorial_controller)
 		skill_tutorial_controller.start(self)
 	get_viewport().size_changed.connect(_on_viewport_size_changed)
+	_opening_editor_state = _editor_state().duplicate(true)
+	_opening_skill_name = skill_name_input.text
+	if OS.has_feature("android") and UIMotion.consume_restore_state() == "recover_skill":
+		var skill: Dictionary = PlayerData.recovered_card_draft.interrupted_skill.skill
+		if _UgcSafety.validate_skill(skill).is_empty():
+			_load_skill(skill)
+			_update_summary()
 
 
 func _connect_signals():
@@ -1597,7 +1952,7 @@ func _build_skill_template_button() -> void:
 	var row := save_button.get_parent() as HBoxContainer
 	_template_btn = Button.new()
 	_template_btn.text = Locale.t("skill_editor.templates")
-	UITheme.apply_button(_template_btn, "secondary")
+	UITheme.apply_button(_template_btn, "utility")
 	_template_btn.pressed.connect(_show_skill_templates_popup)
 	row.add_child(_template_btn)
 	row.move_child(_template_btn, mini(2, row.get_child_count() - 1))
@@ -1632,68 +1987,27 @@ func _builtin_skill_templates() -> Array:
 
 
 func _show_skill_templates_popup() -> void:
-	var popup := UITheme.make_popup_layer(self, 105)
-	var layer: CanvasLayer = popup["layer"]
-	var panel := Panel.new()
-	panel.anchor_left = 0.5
-	panel.anchor_right = 0.5
-	panel.anchor_top = 0.5
-	panel.anchor_bottom = 0.5
-	panel.offset_left = -260
-	panel.offset_top = -260
-	panel.offset_right = 260
-	panel.offset_bottom = 260
-	UITheme.apply_popup_frame(panel, "gold")
-	layer.add_child(panel)
-	var margin := MarginContainer.new()
-	margin.set_anchors_preset(Control.PRESET_FULL_RECT)
-	for side in ["margin_left", "margin_top", "margin_right", "margin_bottom"]:
-		margin.add_theme_constant_override(side, 16)
-	panel.add_child(margin)
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 8)
-	margin.add_child(box)
-	var title := Label.new()
-	title.text = Locale.t("skill_editor.templates")
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	UITheme.apply_title(title, 20)
-	box.add_child(title)
-	var scroll := ScrollContainer.new()
-	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	box.add_child(scroll)
-	var list := VBoxContainer.new()
-	list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	list.add_theme_constant_override("separation", 6)
-	scroll.add_child(list)
+	var page := preload("res://SelectionMenu.gd").new()
+	page.layer = 105
+	page.heading = Locale.t("skill_editor.templates")
+	page.backdrop = UITheme.COLOR_BG
+	page.scroll_choices = true
+	add_child(page)
 	var templates := _builtin_skill_templates()
-	for custom in PlayerData.custom_skill_templates:
-		templates.append(custom)
+	templates.append_array(PlayerData.custom_skill_templates)
 	for entry in templates:
-		var btn := Button.new()
-		btn.text = str(entry.get("name", Locale.t("skill.no_name")))
-		btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
-		UITheme.apply_button(btn, "secondary")
 		var template_skill := (entry.get("skill", {}) as Dictionary).duplicate(true)
-		btn.pressed.connect(_on_skill_template_chosen.bind(template_skill, layer))
-		list.add_child(btn)
+		var template_name := str(entry.get("name", Locale.t("skill.no_name")))
+		page.add_choice(template_name, _on_skill_template_chosen.bind(template_skill, page), template_name)
 	var name_input := LineEdit.new()
 	name_input.placeholder_text = Locale.t("skill_editor.template_name")
+	name_input.custom_minimum_size.y = 36
 	UITheme.apply_input(name_input)
-	box.add_child(name_input)
-	var save_current := Button.new()
-	save_current.text = Locale.t("skill_editor.favorite_current")
-	UITheme.apply_button(save_current, "primary")
-	save_current.pressed.connect(func():
-		var skill := _build_skill()
-		if PlayerData.save_custom_skill_template(name_input.text, skill):
-			layer.queue_free()
-	)
-	box.add_child(save_current)
-	var close := Button.new()
-	close.text = Locale.t("common.back")
-	UITheme.apply_button(close, "secondary")
-	close.pressed.connect(layer.queue_free)
-	box.add_child(close)
+	page.entries.add_child(name_input)
+	page.add_choice(Locale.t("skill_editor.favorite_current"), func():
+		if PlayerData.save_custom_skill_template(name_input.text, _build_skill()):
+			page.queue_free())
+	page.finish()
 
 
 func _on_skill_template_chosen(skill: Dictionary, layer: CanvasLayer) -> void:
@@ -1724,14 +2038,14 @@ func _build_undo_buttons() -> void:
 	_undo_btn = Button.new()
 	_undo_btn.text = Locale.t("skill_editor.undo")
 	_undo_btn.add_theme_font_size_override("font_size", max(10, int(13 * _ui_scale())))
-	UITheme.apply_button(_undo_btn, "secondary")
+	UITheme.apply_button(_undo_btn, "utility")
 	_undo_btn.pressed.connect(_undo)
 	row.add_child(_undo_btn)
 	row.move_child(_undo_btn, 0)
 	_redo_btn = Button.new()
 	_redo_btn.text = Locale.t("skill_editor.redo")
 	_redo_btn.add_theme_font_size_override("font_size", max(10, int(13 * _ui_scale())))
-	UITheme.apply_button(_redo_btn, "secondary")
+	UITheme.apply_button(_redo_btn, "utility")
 	_redo_btn.pressed.connect(_redo)
 	row.add_child(_redo_btn)
 	row.move_child(_redo_btn, 1)
@@ -1750,6 +2064,17 @@ func _skill_key_for_index(index: int) -> String:
 
 
 func _on_save_pressed():
+	if effect_data.is_empty() and (not loose_groups.is_empty() or not loose_reporters.is_empty()):
+		_show_save_blocked_popup([Locale.t("skill_editor.error_empty_skill")])
+		return
+	if loose_groups.size() > 100 or loose_reporters.size() > 100:
+		_show_save_blocked_popup([Locale.t("skill_editor.loose_limit")])
+		return
+	for group in loose_groups.values():
+		var workspace_issues := _UgcSafety.validate_skill({"effects":group["effects"]})
+		if not workspace_issues.is_empty():
+			_show_save_blocked_popup([_UgcSafety.first_error_text(workspace_issues)])
+			return
 	var errors: Array = _collect_errors()
 	# An untouched/empty skill is a valid "no skill" state (saved as {}); only
 	# real compile errors must block the save, otherwise the invalid skill
@@ -1776,13 +2101,15 @@ func _on_save_pressed():
 
 # A compile-error skill must not reach the card draft (which is later written
 # to card_library.json): show what's wrong and refuse to leave the editor.
-func _show_save_blocked_popup(errors: Array) -> void:
+func _show_save_blocked_popup(errors: Array, title_key: String = "skill_editor.save_blocked_title") -> void:
+	validation_requested = true
+	_mark_invalid_conditions()
 	var s := _ui_scale()
 	var popup := UITheme.make_popup_layer(self, 100)
 	var layer: CanvasLayer = popup.get("layer")
 	var size := Vector2(420, 300) * s
 	var panel := Panel.new()
-	UITheme.apply_panel(panel, "gold")
+	UITheme.apply_popup_frame(panel, "gold", false)
 	panel.custom_minimum_size = size
 	panel.anchor_left = 0.5
 	panel.anchor_right = 0.5
@@ -1806,10 +2133,10 @@ func _show_save_blocked_popup(errors: Array) -> void:
 	margin.add_child(vb)
 
 	var title := Label.new()
-	title.text = Locale.t("skill_editor.save_blocked_title")
+	title.text = Locale.t(title_key)
 	title.add_theme_font_size_override("font_size", max(13, int(16 * s)))
 	UITheme.apply_title(title, max(13, int(16 * s)))
-	title.add_theme_color_override("font_color", Color(1, 0.70, 0.70))
+	title.add_theme_color_override("font_color", UITheme.Tokens.PAPER)
 	vb.add_child(title)
 
 	var body := Label.new()
@@ -1826,16 +2153,31 @@ func _show_save_blocked_popup(errors: Array) -> void:
 	err_box.add_theme_constant_override("separation", int(4 * s))
 	err_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(err_box)
+	var issues: Array = _error_checker.collect_issues()
 	for e in errors:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation",8)
+		err_box.add_child(row)
 		var lbl := Label.new()
 		lbl.text = "- " + str(e)
 		lbl.add_theme_font_size_override("font_size", max(10, int(12 * s)))
-		lbl.add_theme_color_override("font_color", Color(1, 0.82, 0.82))
+		lbl.add_theme_color_override("font_color", UITheme.Tokens.TEXT)
 		lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		err_box.add_child(lbl)
+		lbl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(lbl)
+		for issue in issues:
+			if issue.get("message","") != str(e) or issue.get("path",[]).is_empty(): continue
+			var locate := Button.new()
+			locate.text = Locale.t("skill_editor.locate_issue")
+			UITheme.apply_button(locate,"secondary")
+			locate.pressed.connect(func():
+				layer.queue_free()
+				_focus_issue_path(issue.path,issue.get("condition_path")))
+			row.add_child(locate)
+			break
 
 	var close_btn := Button.new()
-	close_btn.text = Locale.t("skill_editor.save_blocked_close")
+	close_btn.text = Locale.t("common.confirm")
 	close_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	UITheme.apply_button(close_btn, "secondary")
 	close_btn.pressed.connect(func():
@@ -1863,4 +2205,129 @@ func _on_cancel_pressed():
 	if skill_tutorial_controller:
 		skill_tutorial_controller._on_exit()
 		return
+	if _editor_state() == _opening_editor_state and skill_name_input.text == _opening_skill_name:
+		_leave_skill_without_saving()
+		return
+	if not is_instance_valid(_discard_dialog):
+		_discard_dialog = ConfirmationDialog.new()
+		_discard_dialog.title = Locale.t("editor.discard_title")
+		_discard_dialog.dialog_text = Locale.t("editor.discard_body")
+		add_child(_discard_dialog)
+		UITheme.apply_dialog(_discard_dialog,true)
+		_discard_dialog.confirmed.connect(_leave_skill_without_saving)
+	_discard_dialog.popup_centered()
+
+func _leave_skill_without_saving() -> void:
+	if PlayerData.recovered_card_draft.has("interrupted_skill"):
+		PlayerData.save_card_draft_recovery()
 	UIMotion.go_back("res://CardEditor.tscn")
+
+
+func _add_chance_block() -> void:
+	if skill_tutorial_controller and not skill_tutorial_controller.allows("control"): return
+	effect_data.append(SkillRegistry.make_chance_block())
+	_refresh_script()
+	_update_summary()
+	_maybe_snapshot()
+
+func _reporter_from_payload(data: Dictionary) -> Dictionary:
+	match str(data.get("type", "")):
+		"target_block": return {"kind":"target", "value":{"target":str(data.get("value", ""))}}
+		"side_block": return {"kind":"side", "value":{"target_side":str(data.get("value", ""))}}
+		"var_block":
+			var value := {"kind":"var", "var_id":str(data.get("var_id", ""))}
+			var offset := int(data.get("offset", 0))
+			if offset != 0: value["offset"] = offset
+			return {"kind":"number", "value":value}
+		"expr_block":
+			return {"kind":"number","value":data.get("expression", ValueSlot.make_expression(str(data.get("expr_kind", "+")))).duplicate(true)}
+		"boolean_block", "condition_block", "logic_block":
+			var condition: Dictionary = data.get("boolean", data.get("condition", {})).duplicate(true)
+			if data.get("type") == "logic_block":
+				condition = {"logic":str(data.get("logic_kind", "and"))}
+				if condition.logic == "not": condition.child = {}
+				else: condition.merge({"lhs":{},"rhs":{}})
+			return {"kind":"condition","value":{"effect":SkillEngine.EFFECT_IF,"condition":condition,"then_effects":[]}}
+	return {}
+
+func _valid_loose_reporter(record: Dictionary) -> bool:
+	if record.get("kind") not in ["number","condition","target","side"] or not record.get("value") is Dictionary: return false
+	if record.kind == "target": return record.value.get("target") in SkillRegistry.TARGET_IDS
+	if record.kind == "side": return record.value.get("target_side") in SkillRegistry.TARGET_SIDE_IDS
+	var renderer = preload("res://SkillLooseReporter.gd")
+	if record.kind == "number" and not renderer.valid_number(record.value): return false
+	if record.kind == "condition":
+		var condition: Variant = record.value.get("condition")
+		if not condition is Dictionary or condition.is_empty() or not renderer.valid_condition(condition): return false
+	var effect: Dictionary = record.value if record.kind == "condition" else {"effect":SkillEngine.EFFECT_HEAL,"target":SkillEngine.TARGET_SELF,"value_expr":record.value}
+	return _UgcSafety.validate_skill({"effects":[effect]}).is_empty()
+
+func _can_drop_on_workspace(data: Variant) -> bool:
+	if not data is Dictionary: return false
+	# A rejected typed-socket drop must not fall through to a destructive
+	# detach onto the canvas (especially a reporter into its own descendant).
+	var hovered: Control = get_viewport().gui_get_hovered_control()
+	while hovered != null and hovered != workbench.workspace:
+		if hovered is ValueSlot or hovered is TargetSlot or hovered.get_script() == preload("res://SkillConditionSocket.gd"): return false
+		hovered = hovered.get_parent() as Control
+	if data.get("type") == "effect_block":
+		_preview_stack_drop(data)
+		return true
+	var record := _reporter_from_payload(data)
+	var source: Object = data.get("from_slot")
+	var relocating := source != null and is_instance_valid(source) and source.has_meta("loose_reporter_key")
+	var condition_source: Object = data.get("from_cond_slot")
+	if condition_source != null and is_instance_valid(condition_source):
+		relocating = condition_source.effect_path.size() == 2 and condition_source.effect_path[0] == "reporter" and data.get("from_condition_path", []).is_empty()
+	return not record.is_empty() and (relocating or loose_reporters.size() < 100) and _valid_loose_reporter(record)
+
+func _on_loose_reporter_changed() -> void:
+	_update_summary()
+	_maybe_snapshot()
+
+func _remove_loose_reporter(key: String, notify := true) -> void:
+	loose_reporters.erase(key)
+	_refresh_script.call_deferred()
+	if notify: _on_loose_reporter_changed()
+
+func _drop_reporter_on_workspace(local_point: Vector2, data: Dictionary) -> void:
+	if not _can_drop_on_workspace(data): return
+	var record := _reporter_from_payload(data)
+	var grab: Array = data.get("grab_offset", [12,12])
+	var point: Vector2 = workbench.workspace.to_world(local_point) - Vector2(float(grab[0]),float(grab[1]))
+	record.position = [point.x,point.y]
+	var source: Object = data.get("from_slot")
+	if source != null and is_instance_valid(source): source.clear_to_number(false)
+	source = data.get("from_cond_slot")
+	if source != null and is_instance_valid(source):
+		var effect := _effect_at(source.effect_path)
+		_write_condition(effect, _replace_condition_at(SkillEngine._condition_dict(effect), data.get("from_condition_path", []), {}))
+	var key := "r%d" % Time.get_ticks_usec()
+	loose_reporters[key] = record
+	_cleanup_loose_reporters()
+	_refresh_script()
+	_on_loose_reporter_changed()
+
+func _cleanup_loose_reporters() -> void:
+	for key in loose_reporters.keys():
+		if loose_reporters[key].kind == "condition" and loose_reporters[key].value.get("condition", {}).is_empty(): loose_reporters.erase(key)
+
+func _on_loose_reporter_context(key: String, at: Vector2) -> void:
+	if not loose_reporters.has(key): return
+	var menu := PopupMenu.new()
+	menu.popup_hide.connect(menu.queue_free)
+	menu.add_item(Locale.t("skill_editor.duplicate"),0)
+	menu.add_item(Locale.t("skill_editor.delete"),1)
+	menu.set_item_disabled(0, loose_reporters.size() >= 100)
+	menu.id_pressed.connect(func(id: int):
+		if not loose_reporters.has(key): return
+		if id == 1: _remove_loose_reporter(key)
+		else:
+			var copy: Dictionary = loose_reporters[key].duplicate(true)
+			copy.position = [float(copy.position[0])+24,float(copy.position[1])+24]
+			loose_reporters["r%d" % Time.get_ticks_usec()] = copy
+			_refresh_script()
+			_on_loose_reporter_changed())
+	add_child(menu)
+	menu.position = Vector2i(at)
+	menu.popup()

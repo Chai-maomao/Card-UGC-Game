@@ -2,6 +2,7 @@ extends Node
 
 const LobbyServer = preload("res://server.gd")
 const BattleMainActions = preload("res://BattleMainActions.gd")
+const SnapshotWire = preload("res://BattleSnapshotWire.gd")
 
 
 func _ready() -> void:
@@ -38,6 +39,15 @@ func _ready() -> void:
 	)
 	_assert(int(round_trip["rng_seed"]) == -rng_state, "64-bit RNG seed must survive JSON")
 	_assert(int(round_trip["rng_state"]) == rng_state, "64-bit RNG state must survive JSON")
+	var wire_state := state.duplicate(true)
+	for card in CardDatabase.beginner_deck():
+		wire_state.shared_deck.append(PlayerData.serialize_card(card))
+	var wire_data := SnapshotWire.encode(wire_state)
+	_assert(var_to_bytes(wire_data).size() < var_to_bytes(wire_state).size(), "a full deck must produce a smaller network payload")
+	_assert(SnapshotWire.decode(wire_data) == wire_state, "compressed state must preserve ordered cards and exact 64-bit integers")
+	var oversized := wire_data.duplicate()
+	oversized["raw_bytes"] = SnapshotWire.MAX_PACKED_RAW_BYTES + 1
+	_assert(SnapshotWire.decode(oversized).is_empty(), "unpacking must reject an excessive declared size")
 
 	_assert(is_equal_approx(NetworkManager.reconnect_retry_delay(1, 0.5), 0.5), "first reconnect retry must be fast")
 	_assert(is_equal_approx(NetworkManager.reconnect_retry_delay(2, 0.5), 1.0), "reconnect retry must back off exponentially")
@@ -47,6 +57,7 @@ func _ready() -> void:
 	var discovery_payload := NetworkManager._decode_lan_discovery_packet(discovery_packet)
 	_assert(str(discovery_payload.get("kind", "")) == "room", "LAN discovery packet must round-trip")
 	_assert(NetworkManager._decode_lan_discovery_packet("not-json".to_utf8_buffer()).is_empty(), "malformed LAN discovery packet must be ignored")
+	await _check_discovery_refresh()
 
 	var room := {"p2_reserved_until": 115.0}
 	_assert(LobbyServer.has_active_join_reservation(room, 114.9), "active join reservation must block duplicate joins")
@@ -66,12 +77,69 @@ func _ready() -> void:
 	}
 	NetworkManager.reconcile_pending_game_commands(13)
 	_assert(NetworkManager.pending_game_command_count() == 0, "newer authority state must release an obsolete pending command")
+	_check_rejected_command_chain()
 	_assert(BattleMainActions.end_turn_execution_path(false, true) == "local", "offline end turn must use the local path")
 	_assert(BattleMainActions.end_turn_execution_path(true, true) == "authority", "online authority must not fall through into the local end-turn path")
 	_assert(BattleMainActions.end_turn_execution_path(true, false) == "remote", "online subordinate must send an intent instead of mutating locally")
 
 	print("TEST_NETWORK_SAFETY_OK")
 	get_tree().quit(0)
+
+
+func _check_rejected_command_chain() -> void:
+	NetworkManager._clear_outgoing_game_commands()
+	NetworkManager._pending_game_commands = {
+		"head": {"kind": "discard", "expected_revision": 12},
+		"middle": {"kind": "discard", "expected_revision": 13, "after_move": "head"},
+		"tail": {"kind": "discard", "expected_revision": 14, "after_move": "middle"},
+		"independent": {"kind": "end_turn", "expected_revision": 14},
+	}
+	NetworkManager.reconcile_pending_game_commands(14)
+	var rejection_notices: Array[String] = []
+	var record := func(command_id: String, _kind: String, status: String, _latency: int):
+		if status == "rejected" or status == "stale_revision":
+			rejection_notices.append(command_id)
+	NetworkManager.game_command_status.connect(record)
+	NetworkManager.acknowledge_game_command("head", 14, "rejected")
+	_assert(NetworkManager.pending_game_command_count() == 1, "rejecting the first command must release its dependent commands")
+	NetworkManager.acknowledge_game_command("middle", 14, "stale_revision")
+	NetworkManager.acknowledge_game_command("tail", 14, "stale_revision")
+	NetworkManager.acknowledge_game_command("independent", 14, "rejected")
+	_assert(rejection_notices == ["head", "independent"], "late dependent rejections must not hide an independent rejection or announce the same failure again")
+	NetworkManager.game_command_status.disconnect(record)
+	NetworkManager._clear_outgoing_game_commands()
+
+
+func _check_discovery_refresh() -> void:
+	if NetworkManager.start_lan_room_discovery() != OK:
+		_assert(false, "the LAN discovery scanner must bind"); return
+	var responder := PacketPeerUDP.new()
+	var scanner_port: int = NetworkManager._lan_discovery_scanner.get_local_port()
+	if responder.set_dest_address("127.0.0.1", scanner_port) != OK:
+		_assert(false, "the fixture must reach the LAN scanner"); return
+	var reports: Array[String] = []
+	var listener := func(rooms: Array) -> void:
+		for room in rooms:
+			if room["address"] == "127.0.0.1" and room["port"] == 61424:
+				reports.append(room["name"])
+				return
+		if not reports.is_empty():
+			reports.append("")
+	NetworkManager.lan_rooms_updated.connect(listener)
+	var room := {"kind": "room", "protocol": AppVersion.PROTOCOL_VERSION, "port": 61424, "name": "Discovery test"}
+	var packet := NetworkManager._encode_lan_discovery_packet(room)
+	_assert(responder.put_packet(packet) == OK, "the first discovery datagram must send")
+	await get_tree().create_timer(0.25).timeout
+	_assert(reports == ["Discovery test"], "the first advertisement must publish a room")
+	_assert(responder.put_packet(packet) == OK, "the repeated discovery datagram must send")
+	await get_tree().create_timer(0.25).timeout
+	_assert(reports == ["Discovery test"], "an unchanged advertisement must not republish the room list")
+	room["name"] = "Renamed discovery test"
+	_assert(responder.put_packet(NetworkManager._encode_lan_discovery_packet(room)) == OK, "the changed discovery datagram must send")
+	await get_tree().create_timer(0.25).timeout
+	_assert(reports == ["Discovery test", "Renamed discovery test"], "a changed room name must republish the list")
+	NetworkManager.lan_rooms_updated.disconnect(listener)
+	NetworkManager.stop_lan_room_discovery()
 
 
 func _assert(condition: bool, message: String) -> void:

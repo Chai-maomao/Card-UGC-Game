@@ -3,6 +3,11 @@ extends Node
 const _TextFormatter = preload("res://SkillTextFormatter.gd")
 
 
+func _enter_tree() -> void:
+	get_window().set_flag(Window.FLAG_NO_FOCUS,true)
+	get_window().set_flag(Window.FLAG_MOUSE_PASSTHROUGH,true)
+
+
 func _ready() -> void:
 	Locale.language = "zh"
 	PlayerData.card_draft = {
@@ -30,6 +35,11 @@ func _ready() -> void:
 	var editor: Node = scene.instantiate()
 	add_child(editor)
 	await get_tree().process_frame
+	assert(editor.get_node_or_null("ActionEconomyDiagnostics")==null and editor.find_child("ActionEconomyButton",true,false)==null,"removed calculator entry must not appear in the editor")
+	if DisplayServer.get_name()!="headless":
+		await get_tree().create_timer(0.25).timeout
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png("res://artifacts/ui-refinement-20261113/editor-no-economy-entry.png")
 	var summary: Label = editor.get_node("Panel/MarginContainer/ScrollContainer/VBoxContainer/Skill2Summary")
 	if summary.text == Locale.t("editor.empty") or not summary.text.contains("第二技能") or not summary.text.contains("2"):
 		push_error("Skill2 summary did not render saved second skill: %s" % summary.text)
@@ -86,7 +96,7 @@ func _ready() -> void:
 	add_child(sed)
 	await get_tree().process_frame
 	await get_tree().process_frame
-	var effects_list: VBoxContainer = sed.get_node("Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/EffectsList")
+	var effects_list: VBoxContainer = sed.get("effects_list")
 	if effects_list.get_child_count() != 1:
 		push_error("SkillEditor did not wrap effects in one event block (children=%d)" % effects_list.get_child_count())
 		get_tree().quit(1)
@@ -270,7 +280,7 @@ func _ready() -> void:
 		return
 
 	# --- Palette drag-to-install: grab a palette block, drop it into the script ---
-	var palette_vbox: VBoxContainer = sed2.get_node("Panel/Margin/HBox/PalettePanel/Margin/VBox/PaletteScroll/PaletteVBox")
+	var palette_vbox: VBoxContainer = sed2.get("palette_vbox")
 	# Palette sections are collapsible; search inside every section container.
 	var palette_block: SkillPaletteBlock = null
 	for child in palette_vbox.find_children("*", "SkillPaletteBlock", true, false):
@@ -290,8 +300,10 @@ func _ready() -> void:
 	d_ed.clear()
 	sed2.call("_refresh_script")
 	await get_tree().process_frame
-	var events_list: VBoxContainer = sed2.get_node("Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/EffectsList")
+	var events_list: VBoxContainer = sed2.get("effects_list")
 	var event_block2: SkillBlock = events_list.get_child(0)
+	var workspace: Control = sed2.workbench.workspace
+	workspace.last_pointer = workspace.get_global_transform().affine_inverse() * event_block2.body_container.get_global_rect().get_center()
 	if not (sed2.call("_can_drop_on_slot", event_block2.body_container, Vector2.ZERO, drag_data) as bool):
 		push_error("slot rejects palette drop")
 		get_tree().quit(1)
@@ -326,7 +338,7 @@ func _ready() -> void:
 	c_ed.append({"effect": SkillEngine.EFFECT_IF, "condition": {}, "then_effects": [], "else_effects": []})
 	sed2.call("_refresh_script")
 	await get_tree().process_frame
-	var events_list_c: VBoxContainer = sed2.get_node("Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/EffectsList")
+	var events_list_c: VBoxContainer = sed2.get("effects_list")
 	var event_block_c: SkillBlock = events_list_c.get_child(0)
 	var cond_if_block: SkillBlock = null
 	for sub in event_block_c.body_container.get_children():
@@ -384,7 +396,7 @@ func _ready() -> void:
 	add_child(sed3)
 	await get_tree().process_frame
 	await get_tree().process_frame
-	var spell_list: VBoxContainer = sed3.get_node("Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/EffectsList")
+	var spell_list: VBoxContainer = sed3.get("effects_list")
 	var spell_has_event_block := false
 	var spell_block_count := 0
 	for child in spell_list.get_children():
@@ -459,8 +471,8 @@ func _ready() -> void:
 	PlayerData.card_draft["card_type"] = "parasite"
 	PlayerData.card_draft["parasite_damage_mode"] = CardData.PARASITE_DAMAGE_LINKED
 	editor.call("_apply_card_type_restrictions")
-	var hp_input: SpinBox = editor.get_node("Panel/MarginContainer/ScrollContainer/VBoxContainer/HpInput")
-	var hp_label: Label = editor.get_node("Panel/MarginContainer/ScrollContainer/VBoxContainer/HpLabel")
+	var hp_input: SpinBox = editor.get("hp_input")
+	var hp_label: Label = editor.get("hp_label")
 	if hp_input.editable or hp_input.modulate == Color.WHITE or not hp_input.tooltip_text.contains("2.4") or hp_label.modulate == Color.WHITE:
 		push_error("Linked parasite HP control was not greyed with fixed-weight guidance")
 		get_tree().quit(1)

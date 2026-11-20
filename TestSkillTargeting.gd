@@ -51,7 +51,7 @@ func _test_skill_text_formatter_helpers() -> void:
 	var old_lang := Locale.language
 	Locale.language = "zh"
 	var sentence := _TextFormatter.format_effect_sentence({"target": "all_enemies", "effect": SkillEngine.EFFECT_DAMAGE, "value_min": 1, "value_max": 3, "random_count": 2})
-	if not sentence.contains("敌方") or not sentence.contains("1-3"):
+	if not sentence.contains("敌方") or not sentence.contains("1~3"):
 		_fail("skill text formatter did not describe normalized enemy random damage")
 	Locale.language = old_lang
 
@@ -62,8 +62,8 @@ func _test_skill_tooltip_shows_skill_probability() -> void:
 	var tooltip := _TextFormatter.format_skill_tooltip({"skill_name": "自我修复", "trigger": SkillEngine.TRIGGER_ON_DAMAGED, "probability": 33, "effects": [
 		{"target": SkillEngine.TARGET_SELF, "effect": SkillEngine.EFFECT_HEAL, "value": 3}
 	]})
-	if not tooltip.contains("33") or not tooltip.contains("恢复 3 点生命"):
-		_fail("skill tooltip did not show skill-level trigger probability")
+	if not tooltip.contains("33%") or not tooltip.contains("为自身回复 3 点生命"):
+		_fail("skill tooltip did not show skill-level trigger probability: " + tooltip)
 	Locale.language = old_lang
 
 

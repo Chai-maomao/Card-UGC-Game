@@ -1,6 +1,11 @@
 [gd_scene format=3 uid="uid://dplip6drcqgp1"]
 
 [ext_resource type="Script" uid="uid://c5ehp8y171sqb" path="res://MainMenu.gd" id="1_i26rj"]
+[ext_resource type="Texture2D" path="res://res/tabletop/cardex-title.png" id="2_title"]
+
+[sub_resource type="AtlasTexture" id="AtlasTexture_title"]
+atlas = ExtResource("2_title")
+region = Rect2(27, 152, 2126, 423)
 
 [node name="MainMenu" type="Control" unique_id=2085411832]
 layout_mode = 3
@@ -11,61 +16,59 @@ grow_horizontal = 2
 grow_vertical = 2
 script = ExtResource("1_i26rj")
 
-[node name="CenterContainer" type="CenterContainer" parent="." unique_id=1998185868]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
+[node name="MenuSurface" type="Node2D" parent="."]
 
-[node name="VBoxContainer" type="VBoxContainer" parent="CenterContainer" unique_id=1557201367]
+[node name="MenuColumn" type="VBoxContainer" parent="MenuSurface" unique_id=1998185868]
+mouse_filter = 2
+
+[node name="TitleArtwork" type="TextureRect" parent="MenuSurface/MenuColumn"]
 layout_mode = 2
-theme_override_constants/separation = 20
+size_flags_horizontal = 0
+mouse_filter = 2
+texture = SubResource("AtlasTexture_title")
+expand_mode = 1
+stretch_mode = 5
 
-[node name="ResumeBattleButton" type="Button" parent="CenterContainer/VBoxContainer"]
+[node name="MenuItems" type="VBoxContainer" parent="MenuSurface/MenuColumn" unique_id=1557201367]
+layout_mode = 2
+size_flags_horizontal = 0
+mouse_filter = 2
+
+[node name="ResumeBattleButton" type="Button" parent="MenuSurface/MenuColumn/MenuItems"]
 visible = false
 layout_mode = 2
 text = "Resume Battle"
 
-[node name="StartBattleButton" type="Button" parent="CenterContainer/VBoxContainer" unique_id=165459522]
+[node name="StartBattleButton" type="Button" parent="MenuSurface/MenuColumn/MenuItems" unique_id=165459522]
 layout_mode = 2
 text = "Start"
 
-[node name="TutorialButton" type="Button" parent="CenterContainer/VBoxContainer"]
+[node name="TutorialButton" type="Button" parent="MenuSurface/MenuColumn/MenuItems"]
 visible = false
 layout_mode = 2
 text = "Tutorial"
 
-[node name="CardEditorButton" type="Button" parent="CenterContainer/VBoxContainer" unique_id=740797059]
+[node name="CardEditorButton" type="Button" parent="MenuSurface/MenuColumn/MenuItems" unique_id=740797059]
 layout_mode = 2
 text = "Card Editor"
 
-[node name="MyCardsButton" type="Button" parent="CenterContainer/VBoxContainer" unique_id=483504731]
+[node name="MyCardsButton" type="Button" parent="MenuSurface/MenuColumn/MenuItems" unique_id=483504731]
 layout_mode = 2
 text = "My Cards"
 
-[node name="OnlineButton" type="Button" parent="CenterContainer/VBoxContainer" unique_id=9991000]
+[node name="WorkshopButton" type="Button" parent="MenuSurface/MenuColumn/MenuItems"]
+layout_mode = 2
+text = "Workshop"
+
+[node name="OnlineButton" type="Button" parent="MenuSurface/MenuColumn/MenuItems" unique_id=9991000]
 visible = false
 layout_mode = 2
 text = "Online Battle"
 
-[node name="MatchHistoryButton" type="Button" parent="CenterContainer/VBoxContainer"]
+[node name="MatchHistoryButton" type="Button" parent="MenuSurface/MenuColumn/MenuItems"]
 layout_mode = 2
 text = "Match History"
 
-[node name="SettingsButton" type="Button" parent="CenterContainer/VBoxContainer"]
+[node name="SettingsButton" type="Button" parent="MenuSurface/MenuColumn/MenuItems"]
 layout_mode = 2
 text = "Settings"
-
-[node name="VersionLabel" type="Label" parent="."]
-layout_mode = 1
-anchors_preset = 12
-anchor_top = 1.0
-anchor_right = 1.0
-anchor_bottom = 1.0
-offset_top = -34.0
-offset_bottom = -10.0
-grow_horizontal = 2
-grow_vertical = 0
-horizontal_alignment = 1

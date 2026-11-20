@@ -1,0 +1,87 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://DedicatedLobby.gd" id="1_lobby"]
+
+[node name="Lobby" type="Control" unique_id=8000001]
+layout_mode = 3
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+script = ExtResource("1_lobby")
+
+[node name="Panel" type="Panel" parent="." unique_id=8000002]
+layout_mode = 1
+anchors_preset = -1
+anchor_left = 0.5
+anchor_top = 0.5
+anchor_right = 0.5
+anchor_bottom = 0.5
+offset_left = -200.0
+offset_top = -207.02399
+offset_right = 200.0
+offset_bottom = 206.97601
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="VBoxContainer" type="VBoxContainer" parent="Panel" unique_id=8000003]
+layout_mode = 1
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+theme_override_constants/separation = 12
+
+[node name="TitleLabel" type="Label" parent="Panel/VBoxContainer" unique_id=8000004]
+layout_mode = 2
+theme_override_font_sizes/font_size = 24
+text = "Online Battle"
+horizontal_alignment = 1
+
+[node name="Separator" type="HSeparator" parent="Panel/VBoxContainer" unique_id=8000005]
+layout_mode = 2
+
+[node name="StatusLabel" type="Label" parent="Panel/VBoxContainer" unique_id=8000006]
+layout_mode = 2
+horizontal_alignment = 1
+
+[node name="ServerLabel" type="Label" parent="Panel/VBoxContainer" unique_id=8000008]
+layout_mode = 2
+text = "Server:"
+
+[node name="ServerInput" type="LineEdit" parent="Panel/VBoxContainer" unique_id=8000009]
+layout_mode = 2
+text = "103.236.54.24"
+
+[node name="RoomLabel" type="Label" parent="Panel/VBoxContainer" unique_id=8000012]
+layout_mode = 2
+text = "Room Code:"
+
+[node name="RoomInput" type="LineEdit" parent="Panel/VBoxContainer" unique_id=8000013]
+layout_mode = 2
+
+[node name="CreateButton" type="Button" parent="Panel/VBoxContainer" unique_id=8000007]
+layout_mode = 2
+text = "Create Room"
+
+[node name="JoinButton" type="Button" parent="Panel/VBoxContainer" unique_id=8000010]
+layout_mode = 2
+text = "Join Room"
+
+[node name="CheckServerButton" type="Button" parent="Panel/VBoxContainer" unique_id=8000014]
+layout_mode = 2
+text = "Check Server"
+
+[node name="BackButton" type="Button" parent="Panel/VBoxContainer" unique_id=8000011]
+layout_mode = 2
+text = "Back"
+
+[node name="CancelHandoffTimer" type="Timer" parent="."]
+process_mode = 3
+one_shot = true
+
+[node name="StartConfirmationTimer" type="Timer" parent="."]
+wait_time = 8.0
+one_shot = true

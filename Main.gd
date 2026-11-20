@@ -1,4 +1,4 @@
-extends "res://BattleMainNetwork.gd"
+extends "res://presentation/BattleMain3D.gd"
 
 # Thin scene entry point. Battle responsibilities live in focused inherited
 # components so the scene path and external signal API remain compatible.

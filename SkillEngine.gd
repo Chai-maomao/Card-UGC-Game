@@ -8,7 +8,7 @@ const _UgcSafety = preload("res://UgcSafety.gd")
 const _GameplayRng = preload("res://GameplayRng.gd")
 const _GameplayLog = preload("res://GameplayLog.gd")
 
-const MAX_HAND_SIZE = 6
+const MAX_HAND_SIZE = 8
 
 # ============================================
 # Skill execution engine
@@ -54,8 +54,9 @@ static func trigger_skills(trigger: String, source_card: CardData, context: Dict
 	var budget := _ensure_budget(context)
 	if not _enter_trigger_budget(budget, source_card):
 		return
-	var silenced := source_card.is_silenced()
+	var silenced := source_card.skills_disabled()
 	var trigger_context := context.duplicate()
+	trigger_context["metric_source_card"] = source_card
 	trigger_context["trigger"] = trigger
 
 	for skill_index in range(source_card.skills.size()):
@@ -64,16 +65,17 @@ static func trigger_skills(trigger: String, source_card: CardData, context: Dict
 			continue
 		trigger_context["trace_skill_index"] = skill_index
 		_trace(trigger_context, source_card, "trigger", {"trigger": trigger})
-		# Talent skills bypass silence; normal skills are blocked
-		if silenced and not _is_talent_skill(skill_dict):
+		# Both control statuses disable every skill, including talents.
+		if silenced:
 			_trace(trigger_context, source_card, "silenced")
 			continue
 		if not _check_max_uses(source_card, skill_dict, skill_index):
 			_trace(trigger_context, source_card, "uses_exhausted")
 			continue
 		if _passes_skill_roll(skill_dict, source_card, trigger_context):
-			_execute_skill(skill_dict, source_card, trigger_context)
+			# Reserve before effects can re-enter this same passive.
 			_mark_skill_used(source_card, skill_index)
+			_execute_skill(skill_dict, source_card, trigger_context)
 		else:
 			_trace(trigger_context, source_card, "probability_failed")
 	_leave_trigger_budget(budget)
@@ -86,10 +88,11 @@ static func trigger_single_skill(card: CardData, skill_index: int, context: Dict
 	if not _enter_trigger_budget(budget, card):
 		return
 	context = context.duplicate()
+	context["metric_source_card"] = card
 	context["trace_skill_index"] = skill_index
 	_trace(context, card, "trigger", {"trigger": card.skills[skill_index].get("trigger", "")})
 	var skill_dict: Dictionary = card.skills[skill_index]
-	if card.is_silenced() and not _is_talent_skill(skill_dict):
+	if card.skills_disabled():
 		_trace(context, card, "silenced")
 		_leave_trigger_budget(budget)
 		return
@@ -100,27 +103,42 @@ static func trigger_single_skill(card: CardData, skill_index: int, context: Dict
 	var single_context := context.duplicate()
 	single_context["trigger"] = skill_dict.get("trigger", "")
 	if _passes_skill_roll(skill_dict, card, single_context):
-		_execute_skill(skill_dict, card, single_context)
 		_mark_skill_used(card, skill_index)
+		_execute_skill(skill_dict, card, single_context)
 	else:
 		_trace(single_context, card, "probability_failed")
 	_leave_trigger_budget(budget)
 
 
-static func trigger_external_skill(skill: Dictionary, source_card: CardData, context: Dictionary) -> void:
+static func trigger_external_skill(skill: Dictionary, source_card: CardData, context: Dictionary, usage_card: CardData = null, usage_index: int = -1) -> void:
 	if source_card == null or skill.is_empty():
 		return
 	var budget := _ensure_budget(context)
 	if not _enter_trigger_budget(budget, source_card):
 		return
-	if source_card.is_silenced() and not _is_talent_skill(skill):
+	if source_card.skills_disabled():
 		_leave_trigger_budget(budget)
 		return
 	var external_context := context.duplicate()
-	external_context["trace_skill_index"] = source_card.skills.find(skill)
+	# Attachments own their limits and trace identity; the host remains the
+	# semantic caster for self targets, stats, silence and probability.
+	if usage_card == null:
+		usage_card = source_card
+	if usage_index < 0:
+		usage_index = usage_card.skills.find(skill)
+	var tracked := usage_index >= 0 and usage_index < usage_card.skills.size()
+	external_context["trace_skill_index"] = usage_index
+	if tracked:
+		external_context["metric_source_card"] = usage_card
 	_trace(external_context, source_card, "trigger", {"trigger": skill.get("trigger", "")})
 	external_context["trigger"] = skill.get("trigger", "")
+	if tracked and not _check_max_uses(usage_card, skill, usage_index):
+		_trace(external_context, source_card, "uses_exhausted")
+		_leave_trigger_budget(budget)
+		return
 	if _passes_skill_roll(skill, source_card, external_context):
+		if tracked:
+			_mark_skill_used(usage_card, usage_index)
 		_execute_skill(skill, source_card, external_context)
 	else:
 		_trace(external_context, source_card, "probability_failed")
@@ -176,7 +194,7 @@ static func _predict_effect_block(effects: Array, source_card: CardData, live_ta
 			continue
 		if effect_id == EFFECT_STOP:
 			return 2
-		if int(eff.get("probability", 100)) - source_card.get_misfortune() < 100:
+		if int(eff.get("probability", 100)) < 100:
 			continue
 
 		var target_id := str(eff.get("target", TARGET_SINGLE))
@@ -284,8 +302,9 @@ static func _trace(context: Dictionary, source: CardData, event: String, detail:
 	var sink: Callable = context.get("trace_callable", Callable())
 	if not sink.is_valid():
 		return
+	var origin: CardData = context.get("metric_source_card", source)
 	var row := detail.duplicate(true)
-	row.merge({"event": event, "source": source.card_name if source != null else "", "card_id": source.card_id if source != null else "", "skill_index": int(context.get("trace_skill_index", -1)), "path": (context.get("trace_path", []) as Array).duplicate(), "turn": int(context.get("turn_number", 0))})
+	row.merge({"event": event, "source": origin.card_name if origin != null else "", "card_id": origin.card_id if origin != null else "", "skill_index": int(context.get("trace_skill_index", -1)), "path": (context.get("trace_path", []) as Array).duplicate(), "turn": int(context.get("turn_number", 0))})
 	sink.call(row)
 
 
@@ -293,6 +312,7 @@ static func _execute_skill(skill: Dictionary, source_card: CardData, context: Di
 	var skill_name: String = skill.get("skill_name", "???")
 	context = context.duplicate()
 	context["trace_path"] = []
+	context["presentation_skill_name"] = skill_name
 	_execute_effects(legacy_skill_effects(skill), source_card, context, skill_name, 1)
 
 
@@ -411,7 +431,15 @@ static func _blocked_enemy_effect_on_first_turn(effect_id: String, effect: Dicti
 # "if () then else" control blocks (else_effects stays empty for the former).
 static func _execute_if_else(eff: Dictionary, source_card: CardData, context: Dictionary, skill_name: String, depth: int) -> void:
 	var cond := _condition_dict(eff)
-	var take_then: bool = _passes_effect_condition(cond, source_card, source_card, context)
+	var take_then: bool
+	if SkillRegistry.is_chance_block(eff):
+		# Preserve the existing integer roll, including 0/100% and RNG consumption.
+		var roll := _GameplayRng.from_context(context).randi_range(1,100)
+		var percent := int(eff.condition.rhs.get("value",50))
+		take_then = roll <= percent
+		_emit_random(source_card,context,{"type":"chance","chance_scope":"block","probability":percent,"roll":roll,"integer_roll":true,"success":take_then,"skill":skill_name})
+	else:
+		take_then = _passes_effect_condition(cond, source_card, source_card, context)
 	_GameplayLog.write("[SkillEngine] %s: if -> %s" % [skill_name, "then" if take_then else "else"])
 	_trace(context, source_card, "condition", {"passed": take_then})
 	context = context.duplicate()
@@ -531,7 +559,12 @@ static func _passes_skill_roll(skill: Dictionary, source_card: CardData, context
 	if misfortune > 0:
 		prob = max(0, prob - misfortune)
 		_GameplayLog.write("[SkillEngine] %s: misfortune -%d%% (eff: %d%%)" % [skill.get("skill_name", "???"), misfortune, prob])
-	if prob < 100 and _roll_percent(context) > float(prob):
+	var passed := true
+	if prob < 100:
+		var roll := _roll_percent(context)
+		passed = roll <= float(prob)
+		_emit_random(source_card,context,{"type":"chance","chance_scope":"skill","probability":prob,"roll":roll,"success":passed,"skill":str(skill.get("skill_name",source_card.card_name))})
+	if not passed:
 		_GameplayLog.write("[SkillEngine] %s: %d%% roll failed — skipped" % [skill.get("skill_name", "???"), prob])
 		EventBus.skill_roll_failed.emit(source_card, skill.get("skill_name", "技能"), misfortune, prob)
 		return false
@@ -540,12 +573,17 @@ static func _passes_skill_roll(skill: Dictionary, source_card: CardData, context
 
 static func _passes_effect_roll(eff: Dictionary, source_card: CardData, context: Dictionary) -> bool:
 	var prob: int = eff.get("probability", 100)
-	var misfortune: int = source_card.get_misfortune()
-	if misfortune > 0:
-		prob = max(0, prob - misfortune)
-	if prob < 100 and _roll_percent(context) > float(prob):
+	var passed := true
+	if prob < 100:
+		var roll := _roll_percent(context)
+		passed = roll <= float(prob)
+		_emit_random(source_card,context,{
+			"type": "chance", "chance_scope": "effect", "effect_id": str(eff.get("effect", "")),
+			"buff_id": str(eff.get("buff_id", "")), "probability": prob, "roll": roll, "success": passed,
+		})
+	if not passed:
 		_GameplayLog.write("[SkillEngine] Effect skipped: %d%% roll failed" % prob)
-		EventBus.skill_roll_failed.emit(source_card, source_card.card_name if source_card != null else "效果", misfortune, prob)
+		EventBus.skill_roll_failed.emit(source_card, source_card.card_name if source_card != null else "效果", 0, prob)
 		return false
 	return true
 
@@ -580,6 +618,8 @@ static func _eval_boolean(cond: Dictionary, source_card: CardData, target_card: 
 	if depth > _UgcSafety.MAX_EXPRESSION_NESTING_DEPTH:
 		_abort_budget(_ensure_budget(context), source_card, "expression_depth")
 		return false
+	if not cond.has("lhs") and not cond.has("logic") and str(cond.get("condition_type", "")) not in ["", CONDITION_NONE]:
+		return _passes_effect_condition(cond, source_card, target_card, context)
 	if cond.has("logic"):
 		var logic: String = str(cond.get("logic", "and"))
 		if logic == "not":
@@ -625,7 +665,7 @@ static func _eval_operand(opd: Dictionary, source_card: CardData, target_card: V
 						var t: int = a
 						a = b
 						b = t
-					return _GameplayRng.from_context(context).randi_range(a, b)
+					return _random_integer(a,b,source_card,context)
 				_:
 					return a + b
 	return int(opd.get("value", 0))
@@ -708,6 +748,23 @@ static func _roll_percent(context: Dictionary) -> float:
 	return _GameplayRng.from_context(context).randf() * 100.0
 
 
+static func _emit_random(source: CardData,context: Dictionary,outcome: Dictionary) -> void:
+	if bool(context.get("quiet",false)): return
+	outcome["player"] = int(context.get("current_player",0))
+	outcome["trigger"] = str(context.get("trigger",""))
+	var origin: CardData = context.get("metric_source_card",source)
+	if origin!=null and source!=null and origin!=source and origin.is_parasite():
+		outcome["parasite"] = origin.card_name
+	if not outcome.has("skill"): outcome["skill"] = str(context.get("presentation_skill_name",""))
+	EventBus.skill_random_resolved.emit(source,outcome)
+
+
+static func _random_integer(lower: int,upper: int,source: CardData,context: Dictionary) -> int:
+	var result := _GameplayRng.from_context(context).randi_range(lower,upper)
+	_emit_random(source,context,{"type":"integer","minimum":lower,"maximum":upper,"result":result})
+	return result
+
+
 static func _shuffle_targets(targets: Array, context: Dictionary) -> void:
 	_GameplayRng.shuffle(targets, _GameplayRng.from_context(context))
 
@@ -740,7 +797,7 @@ static func _resolve_value(eff: Dictionary, source_card: CardData, target_or_con
 			var t: int = vmin
 			vmin = vmax
 			vmax = t
-		return _sanitize_effect_value(str(eff.get("effect", "")), _GameplayRng.from_context(context).randi_range(vmin, vmax))
+		return _sanitize_effect_value(str(eff.get("effect", "")), _random_integer(vmin,vmax,source_card,context))
 	return _sanitize_effect_value(str(eff.get("effect", "")), int(eff.get("value", 1)))
 
 

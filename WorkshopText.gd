@@ -1,0 +1,47 @@
+class_name WorkshopText
+extends RefCounted
+
+const EN := {
+	"请先登录 Steam 客户端":"Please sign in to the Steam client",
+	"[普通攻击]\n对敌方造成 %d 点伤害":"[Basic Attack]\nDeal %d damage to an enemy.",
+	"创意工坊":"Workshop", "登录":"Sign In", "注册":"Register", "返回":"Back",
+	"上传卡包":"Upload Pack", "搜索卡包":"Search packs", "搜索":"Search", "发现":"Discover", "我的上传":"My Uploads",
+	"最新上传":"Newest", "最多下载":"Most Downloaded", "重新加载":"Retry", "加载更多":"Load More",
+	"还没有上传卡包":"You haven't uploaded any packs", "没有找到相关卡包":"No matching packs", "还没有卡包":"No packs yet",
+	"%d 张卡牌":"%d cards", "下载 %d":"%d downloads", "查看卡包":"View Pack",
+	"待审核":"Awaiting Review", "已发布":"Published", "已下架":"Removed", "账号":"Account", "退出登录":"Sign Out",
+	"登录工坊":"Sign In to Workshop", "注册工坊账号":"Create a Workshop Account", "用户名":"Username", "密码":"Password",
+	"输入密码":"Enter password", "邀请码":"Invite Code", "向邀请你的人索取":"Ask the person who invited you", "记住登录":"Remember Me",
+	"至少 12 个字符":"At least 12 characters", "用户名至少 3 个字符":"Use at least 3 characters for your username",
+	"密码至少 12 个字符":"Your password needs at least 12 characters", "请填写邀请码":"Enter your invite code",
+	"正在连接…":"Connecting…", "%s（%d 张）":"%s (%d cards)", "未命名":"Untitled", "卡包名称":"Pack Name",
+	"介绍（选填）":"Description (Optional)", "我有权分享这些卡牌和图片":"I have permission to share these cards and images",
+	"审核通过后，卡包会出现在工坊。":"Your pack will appear after review.", "上传":"Upload",
+	"请先确认你有权分享这些卡牌和图片":"Confirm that you have permission to share this content",
+	"请选择卡组并填写名称":"Choose a deck and give the pack a name", "介绍最多 1200 字":"Keep the description under 1,200 characters",
+	"这个卡组还没有卡牌":"This deck has no cards yet", "正在上传…":"Uploading…", "正在下载…":"Downloading…",
+	"这个卡包无法导入，可能需要更新游戏":"This pack can't be imported. You may need to update the game.", "已导入卡组：":"Imported deck: ",
+	"下架卡包":"Remove Pack", "下架后，其他玩家将无法再下载这个卡包。":"Other players will no longer be able to download this pack.",
+	"下架":"Remove", "举报卡包":"Report Pack", "举报原因":"Reason", "已收到举报":"Report received", "卡包":"Pack",
+	"%s    %d 张卡牌":"%s    %d cards", "导入为新卡组":"Import as New Deck", "举报":"Report",
+	"加载失败，请重试":"Couldn't load packs. Please try again.", "登录失败，请重试":"Couldn't sign in. Please try again.",
+	"上传失败，请重试":"Upload failed. Please try again.", "下载失败，请重试":"Download failed. Please try again.",
+	"操作失败，请重试":"Couldn't complete that action. Please try again.", "提交失败，请重试":"Couldn't submit. Please try again.",
+	"工坊暂时未开放":"Workshop isn't open yet", "工坊暂时不可用":"Workshop is unavailable",
+	"暂时无法连接工坊，请稍后再试":"Can't reach Workshop. Please try again later.", "正在处理，请稍候":"Please wait for the current action to finish",
+	"卡包不能超过 16 MB":"Packs must be smaller than 16 MB", "连接中断，请重试":"Connection interrupted. Please try again.",
+	"服务暂时不可用，请稍后再试":"The service is unavailable. Please try again later.", "操作太频繁，请稍后再试":"Too many requests. Please try again later.",
+	"请先登录":"Please sign in first", "邀请码不正确":"Incorrect invite code", "这个用户名已被使用":"That username is taken",
+	"用户名或密码不正确":"Incorrect username or password", "这个卡包已不存在":"This pack is no longer available",
+	"这个卡包暂不可用":"This pack is currently unavailable", "只能下架自己的卡包":"You can only remove your own packs",
+	"已经收到你的举报":"You've already reported this pack", "文字长度不合适":"Please check the length of the text",
+	"请检查填写的内容":"Please check the information you entered", "卡图过大，请在编辑器中重新裁切":"An image is too large. Crop it again in the editor.",
+	"图片文件损坏":"An image is damaged", "卡图文件损坏":"A card image is damaged", "卡图格式不正确":"A card image has an unsupported format",
+	"单张卡图不能超过 2 MB":"Each card image must be smaller than 2 MB", "这不是可用的 CARDEX 卡包":"This isn't a valid CARDEX pack",
+	"卡包需要包含 1–200 张卡牌":"A pack needs 1–200 cards", "卡包内容过于复杂":"This pack is too complex",
+	"用户名只能包含文字、数字、下划线或短横线":"Use letters, numbers, underscores or hyphens for your username",
+	"密码需要 12–128 个字符":"Passwords need 12–128 characters", "最多上传 100 个卡包，请先下架不再使用的内容":"You can have up to 100 packs. Remove an old one first.",
+}
+
+static func t(text: String) -> String:
+	return text if Locale.language == "zh" else str(EN.get(text,text))

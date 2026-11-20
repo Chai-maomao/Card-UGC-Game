@@ -1,39 +1,234 @@
-extends "res://BattleMainFoundation.gd"
+extends "res://presentation/BattleEventCapture.gd"
 
 const BattlePlanner = preload("res://BattleAiPlanner.gd")
 const BattleCommand = preload("res://BattleRepro.gd")
+const MAX_PENDING_WEB_COMMANDS := 32
+
+var _confirmed_game: RefCounted
+var _web_prediction_count := 0
+var _online_cost_picker: CanvasLayer
+
+
+func _bind_battle_inputs() -> void:
+	if $CanvasLayer/MainBackground:
+		$CanvasLayer/MainBackground.mouse_filter = Control.MOUSE_FILTER_PASS
+		$CanvasLayer/MainBackground.gui_input.connect(_on_battle_background_gui_input)
+
+	var p_slots = player_side_ui.get_children()
+	var e_slots = enemy_side_ui.get_children()
+
+	for i in range(p_slots.size()):
+		p_slots[i].set_visual_variant("player")
+		e_slots[i].set_visual_variant("enemy")
+		p_slots[i].pressed.connect(_on_player_slot_clicked.bind(i))
+		if p_slots[i].has_signal("slot_attack_requested"):
+			p_slots[i].slot_attack_requested.connect(_on_attack_requested.bind(i))
+		if p_slots[i].has_signal("slot_skill1_requested"):
+			p_slots[i].slot_skill1_requested.connect(_on_skill_activated.bind(i, 0))
+		if p_slots[i].has_signal("slot_skill2_requested"):
+			p_slots[i].slot_skill2_requested.connect(_on_skill_activated.bind(i, 1))
+		if p_slots[i].has_signal("slot_skill3_requested"):
+			p_slots[i].slot_skill3_requested.connect(_on_skill_activated.bind(i, 2))
+		if p_slots[i].has_signal("card_dropped_here"):
+			p_slots[i].card_dropped_here.connect(_on_card_drag_summoned.bind(i))
+
+		e_slots[i].pressed.connect(_on_enemy_slot_clicked.bind(i))
+		if e_slots[i].has_signal("slot_attack_requested"):
+			e_slots[i].slot_attack_requested.connect(_on_attack_requested.bind(i))
+		if e_slots[i].has_signal("slot_skill1_requested"):
+			e_slots[i].slot_skill1_requested.connect(_on_skill_activated.bind(i, 0))
+		if e_slots[i].has_signal("slot_skill2_requested"):
+			e_slots[i].slot_skill2_requested.connect(_on_skill_activated.bind(i, 1))
+		if e_slots[i].has_signal("slot_skill3_requested"):
+			e_slots[i].slot_skill3_requested.connect(_on_skill_activated.bind(i, 2))
+		if e_slots[i].has_signal("card_dropped_here"):
+			e_slots[i].card_dropped_here.connect(_on_card_drag_cast_on_enemy.bind(i))
+
+	if end_turn_button:
+		end_turn_button.text = Locale.t("battle.end_turn")
+		end_turn_button.pressed.connect(_on_end_turn_pressed)
+
+	face_mana_button.set_meta("keyword_enabled",true)
+	face_mana_button.text = "圣水补付" if Locale.language == "zh" else "Use Elixir"
+	face_mana_button.tooltip_text = Locale.t("battle.face_mana_hint")
+	face_mana_button.toggled.connect(func(_enabled): update_entire_screen())
+	if discard_zone and discard_zone.has_signal("card_discarded"):
+		discard_zone.card_discarded.connect(_on_card_discarded)
+	if EventBus.has_signal("hp_changed"):
+		EventBus.hp_changed.connect(_on_hp_changed)
+	if EventBus.has_signal("damage_resolved"):
+		EventBus.damage_resolved.connect(_on_damage_resolved)
+	if EventBus.has_signal("parasite_damage_resolved"):
+		EventBus.parasite_damage_resolved.connect(_on_parasite_damage_resolved)
+	if EventBus.has_signal("skill_roll_failed"):
+		EventBus.skill_roll_failed.connect(_on_skill_roll_failed)
+	EventBus.skill_random_resolved.connect(_on_skill_random_resolved)
+	EventBus.attack_declared.connect(_on_random_attack_declared)
+	if EventBus.has_signal("skill_safety_limit_hit"):
+		EventBus.skill_safety_limit_hit.connect(_on_skill_safety_limit_hit)
+	if EventBus.has_signal("skill_effect_started"):
+		EventBus.skill_effect_started.connect(_on_skill_effect_started)
+	if EventBus.has_signal("skill_effect_resolved"):
+		EventBus.skill_effect_resolved.connect(_on_skill_effect_resolved)
+	if EventBus.has_signal("first_turn_effect_blocked"):
+		EventBus.first_turn_effect_blocked.connect(_on_first_turn_effect_blocked)
+	if EventBus.has_signal("shuffle_discard_into_deck"):
+		EventBus.shuffle_discard_into_deck.connect(_on_shuffle_discard_into_deck)
+	if EventBus.has_signal("view_discard_select"):
+		EventBus.view_discard_select.connect(_on_view_discard_select)
+	if EventBus.has_signal("view_deck_select"):
+		EventBus.view_deck_select.connect(_on_view_deck_select)
+	if EventBus.has_signal("make_zero_cost_select"):
+		EventBus.make_zero_cost_select.connect(_on_make_zero_cost_select)
+	if EventBus.has_signal("hand_entry_resolved"):
+		EventBus.hand_entry_resolved.connect(_on_hand_entry_resolved)
+	EventBus.enemy_hand_discarded.connect(_on_enemy_hand_discarded)
+
+
+func _predict_web_command(_kind: String, _payload: Dictionary, _player: int) -> bool:
+	return false
+
+
+func _has_online_prediction() -> bool:
+	return PlayerData.is_online_battle()
+
+
+func _deployment_preview() -> Dictionary:
+	return {"slots": _my_field().slots, "hand": _my_hand(), "mana": _my_field().get_total_mana()}
+
+
+func _visible_player_slots() -> Array:
+	return _my_field().slots
 
 
 func _send_remote_intent(kind: String, payload: Dictionary) -> String:
-	if NetworkManager.pending_game_command_count() > 0:
+	if _waiting_for_room_link() or _waiting_for_action_state():
+		return ""
+	var pending := NetworkManager.pending_game_command_count()
+	if pending >= MAX_PENDING_WEB_COMMANDS or (pending > 0 and not _can_continue_web_turn()):
 		_show_toast("tip.command_pending")
 		return ""
-	var command_id := NetworkManager.send_game_intent(kind, payload, game.current_player, game.state_revision)
-	if command_id != "":
-		_network_command_phase = "sent"
+	var player: int = game.current_player
+	var revision: int = game.state_revision
+	var previous_game: RefCounted
+	# End-turn snapshots include hero strikes: keep the outgoing board visible
+	# until their presentation completes instead of predicting the side switch.
+	if _has_online_prediction() and not NetworkManager.is_authority() and kind != "end_turn":
+		previous_game = game
+		if not _predict_web_command(kind, payload, player):
+			return ""
+		payload = payload.duplicate()
+		match kind:
+			"move", "summon", "attack", "discard", "summon_skill":
+				payload["local_feedback"] = "skill" if kind == "summon_skill" else kind
+			"activate_skill":
+				var source := int(payload.get("slot_index", -1))
+				if source >= 0:
+					payload["local_feedback"] = "skill"
+				elif source <= -1000 and source > -2000:
+					payload["local_feedback"] = "cast"
+	var command_id := NetworkManager.send_game_intent(kind, payload, player, revision)
+	if command_id.is_empty():
+		if previous_game != null:
+			game = previous_game
+			_refresh_hand_ui()
+		_dismiss_command_prompt(_command_send_failure_prompt)
+		_command_send_failure_prompt = weakref(_spawn_toast(Locale.t("tip.command_not_sent"), "warn"))
 		update_entire_screen()
+		return ""
+	_dismiss_command_prompt(_command_result_prompt)
+	_command_result_prompt = null
+	_dismiss_command_prompt(_command_send_failure_prompt)
+	_command_send_failure_prompt = null
+	if previous_game != null:
+		if _confirmed_game == null:
+			_confirmed_game = previous_game
+		_web_prediction_count += 1
+	_network_command_phase = "sent"
+	_refresh_hand_ui()
+	update_entire_screen()
+	_play_web_prediction_feedback(payload)
+	if kind == "summon" and _confirmed_game != null:
+		_resume_auto_summon_targeting.call_deferred(int(payload.get("slot_index", -1)))
 	return command_id
+
+
+func _can_continue_web_turn() -> bool:
+	return _confirmed_game != null and _web_prediction_count == NetworkManager.pending_game_command_count()
+
+
+func _play_web_prediction_feedback(payload: Dictionary) -> void:
+	match str(payload.get("local_feedback", "")):
+		"move":
+			_play_move_feedback(_view_player(), int(payload["source_slot"]), int(payload["target_slot"]))
+		"summon":
+			_play_summon_feedback(_slot_ui_for_player(_view_player(), int(payload["slot_index"])))
+		"attack":
+			_play_attack_feedback(_view_player(), int(payload["source_slot"]), int(payload["target_slot"]))
+		"skill":
+			_play_skill_cast_feedback(_view_player(), int(payload["slot_index"]))
+		"cast":
+			_play_skill_cast_feedback(_view_player(), -1)
+		"discard":
+			_play_discard_feedback(get_global_mouse_position())
+
+
+func _restore_confirmed_game() -> void:
+	if _confirmed_game != null:
+		game = _confirmed_game
+		_confirmed_game = null
+	_web_prediction_count = 0
+
+
+func _turn_slot_checkpoint(slots: Array) -> String:
+	var identities: Array[String] = []
+	for card: CardData in slots:
+		identities.append(card.instance_id if card != null else "")
+	return BattleCommand.hash_state({"turn": game.turn_number, "player": game.current_player, "slots": identities})
+
+
+func _web_turn_hash() -> String:
+	var state: Dictionary = game.export_initial_state()
+	_strip_local_art_paths(state)
+	return BattleCommand.hash_state(state)
+
+
+func _strip_local_art_paths(value: Variant) -> void:
+	if value is Dictionary:
+		value.erase("art_path")
+		value.erase("damaged_art_path")
+		for child in value.values():
+			_strip_local_art_paths(child)
+	elif value is Array:
+		for child in value:
+			_strip_local_art_paths(child)
 
 # ============================================
 # Misc
 # ============================================
 
-func _on_card_discarded(card_data: CardData):
+func _on_card_discarded(card_data: CardData, drop_position: Vector2 = Vector2.INF):
 	if not is_my_turn(): return
 	if not _tutorial_allows("discard"):
 		return
 	var card_location := _find_card_location(card_data)
-	if NetworkManager.is_online:
+	if drop_position == Vector2.INF: drop_position = get_global_mouse_position()
+	if PlayerData.is_online_battle():
 		if NetworkManager.is_authority():
-			_host_apply_discard(card_location["location"], card_location["index"], game.current_player)
+			_host_apply_discard(card_location["location"], card_location["index"], game.current_player, drop_position)
 		else:
 			_send_remote_intent("discard", {"location": card_location["location"], "index": card_location["index"]})
 		return
-	if game.discard_card(card_data):
-		_show_combat_broadcast(Locale.t("tip.discard_mana"))
+	var refund: int = game.discard_card_with_refund(card_data)
+	if refund >= 0:
+		_play_discard_feedback(drop_position)
+		_show_combat_broadcast(Locale.t(_discard_broadcast_key(refund)))
 		_refresh_hand_ui()
 		update_entire_screen()
-		_play_discard_feedback()
+
+
+func _discard_broadcast_key(refund: int) -> String:
+	return "tip.discard_mana" if refund > 0 else "tip.discard_mana_full"
 
 
 func _on_battle_background_gui_input(event: InputEvent) -> void:
@@ -70,40 +265,26 @@ func _manual_target_card_for_skill(skill: Dictionary, target_slot: int, target_p
 # Splash art
 # ============================================
 
-func _show_splash(card: CardData) -> void:
+func _show_splash(card: CardData, skill_name: String = "") -> void:
 	if card == null:
 		return
 	if splash_tween and splash_tween.is_valid():
 		splash_tween.kill()
-	splash_name.text = card.card_name
-	var has_art: bool = false
-	if card.art_path != "":
-		var load_path: String = card.art_path
-		if load_path.begins_with("user://"):
-			load_path = ProjectSettings.globalize_path(load_path)
-		var img = Image.new()
-		var err = img.load(load_path)
-		if err == OK:
-			var tex = ImageTexture.create_from_image(img)
-			if tex != null:
-				splash_art.texture = tex
-				splash_art.visible = true
-				splash_text.visible = false
-				has_art = true
-	if not has_art:
-		splash_art.visible = false
-		splash_text.visible = true
-		splash_text.text = card.card_name
-	# Lightweight reveal: pop in place on the right edge (no full-screen slide).
-	splash_panel.position.x = 0.0
-	splash_panel.pivot_offset = splash_panel.size / 2
-	splash_panel.scale = Vector2(0.88, 0.88)
+	splash_panel.bind(card,skill_name)
+	# Restart from outside the left edge; an interrupted reveal must never
+	# leave the previous card or an old exit tween on screen.
+	splash_slide_progress = 0.0
+	_layout_splash_panel()
+	splash_panel.show()
 	splash_panel.modulate.a = 1.0
 	splash_tween = create_tween()
-	splash_tween.set_parallel(true)
-	splash_tween.tween_property(splash_panel, "scale", Vector2.ONE, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	splash_tween.tween_property(splash_panel, "modulate:a", 0.0, 0.28).set_delay(0.75)
-	splash_tween.chain().tween_callback(func(): splash_panel.scale = Vector2(0.88, 0.88))
+	splash_tween.tween_property(self, "splash_slide_progress", 1.0, 0.22).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
+	splash_tween.tween_interval(0.55)
+	splash_tween.tween_property(self, "splash_slide_progress", 0.0, 0.24).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
+	splash_tween.tween_callback(func():
+		splash_panel.modulate.a = 0.0
+		splash_panel.hide()
+	)
 
 # ============================================
 # Summon
@@ -117,7 +298,7 @@ func _summon_skill_is_pending(card: CardData, skill_index: int) -> bool:
 	var skill: Dictionary = card.skills[skill_index]
 	if str(skill.get("trigger", "")) != SkillEngine.TRIGGER_ON_SUMMON:
 		return false
-	if card.is_silenced() and str(skill.get("skill_type", SkillEngine.SKILL_TYPE_NORMAL)) != SkillEngine.SKILL_TYPE_TALENT:
+	if card.skills_disabled():
 		return false
 	if not SkillEngine.has_uses_remaining(card, skill, skill_index):
 		return false
@@ -147,8 +328,7 @@ func _resolve_local_summon_skill(slot_index: int, skill_index: int, target_slot:
 	_begin_action_broadcast("summon_skill", game.current_player, source_card.card_name, target_card.card_name if target_card != null else "", {"skill": skill.get("skill_name", Locale.t("battle.log.skill_word"))})
 	game.trigger_summon_skills(slot_index, target_slot, skill_index, resolved_target_player)
 	_finish_action_broadcast()
-	_play_skill_cast_feedback(game.current_player, slot_index)
-	_show_splash(source_card)
+	_play_skill_cast_feedback(game.current_player, slot_index, skill_index)
 	_apply_deaths()
 	_check_charm_overflow()
 	_refresh_hand_ui()
@@ -219,15 +399,14 @@ func _on_card_drag_summoned(card_data, origin_ui, slot_index: int):
 			return
 
 	var field = _my_field()
+	var visible_slots := _visible_player_slots()
 
-	var source_slot := -1
-	for i in range(5):
-		if field.slots[i] == card_data:
-			source_slot = i
-			break
+	var source_slot := visible_slots.find(card_data)
 
 	if source_slot >= 0:
-		if NetworkManager.is_online:
+		if slot_index == source_slot or slot_index < 0 or slot_index >= visible_slots.size():
+			return
+		if PlayerData.is_online_battle():
 			if NetworkManager.is_authority():
 				_host_apply_move(source_slot, slot_index, game.current_player)
 			else:
@@ -244,10 +423,13 @@ func _on_card_drag_summoned(card_data, origin_ui, slot_index: int):
 	if card_data.is_parasite():
 		_execute_parasite_attach(hand_index, _view_player(), slot_index)
 		return
+	if card_data.cost > field.get_total_mana():
+		_show_toast("tip.insufficient_mana")
+		return
 	if card_data.is_spell():
 		_on_card_drag_cast(card_data, origin_ui, hand_index, slot_index, _view_player())
 		return
-	if NetworkManager.is_online:
+	if PlayerData.is_online_battle():
 		if NetworkManager.is_authority():
 			_host_apply_summon(hand_index, slot_index, game.current_player)
 		else:
@@ -364,7 +546,7 @@ func _execute_spell_cast(hand_index: int, skill_index: int, target_slot: int, ta
 				or not SpellRules.target_player_matches_drop(skill, game.current_player, resolved_target_player):
 			_show_toast("tip.spell_drop_target")
 			return
-	if NetworkManager.is_online:
+	if PlayerData.is_online_battle():
 		if NetworkManager.is_authority():
 			_host_apply_cast(hand_index, skill_index, target_slot, game.current_player, resolved_target_player)
 		else:
@@ -425,7 +607,7 @@ func _execute_parasite_attach(hand_index: int, target_player: int, target_slot: 
 		if attach_check.get("reason", "") == ParasiteRules.REASON_NO_MANA:
 			_show_toast("tip.insufficient_mana")
 		return
-	if NetworkManager.is_online:
+	if PlayerData.is_online_battle():
 		if NetworkManager.is_authority():
 			_host_apply_parasite(hand_index, target_player, target_slot, game.current_player)
 		else:
@@ -452,6 +634,9 @@ func _execute_parasite_attach(hand_index: int, target_player: int, target_slot: 
 func _on_skill_activated(slot_index: int, skill_index: int):
 	if not game.is_player_turn or not is_my_turn():
 		return
+	if not game.can_pay_action():
+		_show_toast("tip.insufficient_action")
+		return
 	var card: CardData = _my_field().slots[slot_index]
 	if card == null:
 		return
@@ -467,7 +652,7 @@ func _on_skill_activated(slot_index: int, skill_index: int):
 	if game.turn_number <= 1 and SkillRegistry.skill_changes_enemy_hp_or_presence(skill):
 		_show_toast("tip.no_enemy_hp_effect_turn1")
 		return
-	if card.is_silenced() and skill.get("skill_type", SkillEngine.SKILL_TYPE_NORMAL) != SkillEngine.SKILL_TYPE_TALENT:
+	if card.skills_disabled():
 		return
 	var trig: String = skill.get("trigger", "")
 	var is_summon: bool = trig == SkillEngine.TRIGGER_ON_SUMMON
@@ -499,7 +684,7 @@ func _on_skill_activated(slot_index: int, skill_index: int):
 		_sync_targeting_state()
 		update_entire_screen()
 	else:
-		if NetworkManager.is_online:
+		if PlayerData.is_online_battle():
 			if is_summon:
 				if NetworkManager.is_authority():
 					_host_apply_summon_skill(slot_index, skill_index, -1, game.current_player)
@@ -511,21 +696,20 @@ func _on_skill_activated(slot_index: int, skill_index: int):
 				else:
 					_send_remote_intent("activate_skill", {"slot_index": slot_index, "skill_index": skill_index, "target_slot": -1})
 			return
-		card.skills_used.append(skill_index)
 		_begin_action_broadcast("summon_skill" if is_summon else "skill", game.current_player, card.card_name, "", {"skill": skill.get("skill_name", Locale.t("battle.log.skill_word"))})
 		if is_summon:
 			game.trigger_summon_skills(slot_index, -1, skill_index)
 		else:
 			game.trigger_activate_skills(slot_index, -1, skill_index)
 		_finish_action_broadcast()
-		_play_skill_cast_feedback(game.current_player, slot_index)
+		_play_skill_cast_feedback(game.current_player, slot_index, skill_index)
 		_refresh_hand_ui()
 		_check_charm_overflow()
-		_show_splash(card)
 		_apply_deaths()
 		_check_charm_overflow()
 		update_entire_screen()
 		_tutorial_notify("skill", {"slot": slot_index, "skill": skill_index})
+		_check_and_show_game_over()
 
 
 # ============================================
@@ -533,11 +717,14 @@ func _on_skill_activated(slot_index: int, skill_index: int):
 # ============================================
 
 func _on_attack_requested(slot_index: int):
+	if not game.can_pay_action():
+		_show_toast("tip.insufficient_action")
+		return
 	if not game.is_player_turn or not is_my_turn():
 		return
 	if not _tutorial_allows("attack_source", {"slot": slot_index}):
 		return
-	if game.turn_number <= 1 and PlayerData.battle_mode != "tutorial":
+	if game.turn_number <= 1 and not game.allow_first_turn_attacks:
 		print("Turn 1: attacks are not allowed!")
 		_show_toast("tip.no_attack_turn1")
 		return
@@ -546,7 +733,7 @@ func _on_attack_requested(slot_index: int):
 		return
 	if field.slots[slot_index].has_acted:
 		return
-	if field.slots[slot_index].is_silenced() and not field.slots[slot_index].attack_ignores_silence:
+	if field.slots[slot_index].has_stun():
 		return
 	cancel_attack()
 	current_attacker_idx = slot_index
@@ -603,7 +790,7 @@ func _apply_summon_skill_target(target_player: int, target_slot: int) -> void:
 	var source_card: CardData = _my_field().slots[summon_source_slot]
 	var target_card: CardData = _field_for_player(target_player).slots[target_slot]
 	var summon_skill: Dictionary = source_card.skills[summon_skill_idx] if source_card != null and summon_skill_idx < source_card.skills.size() else {}
-	if NetworkManager.is_online:
+	if PlayerData.is_online_battle():
 		if NetworkManager.is_authority():
 			_host_apply_summon_skill(summon_source_slot, summon_skill_idx, target_slot, game.current_player, target_player)
 		else:
@@ -619,10 +806,9 @@ func _apply_summon_skill_target(target_player: int, target_slot: int) -> void:
 	_begin_action_broadcast("summon_skill", game.current_player, source_card.card_name if source_card != null else Locale.t("battle.log.unit"), target_card.card_name if target_card != null else "", {"skill": summon_skill.get("skill_name", Locale.t("battle.log.skill_word"))})
 	game.trigger_summon_skills(summon_source_slot, target_slot, summon_skill_idx, target_player)
 	_finish_action_broadcast()
-	_play_skill_cast_feedback(game.current_player, summon_source_slot)
+	_play_skill_cast_feedback(game.current_player, summon_source_slot, summon_skill_idx)
 	_refresh_hand_ui()
 	_check_charm_overflow()
-	_show_splash(source_card)
 	cancel_attack()
 	_apply_deaths()
 	_check_charm_overflow()
@@ -633,7 +819,7 @@ func _apply_activate_skill_target(target_player: int, target_slot: int) -> void:
 	var source_card: CardData = _my_field().slots[activate_source_slot]
 	var target_card: CardData = _field_for_player(target_player).slots[target_slot]
 	var activate_skill: Dictionary = source_card.skills[activate_skill_idx] if source_card != null and activate_skill_idx < source_card.skills.size() else {}
-	if NetworkManager.is_online:
+	if PlayerData.is_online_battle():
 		if NetworkManager.is_authority():
 			_host_apply_skill(activate_source_slot, activate_skill_idx, target_slot, game.current_player)
 		else:
@@ -643,14 +829,12 @@ func _apply_activate_skill_target(target_player: int, target_slot: int) -> void:
 	if source_card == null:
 		cancel_attack()
 		return
-	source_card.skills_used.append(activate_skill_idx)
 	_begin_action_broadcast("skill", game.current_player, source_card.card_name if source_card != null else Locale.t("battle.log.unit"), target_card.card_name if target_card != null else "", {"skill": activate_skill.get("skill_name", Locale.t("battle.log.skill_word"))})
 	game.trigger_activate_skills(activate_source_slot, target_slot, activate_skill_idx, target_player)
 	_finish_action_broadcast()
-	_play_skill_cast_feedback(game.current_player, activate_source_slot)
+	_play_skill_cast_feedback(game.current_player, activate_source_slot, activate_skill_idx)
 	_refresh_hand_ui()
 	_check_charm_overflow()
-	_show_splash(source_card)
 	cancel_attack()
 	_apply_deaths()
 	_check_charm_overflow()
@@ -716,7 +900,7 @@ func _on_opponent_slot_clicked(index: int):
 				print("Must target a taunt minion first!")
 				_show_toast("tip.taunt_skill_first")
 				return
-		if NetworkManager.is_online:
+		if PlayerData.is_online_battle():
 			if NetworkManager.is_authority():
 				_host_apply_summon_skill(summon_source_slot, summon_skill_idx, index, game.current_player, _opponent_player())
 			else:
@@ -732,11 +916,9 @@ func _on_opponent_slot_clicked(index: int):
 		_begin_action_broadcast("summon_skill", game.current_player, summon_card.card_name, _their_field().slots[index].card_name, {"skill": summon_skill.get("skill_name", Locale.t("battle.log.skill_word"))})
 		game.trigger_summon_skills(summon_source_slot, index, summon_skill_idx)
 		_finish_action_broadcast()
-		_play_skill_cast_feedback(game.current_player, summon_source_slot)
+		_play_skill_cast_feedback(game.current_player, summon_source_slot, summon_skill_idx)
 		_refresh_hand_ui()
 		_check_charm_overflow()
-		if summon_card != null:
-			_show_splash(summon_card)
 		summon_targeting = false
 		summon_source_slot = -1
 		last_hovered_target = -1
@@ -757,7 +939,7 @@ func _on_opponent_slot_clicked(index: int):
 				print("Must target a taunt minion first!")
 				_show_toast("tip.taunt_skill_first")
 				return
-		if NetworkManager.is_online:
+		if PlayerData.is_online_battle():
 			if NetworkManager.is_authority():
 				_host_apply_skill(activate_source_slot, activate_skill_idx, index, game.current_player)
 			else:
@@ -768,15 +950,13 @@ func _on_opponent_slot_clicked(index: int):
 		if card == null:
 			cancel_attack()
 			return
-		card.skills_used.append(activate_skill_idx)
 		var activate_skill: Dictionary = card.skills[activate_skill_idx] if activate_skill_idx < card.skills.size() else {}
 		_begin_action_broadcast("skill", game.current_player, card.card_name, _their_field().slots[index].card_name, {"skill": activate_skill.get("skill_name", Locale.t("battle.log.skill_word"))})
 		game.trigger_activate_skills(activate_source_slot, index, activate_skill_idx)
 		_finish_action_broadcast()
-		_play_skill_cast_feedback(game.current_player, activate_source_slot)
+		_play_skill_cast_feedback(game.current_player, activate_source_slot, activate_skill_idx)
 		_refresh_hand_ui()
 		_check_charm_overflow()
-		_show_splash(card)
 		activate_targeting = false
 		activate_source_slot = -1
 		last_hovered_target = -1
@@ -798,7 +978,7 @@ func _on_opponent_slot_clicked(index: int):
 				print("Must target a taunt minion first!")
 				_show_toast("tip.taunt_skill_first")
 				return
-		if NetworkManager.is_online:
+		if PlayerData.is_online_battle():
 			if NetworkManager.is_authority():
 				_host_apply_cast(cast_hand_index, cast_skill_index, index, game.current_player, _opponent_player())
 			else:
@@ -825,7 +1005,7 @@ func _on_opponent_slot_clicked(index: int):
 			print("Must attack a taunt minion first!")
 			_show_toast("tip.taunt_first")
 			return
-	if NetworkManager.is_online:
+	if PlayerData.is_online_battle():
 		if NetworkManager.is_authority():
 			_host_apply_attack(current_attacker_idx, index, game.current_player)
 		else:
@@ -852,10 +1032,18 @@ func _on_opponent_slot_clicked(index: int):
 	_check_and_show_game_over()
 
 
+func cancel_pending_battle_selection() -> bool:
+	if not (current_attacker_idx != -1 or summon_targeting or activate_targeting or cast_targeting or parasite_targeting):
+		return false
+	cancel_attack()
+	update_entire_screen()
+	return true
+
+
 func cancel_attack():
 	var resume_auto_summon := summon_targeting
-	if NetworkManager.is_online and (current_attacker_idx != -1 or summon_targeting or activate_targeting or cast_targeting or parasite_targeting):
-		NetworkManager.rpc_targeting_arrow.rpc(-1, -1, game.current_player)
+	if PlayerData.is_online_battle() and (current_attacker_idx != -1 or summon_targeting or activate_targeting or cast_targeting or parasite_targeting):
+		NetworkManager.rpc_targeting_arrow.rpc(NetworkManager.battle_match_id, -1, -1, game.current_player)
 	current_attacker_idx = -1
 	summon_targeting = false
 	summon_source_slot = -1
@@ -874,6 +1062,183 @@ func cancel_attack():
 
 
 # ============================================
+# Skill interaction handlers (view discard/deck, hand cost reduction)
+# ============================================
+
+func _on_shuffle_discard_into_deck() -> void:
+	if game.shared_discard.is_empty():
+		return
+	game.shared_deck = game.shared_discard.duplicate()
+	game.shared_discard.clear()
+	game._shuffle_shared_deck()
+	AppAudio.play("shuffle")
+	print("[Main] Discard shuffled into deck (%d cards)" % game.shared_deck.size())
+
+
+func _on_view_discard_select(count: int, draw_count: int, current_player: int, hand: Array) -> void:
+	if game.shared_discard.is_empty():
+		return
+	var cards: Array = game.shared_discard
+	if draw_count > 0:
+		cards = cards.slice(0, min(draw_count, cards.size()))
+	_show_pile_selection_popup(cards, count, "discard", hand, current_player)
+
+
+func _on_view_deck_select(count: int, draw_count: int, current_player: int, hand: Array) -> void:
+	if game.shared_deck.is_empty():
+		return
+	var draw_n: int = draw_count if draw_count > 0 else count * 2
+	var display_cards: Array = game.shared_deck.slice(0, min(draw_n, game.shared_deck.size()))
+	_show_pile_selection_popup(display_cards, count, "deck", hand, current_player)
+
+
+func _on_make_zero_cost_select(reduction: int, cost_mode: String, player: int, hand: Array, target: String, _random_count: int) -> void:
+	var candidates := _positive_cost_cards(hand)
+	if candidates.is_empty(): return
+	if PlayerData.is_online_battle():
+		if NetworkManager.is_authority() and player in [1, 2] and game.pending_cost_choices.size() < UgcSafety.MAX_EXECUTED_EFFECT_NODES:
+			game.pending_cost_choices.append({"player": player, "reduction": reduction, "cost_mode": cost_mode, "target": target})
+		return
+	# Finish the synchronous skill chain before checking its queued roll feedback.
+	_show_cost_picker_after_feedback.call_deferred(hand, reduction, cost_mode, target)
+
+
+func _show_cost_picker_after_feedback(hand: Array, reduction: int, cost_mode: String, target: String) -> void:
+	await _wait_for_random_feedback()
+	if not is_inside_tree() or battle_finished: return
+	var candidates := _positive_cost_cards(hand)
+	if not candidates.is_empty():
+		_show_zero_cost_selection_popup(candidates, reduction, cost_mode, 1, hand, target)
+
+
+func _positive_cost_cards(hand: Array) -> Array:
+	return hand.filter(func(card): return card is CardData and card.cost > 0)
+
+
+func _cost_picker_title(reduction: int, cost_mode: String, target: String) -> String:
+	var sides := target in [SkillEngine.TARGET_SIDES, SkillEngine.TARGET_SELF_SIDES]
+	return Locale.t("battle.reduce_cost_title_sides" if sides else "battle.reduce_cost_title", [reduction, Locale.term("cost_reduction_mode", cost_mode)])
+
+
+func _apply_cost_choice(hand: Array, index: int, reduction: int, cost_mode: String, target: String) -> void:
+	var sides := target in [SkillEngine.TARGET_SIDES, SkillEngine.TARGET_SELF_SIDES]
+	var radius := 1 if sides else 0
+	for affected in range(maxi(0, index-radius), mini(hand.size(), index+radius+1)):
+		hand[affected].apply_cost_reduction(reduction, cost_mode == SkillRegistry.COST_REDUCTION_PERMANENT)
+
+
+func _sync_online_cost_picker() -> void:
+	if not PlayerData.is_online_battle() or game == null: return
+	if is_instance_valid(_online_cost_picker):
+		if game.pending_cost_choices.is_empty() or battle_finished or _online_cost_picker.get_meta("revision") != game.state_revision:
+			_online_cost_picker.set_meta("submitted", true)
+			_online_cost_picker.queue_free()
+		return
+	if game.pending_cost_choices.is_empty() or battle_finished or match_paused or is_resolution_locked() \
+			or _waiting_for_room_link() or NetworkManager.pending_game_command_count() > 0:
+		return
+	var choice: Dictionary = game.pending_cost_choices.front()
+	var hand := _hand_for_player(int(choice.player))
+	var candidates := _positive_cost_cards(hand)
+	if candidates.is_empty():
+		if NetworkManager.is_authority(): _resolve_online_cost_choice(int(choice.player), -1)
+		return
+	if choice.player != _view_player(): return
+	var revision: int = game.state_revision
+	var picker: CanvasLayer = preload("res://CardCollectionDialog.gd").show_cards(self, candidates,
+		_cost_picker_title(int(choice.reduction), choice.cost_mode, choice.target), 1)
+	_online_cost_picker = picker
+	picker.set_meta("revision", revision)
+	picker.on_confirm = func(selected: Array):
+		picker.set_meta("submitted", true)
+		_submit_online_cost_choice(revision, hand.find(selected[0]))
+	picker.tree_exiting.connect(func():
+		if not picker.get_meta("submitted", false): _submit_online_cost_choice.call_deferred(revision, -1))
+
+
+func _submit_online_cost_choice(revision: int, index: int) -> void:
+	if not is_inside_tree() or game.state_revision != revision or battle_finished or match_paused or _waiting_for_room_link(): return
+	if NetworkManager.is_authority():
+		_resolve_online_cost_choice(_view_player(), index)
+	else:
+		# Complete the skill through its existing command envelope so the relay needs no new RPC.
+		NetworkManager.send_game_intent("activate_skill", {"cost_choice": index}, _view_player(), revision)
+
+
+func _resolve_online_cost_choice(player: int, index: int) -> void:
+	if game.pending_cost_choices.is_empty(): return
+	var choice: Dictionary = game.pending_cost_choices.front()
+	if choice.player != player: return
+	var hand := _hand_for_player(player)
+	if index != -1:
+		if index < 0 or index >= hand.size() or hand[index].cost <= 0: return
+		_apply_cost_choice(hand, index, int(choice.reduction), choice.cost_mode, choice.target)
+	game.pending_cost_choices.pop_front()
+	_refresh_hand_ui()
+	update_entire_screen()
+	_commit_authority_state("cost choice")
+
+
+func _show_pile_selection_popup(cards: Array, count: int, source: String, hand: Array, player: int) -> void:
+	var source_label: String = Locale.t("battle.draw_pile") if source == "deck" else Locale.t("battle.discard_pile")
+	var limit := mini(count, cards.size())
+	if limit <= 0:
+		return
+	var on_selected := func(selected_cards: Array, source_positions: Array):
+		var pile: Array = game.shared_deck if source == "deck" else game.shared_discard
+		for index in range(selected_cards.size()):
+			var chosen: CardData = selected_cards[index]
+			if chosen not in pile:
+				continue
+			pile.erase(chosen)
+			var origin: Vector2 = source_positions[index] if index < source_positions.size() else Vector2.ZERO
+			game.resolve_hand_entry_for_player(chosen, source, {
+				"source_position": origin,
+				"source_instance_id": chosen.instance_id,
+			}, player)
+		_refresh_hand_ui()
+		update_entire_screen()
+		if PlayerData.is_online_battle() and NetworkManager.is_authority():
+			_commit_authority_state("pile selection")
+	preload("res://CardCollectionDialog.gd").show_cards(
+		self,
+		cards,
+		Locale.t("battle.choose_keep") + " (" + source_label + ")",
+		limit,
+		on_selected,
+		true
+	)
+
+
+func _show_zero_cost_selection_popup(candidates: Array, reduction: int, cost_mode: String = SkillRegistry.COST_REDUCTION_TURN,
+		count: int = 1, hand: Array = [], target: String = SkillEngine.TARGET_SELF) -> void:
+	var include_sides: bool = target in [SkillEngine.TARGET_SIDES, SkillEngine.TARGET_SELF_SIDES]
+	var actual_hand: Array = hand if not hand.is_empty() else _my_hand()
+	var title := _cost_picker_title(reduction, cost_mode, target)
+	preload("res://CardCollectionDialog.gd").show_cards(self, candidates, title, count,
+		func(selected_cards: Array):
+			var applied: Array = []
+			for chosen: CardData in selected_cards:
+				var index := actual_hand.find(chosen)
+				if index < 0:
+					continue
+				if chosen not in applied:
+					applied.append(chosen)
+				if include_sides:
+					for offset in [-1, 1]:
+						var adjacent: int = index + offset
+						if adjacent >= 0 and adjacent < actual_hand.size():
+							var card: CardData = actual_hand[adjacent]
+							if card not in applied:
+								applied.append(card)
+			for card: CardData in applied:
+				card.apply_cost_reduction(reduction, cost_mode == SkillRegistry.COST_REDUCTION_PERMANENT)
+			_refresh_hand_ui()
+			update_entire_screen()
+	)
+
+
+# ============================================
 # Turn
 # ============================================
 
@@ -884,51 +1249,76 @@ static func end_turn_execution_path(online: bool, authority: bool) -> String:
 
 
 func _on_end_turn_pressed():
-	if not game.is_player_turn or not is_my_turn():
+	if not _owns_current_turn():
 		return
 	if not _tutorial_allows("end_turn"):
 		return
 	if _turn_ending:
 		return
+	# Accept the request now, then let deployment and its triggered feedback
+	# complete before starting any end-of-turn rules.
 	_turn_ending = true
 	end_turn_button.disabled = true
-	match end_turn_execution_path(NetworkManager.is_online, NetworkManager.is_authority()):
+	var player: int = game.current_player
+	var turn: int = game.turn_number
+	var allow_face_mana: bool = face_mana_button.button_pressed
+	while _deployment_feedback_delay()>0 or is_resolution_locked() or _turn_request_playback_pending() or not _hp_feedback_batches.is_empty() or hand_container.get_children().any(func(card): return card.get_meta("tabletop_arriving",false)):
+		await get_tree().process_frame
+		if not is_inside_tree(): return
+		if not _owns_current_turn() or game.current_player!=player or game.turn_number!=turn:
+			_turn_ending = false
+			update_entire_screen()
+			return
+	_turn_ending = false
+	await _finish_end_turn(allow_face_mana)
+
+
+func _finish_end_turn(allow_face_mana: bool) -> void:
+	if _turn_ending or not is_my_turn(): return
+	_turn_ending = true
+	end_turn_button.disabled = true
+	match end_turn_execution_path(PlayerData.is_online_battle(), NetworkManager.is_authority()):
 		"authority":
-			await _host_apply_end_turn(game.current_player)
+			await _host_apply_end_turn(game.current_player, allow_face_mana)
+			_reset_face_mana_toggle()
 			_turn_ending = false
 			return
 		"remote":
-			if _send_remote_intent("end_turn", {}) == "":
+			var checkpoint := {"turn_hash": _web_turn_hash()} if _has_online_prediction() else {}
+			checkpoint["allow_face_mana"] = allow_face_mana
+			if _send_remote_intent("end_turn", checkpoint) == "":
 				_turn_ending = false
 				update_entire_screen()
 			# Non-authority stays locked until authority state arrives
 			return
-	await _run_local_end_turn()
-	_turn_ending = false
+	await _run_local_end_turn(allow_face_mana)
+	_reset_face_mana_toggle()
 	_tutorial_notify("end_turn")
 
 
-func _run_local_end_turn() -> void:
-	var result = game.end_player_turn()
+func _run_local_end_turn(allow_face_mana: bool = true) -> void:
+	var result = game.end_player_turn(allow_face_mana)
 	_show_direct_damage(result)
 	end_turn_button.disabled = true
 	update_entire_screen()
+	await _wait_for_direct_damage()
 	if _check_and_show_game_over():
+		_turn_ending = false
 		return
 	await get_tree().create_timer(0.5).timeout
 	game.start_new_turn()
-	_show_turn_banner()
+	AppAudio.play("turn")
 	if game.current_player == _view_player() and _my_hand().size() >= SkillEngine.MAX_HAND_SIZE:
 		_show_toast("tip.hand_full", [SkillEngine.MAX_HAND_SIZE])
 	_refresh_hand_ui()
-	end_turn_button.disabled = false
+	_turn_ending = false
 	update_entire_screen()
 	if PlayerData.battle_mode == "practice" and game.current_player == 2:
 		_start_practice_ai_turn.call_deferred()
 
 
 func _start_practice_ai_turn() -> void:
-	if NetworkManager.is_online or PlayerData.battle_mode != "practice" or game.current_player != 2 or practice_ai_running:
+	if PlayerData.is_online_battle() or PlayerData.battle_mode != "practice" or game.current_player != 2 or practice_ai_running:
 		return
 	await _run_practice_ai_turn()
 
@@ -937,7 +1327,7 @@ func _run_practice_ai_turn() -> void:
 	practice_ai_running = true
 	end_turn_button.disabled = true
 	update_entire_screen()
-	await get_tree().create_timer(0.35).timeout
+	await get_tree().create_timer(0.35, false).timeout
 	var action_count := 0
 	while action_count < 40 and game.current_player == 2:
 		action_count += 1
@@ -946,26 +1336,55 @@ func _run_practice_ai_turn() -> void:
 			break
 		var source_slot := int(action.get("source_slot", action.get("slot", -1)))
 		var target_slot := int(action.get("target_slot", -1))
+		var action_type := str(action.get("type", ""))
+		var source: CardData = game.player2_field.slots[source_slot] if source_slot in range(5) else null
+		var hand_index := int(action.get("hand_index", -1))
+		if action_type in ["summon", "cast"] and hand_index >= 0 and hand_index < game.player2_hand.size():
+			source = game.player2_hand[hand_index]
+		var target: CardData = game.player_field.slots[target_slot] if target_slot in range(5) else null
+		_begin_action_broadcast("skill" if action_type == "activate" else action_type, 2, source.card_name if source != null else "", target.card_name if target != null else "")
 		var result := BattleCommand.apply_action(game, action)
 		if not bool(result.get("ok", false)):
+			_action_broadcast.clear()
 			push_warning("Practice AI rejected action: %s" % [action])
 			break
-		match str(action.get("type", "")):
-			"attack": _play_attack_feedback(2, source_slot, target_slot)
+		if action_type == "attack":
+			_action_presentation_events.push_front({
+				"kind": "attack_motion", "player": 2, "source_slot": source_slot, "target_slot": target_slot,
+				"feedback_group": 0, "projectile": true, "board_before": _random_action_before,
+			})
+		# Resolve death passives in this same chain, so their probability rolls
+		# still precede the hit. Only the visual removal waits until impact.
+		var deaths: Dictionary = game.cleanup_deaths()
+		for player in [1, 2]:
+			for dead_slot in deaths.get("p%d" % player, []):
+				_action_presentation_events.append({"kind":"ai_death", "player":player, "slot":dead_slot, "feedback_group":_action_feedback_next_group})
+		if action_type == "summon":
+			_play_summon_feedback(_slot_ui_for_player(2, int(action.get("slot", -1))))
+		_refresh_hand_ui()
+		_finish_action_broadcast()
+		update_entire_screen()
+		match action_type:
 			"activate": _play_skill_cast_feedback(2, source_slot)
 			"cast": _play_spell_cast_from_hand_feedback()
-		_apply_deaths()
+		# Keep the current cards visible until their attack and triggered effects
+		# have landed; do not let the next AI command overtake this presentation.
+		await get_tree().process_frame
+		while is_inside_tree() and (_hp_feedback_running or not _hp_feedback_batches.is_empty() or _random_feedback_pending > 0 or not _random_unbatched_events.is_empty()):
+			await get_tree().process_frame
 		_check_charm_overflow()
 		_refresh_hand_ui()
 		update_entire_screen()
 		if _check_and_show_game_over():
 			practice_ai_running = false
 			return
-		await get_tree().create_timer(0.12).timeout
+		await _wait_for_deployment_feedback()
+		await get_tree().create_timer(0.12, false).timeout
+		await _wait_for_random_feedback()
 	if _check_and_show_game_over():
 		practice_ai_running = false
 		return
-	await get_tree().create_timer(0.35).timeout
+	await get_tree().create_timer(0.35, false).timeout
 	practice_ai_running = false
 	await _run_local_end_turn()
 
@@ -1029,7 +1448,7 @@ func _practice_ai_use_skills() -> void:
 	game.current_player = 2
 	for slot in range(game.player2_field.slots.size()):
 		var card: CardData = game.player2_field.slots[slot]
-		if card == null or card.is_silenced():
+		if card == null or card.skills_disabled():
 			continue
 		for skill_idx in range(card.skills.size()):
 			if card.skills_used.has(skill_idx):
@@ -1041,13 +1460,12 @@ func _practice_ai_use_skills() -> void:
 			var target_slot := _practice_ai_skill_target_slot(skill)
 			if target_slot == -2:
 				continue
-			card.skills_used.append(skill_idx)
 			if trigger == SkillEngine.TRIGGER_ON_SUMMON:
+				card.skills_used.append(skill_idx)
 				game.trigger_summon_skills(slot, target_slot, skill_idx)
 			else:
 				game.trigger_activate_skills(slot, target_slot, skill_idx)
-			_play_skill_cast_feedback(2, slot)
-			_show_splash(card)
+			_play_skill_cast_feedback(2, slot, skill_idx)
 			_apply_deaths()
 			if game.check_game_over() != "":
 				game.current_player = saved_player
@@ -1075,7 +1493,7 @@ func _practice_ai_attack_with_ready_cards() -> void:
 	game.current_player = 2
 	for slot in range(game.player2_field.slots.size()):
 		var card: CardData = game.player2_field.slots[slot]
-		if card == null or card.has_acted or card.is_silenced():
+		if card == null or card.has_acted or card.has_stun():
 			continue
 		var target_slot := _practice_ai_attack_target_slot(card)
 		if target_slot < 0:

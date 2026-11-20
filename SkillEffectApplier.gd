@@ -19,6 +19,8 @@ static func apply_effect(effect_str: String, target: Variant, value: int, skill:
 		push_error("[SkillEffectApplier] No handler registered for effect '%s'" % effect_str)
 		return
 	Callable(SkillEffectApplier, handler_name).call(target, value, skill, context)
+	if effect_str not in [SkillEngine.EFFECT_DAMAGE, SkillEngine.EFFECT_HEAL, SkillEngine.EFFECT_SHIELD, SkillEngine.EFFECT_GAIN_MANA, SkillEngine.EFFECT_MANA_DRAIN, SkillEngine.EFFECT_LIFESTEAL_DAMAGE, SkillEngine.EFFECT_ADD_BUFF]:
+		_metric(context, "unmeasured_effect", target, 1)
 
 
 static func _apply_damage(target: Variant, value: int, _skill: Dictionary, context: Dictionary) -> void:
@@ -28,6 +30,7 @@ static func _apply_damage(target: Variant, value: int, _skill: Dictionary, conte
 		var before: int = target.player_hp
 		target.damage_player(value)
 		var actual: int = maxi(0, before - target.player_hp)
+		_metric(context, "damage", target, actual)
 		_GameplayLog.write("  -> %s player takes %d dmg (HP: %d)" % [target.owner_name, actual, target.player_hp])
 		return
 	if not target is CardData:
@@ -42,27 +45,53 @@ static func _apply_damage(target: Variant, value: int, _skill: Dictionary, conte
 		value = int(parasite_result.get("remaining", value))
 		var parasite: CardData = parasite_result.get("parasite", null)
 		if parasite != null:
+			var sink: Callable = context.get("metrics_callable", Callable())
+			if sink.is_valid(): sink.call({"kind":"damage_prevented","source_card":parasite,"target_card":target,"source_player":3-int(context.get("current_player",0)),"amount":parasite_result.get("prevented",0)})
+			_metric(context, "parasite_damage", target, int(parasite_result.absorbed))
 			EventBus.parasite_damage_resolved.emit(target, parasite, declared, int(parasite_result.get("absorbed", 0)), bool(parasite_result.get("destroyed", false)))
 	var temp_hp_before: int = target.temp_hp
 	var actual: int = int(target.take_damage_without_reduction(value))
-	EventBus.damage_resolved.emit(source, target, declared, actual, reduction_pct, temp_hp_before, "skill")
+	_metric(context, "shield_damage", target, temp_hp_before - target.temp_hp)
+	_emit_damage(source, target, declared, actual, reduction_pct, temp_hp_before, "skill", context)
 	EventBus.hp_changed.emit(target, -actual, target.hp)
 	_trigger_damaged_safe(target, context)
 	_GameplayLog.write("  -> %s takes %d dmg (HP: %d)" % [target.card_name, actual, target.hp])
+
+
+static func _emit_damage(source: CardData, target: CardData, declared: int, actual: int, reduction_pct: int, temp_hp_before: int, reason: String, context: Dictionary) -> void:
+	_metric(context, "damage", target, actual)
+	var stats_callback: Callable = context.get("damage_stats_callable", Callable())
+	if EventBus.is_blocking_signals() and stats_callback.is_valid():
+		stats_callback.call(source, target, declared, actual, reduction_pct, temp_hp_before, reason)
+	EventBus.damage_resolved.emit(source, target, declared, actual, reduction_pct, temp_hp_before, reason)
+
+
+static func _metric(context: Dictionary, kind: String, target: Variant, amount: int, extra: Dictionary = {}) -> void:
+	var sink: Callable = context.get("metrics_callable", Callable())
+	if not sink.is_valid(): return
+	var row := extra.duplicate()
+	row.merge({"kind": kind, "source_card": context.get("metric_source_card", context.get("source_card")), "target_card": target, "source_player": int(context.get("current_player", 0)), "amount": amount})
+	sink.call(row)
 
 
 static func _trigger_damaged_safe(target: CardData, context: Dictionary) -> void:
 	# On-damaged triggers only fire for non-lethal damage (target still alive).
 	if target == null or not target.is_alive():
 		return
-	SkillEngine.trigger_skills(SkillEngine.TRIGGER_ON_DAMAGED, target, context)
-	ParasiteRules.trigger_host_passives(SkillEngine.TRIGGER_ON_DAMAGED, target, context)
+	var reaction := _reaction_context(target, context)
+	SkillEngine.trigger_skills(SkillEngine.TRIGGER_ON_DAMAGED, target, reaction)
+	ParasiteRules.trigger_host_passives(SkillEngine.TRIGGER_ON_DAMAGED, target, reaction)
 
 
 static func _trigger_healed_safe(target: CardData, context: Dictionary) -> void:
 	if target == null:
 		return
-	SkillEngine.trigger_skills(SkillEngine.TRIGGER_ON_HEALED, target, context)
+	SkillEngine.trigger_skills(SkillEngine.TRIGGER_ON_HEALED, target, _reaction_context(target, context))
+
+
+static func _reaction_context(target: CardData, context: Dictionary) -> Dictionary:
+	var factory: Callable = context.get("reaction_context_callable", Callable())
+	return factory.call(target, context) if factory.is_valid() else context
 
 
 static func _apply_heal(target: Variant, value: int, _skill: Dictionary, context: Dictionary) -> void:
@@ -72,6 +101,7 @@ static func _apply_heal(target: Variant, value: int, _skill: Dictionary, context
 		var before: int = target.player_hp
 		target.heal_player(value)
 		var actual: int = maxi(0, target.player_hp - before)
+		_metric(context, "healing", target, actual)
 		_GameplayLog.write("  -> %s player healed %d (HP: %d)" % [target.owner_name, actual, target.player_hp])
 		return
 	if not target is CardData:
@@ -79,6 +109,7 @@ static func _apply_heal(target: Variant, value: int, _skill: Dictionary, context
 	var before: int = int(target.hp)
 	target.heal(value)
 	var actual: int = maxi(0, int(target.hp) - before)
+	_metric(context, "healing", target, actual)
 	EventBus.hp_changed.emit(target, actual, target.hp)
 	_trigger_healed_safe(target, context)
 	_GameplayLog.write("  -> %s healed %d (HP: %d)" % [target.card_name, actual, target.hp])
@@ -93,18 +124,23 @@ static func _apply_draw_cards(_target: CardData, value: int, _skill: Dictionary,
 	_GameplayLog.write("  -> Draw %d cards" % value)
 
 
-static func _apply_shield(target: CardData, value: int, _skill: Dictionary, _context: Dictionary) -> void:
+static func _apply_shield(target: CardData, value: int, _skill: Dictionary, context: Dictionary) -> void:
 	if target == null or value <= 0:
 		return
 	target.temp_hp += value
-	_GameplayLog.write("  -> %s gains %d temp HP (total: %d)" % [target.card_name, value, target.temp_hp])
+	_metric(context, "shield", target, value)
+	_GameplayLog.write("  -> %s gains %d shield (total: %d)" % [target.card_name, value, target.temp_hp])
 
 
 static func _apply_buff(target: CardData, value: int, skill: Dictionary, context: Dictionary) -> void:
 	var buff_id: String = skill.get("buff_id", "")
+	if buff_id not in [SkillEngine.BUFF_ATK_BOOST, SkillEngine.BUFF_POISON, SkillEngine.BUFF_REGEN, SkillEngine.BUFF_MANA_REFUND]:
+		_metric(context, "unmeasured_effect", target, 1)
 	var duration: int = skill.get("duration", 1)
 	if buff_id != "":
 		target.apply_buff(buff_id, value, duration, context.get("current_player", 0))
+		if buff_id in [SkillEngine.BUFF_POISON, SkillEngine.BUFF_REGEN, SkillEngine.BUFF_MANA_REFUND] and not target.status_effects.is_empty():
+			_metric(context, "status_origin", target, 0, {"status": target.status_effects.back()})
 		if buff_id == SkillEngine.BUFF_IMMUNE_LETHAL and value > 0:
 			target.immune_lethal = true
 
@@ -122,16 +158,21 @@ static func _apply_lifesteal_damage(target: CardData, value: int, _skill: Dictio
 		value = int(parasite_result.get("remaining", value))
 		var parasite: CardData = parasite_result.get("parasite", null)
 		if parasite != null:
+			var sink: Callable = context.get("metrics_callable", Callable())
+			if sink.is_valid(): sink.call({"kind":"damage_prevented","source_card":parasite,"target_card":target,"source_player":3-int(context.get("current_player",0)),"amount":parasite_result.get("prevented",0)})
+			_metric(context, "parasite_damage", target, int(parasite_result.absorbed))
 			EventBus.parasite_damage_resolved.emit(target, parasite, declared, int(parasite_result.get("absorbed", 0)), bool(parasite_result.get("destroyed", false)))
 	var temp_hp_before: int = target.temp_hp
 	var actual := target.take_damage_without_reduction(value)
-	EventBus.damage_resolved.emit(source, target, declared, actual, reduction_pct, temp_hp_before, "lifesteal")
+	_metric(context, "shield_damage", target, temp_hp_before - target.temp_hp)
+	_emit_damage(source, target, declared, actual, reduction_pct, temp_hp_before, "lifesteal", context)
 	EventBus.hp_changed.emit(target, -actual, target.hp)
 	_trigger_damaged_safe(target, context)
 	if source != null and actual > 0 and source.is_alive():
 		var source_before := source.hp
 		source.heal(actual)
 		var healed := maxi(0, source.hp - source_before)
+		_metric(context, "healing", source, healed)
 		EventBus.hp_changed.emit(source, healed, source.hp)
 		_trigger_healed_safe(source, context)
 		_GameplayLog.write("  -> %s takes %d lifesteal dmg; %s heals %d (HP: %d)" % [target.card_name, actual, source.card_name, healed, source.hp])
@@ -139,39 +180,41 @@ static func _apply_lifesteal_damage(target: CardData, value: int, _skill: Dictio
 		_GameplayLog.write("  -> %s takes %d lifesteal dmg" % [target.card_name, actual])
 
 
-static func _apply_execute(target: CardData, value: int, _skill: Dictionary, _context: Dictionary) -> void:
+static func _apply_execute(target: CardData, value: int, _skill: Dictionary, context: Dictionary) -> void:
 	if target == null or value <= 0:
 		return
 	if target.hp <= value:
-		var actual := target.hp
+		var before := target.hp
 		if target.immune_lethal:
 			target.take_damage_without_reduction(target.hp)
 		else:
 			target.hp = 0
-		EventBus.damage_resolved.emit(null, target, actual, actual, 0, 0, "execute")
-		EventBus.hp_changed.emit(target, target.hp - actual, target.hp)
+		var actual := maxi(0, before - target.hp)
+		_emit_damage(context.get("source_card"), target, before, actual, 0, 0, "execute", context)
+		EventBus.hp_changed.emit(target, target.hp - before, target.hp)
 		var message := "  -> %s executed" % target.card_name if target.hp <= 0 else "  -> %s resisted execute with lethal immunity" % target.card_name
 		_GameplayLog.write(message)
 	else:
 		_GameplayLog.write("  -> %s resisted execute (HP: %d > %d)" % [target.card_name, target.hp, value])
 
 
-static func _apply_remove_statuses(target: CardData, buff_ids: Array, label: String) -> void:
+static func _apply_remove_statuses(target: CardData, buff_ids: Array, label: String, context: Dictionary) -> void:
 	var removed := 0
 	for i in range(target.status_effects.size() - 1, -1, -1):
 		var eff: Dictionary = target.status_effects[i]
 		if eff.get("buff_id", "") in buff_ids:
+			_metric(context, "status_expired", target, 0, {"status": eff})
 			target.status_effects.remove_at(i)
 			removed += 1
 	_GameplayLog.write("  -> %s %s removed %d status(es)" % [target.card_name, label, removed])
 
 
-static func _apply_cleanse(target: CardData, _value: int, _skill: Dictionary, _context: Dictionary) -> void:
-	_apply_remove_statuses(target, SkillRegistry.negative_buffs(), "cleanse")
+static func _apply_cleanse(target: CardData, _value: int, _skill: Dictionary, context: Dictionary) -> void:
+	_apply_remove_statuses(target, SkillRegistry.negative_buffs(), "cleanse", context)
 
 
-static func _apply_dispel(target: CardData, _value: int, _skill: Dictionary, _context: Dictionary) -> void:
-	_apply_remove_statuses(target, SkillRegistry.positive_buffs(), "dispel")
+static func _apply_dispel(target: CardData, _value: int, _skill: Dictionary, context: Dictionary) -> void:
+	_apply_remove_statuses(target, SkillRegistry.positive_buffs(), "dispel", context)
 
 
 static func _apply_gain_mana(_target: CardData, value: int, _skill: Dictionary, context: Dictionary) -> void:
@@ -184,6 +227,7 @@ static func _apply_gain_mana(_target: CardData, value: int, _skill: Dictionary, 
 	else:
 		# Negative mana: deduct from current mana (capped at 0)
 		field.current_mana = max(0, field.current_mana + value)
+	_metric(context, "mana_gained" if field.current_mana >= before else "mana_removed", field, absi(field.current_mana - before))
 	_GameplayLog.write("  -> Gain %d mana (%d -> %d)" % [value, before, field.current_mana])
 
 
@@ -230,11 +274,9 @@ static func _apply_change_cost(target: CardData, value: int, _skill: Dictionary,
 	_GameplayLog.write("  -> %s changes match cost by %d (%d -> %d)" % [target.card_name, value, before, target.cost])
 
 
-static func _should_parasite_absorb(target: CardData, context: Dictionary) -> bool:
-	if target == null or target.parasite_cards.is_empty():
-		return false
-	var skill_target: String = context.get("effect_target", "")
-	return skill_target in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES]
+static func _should_parasite_absorb(target: CardData, _context: Dictionary) -> bool:
+	# Target selection does not change how a hit is blocked.
+	return target != null and ParasiteRules.has_damage_absorber(target)
 
 
 static func _apply_charm(target: CardData, _value: int, _skill: Dictionary, context: Dictionary) -> void:
@@ -410,8 +452,11 @@ static func _apply_mana_drain(_target: CardData, value: int, _skill: Dictionary,
 		ef.current_mana = max(0, ef.current_mana - drained)
 		_GameplayLog.write("  -> Enemy loses %d mana (%d)" % [drained, ef.current_mana])
 	if pf != null:
+		var before := pf.current_mana
 		pf.add_mana(drained)
+		_metric(context, "mana_gained", pf, pf.current_mana - before)
 		_GameplayLog.write("  -> Self gains %d mana (%d)" % [drained, pf.current_mana])
+	_metric(context, "mana_drained", ef, drained)
 
 
 static func _apply_swap_attack(target: CardData, _value: int, _skill: Dictionary, context: Dictionary) -> void:
@@ -440,16 +485,20 @@ static func _apply_discard_hand(_target: CardData, value: int, _skill: Dictionar
 	var current_player := int(context.get("current_player", 1))
 	var victim_player := 2 if current_player == 1 else 1
 	var count: int = min(value, enemy_hand.size())
+	var original_hand := enemy_hand.duplicate()
+	var removed: Array = []
 	for _i in range(count):
 		var idx: int = rng.randi_range(0, enemy_hand.size() - 1)
 		var card: CardData = enemy_hand[idx]
 		enemy_hand.remove_at(idx)
 		if card != null:
+			removed.append({"card":card.duplicate_card(),"index":original_hand.find(card)})
 			if discard_cb.is_valid():
 				discard_cb.call(card, victim_player, "effect")
 			else:
 				card.reset_to_base()
 				discard_pile.append(card)
+	EventBus.enemy_hand_discarded.emit(current_player,original_hand.size(),removed)
 	_GameplayLog.write("  -> Enemy discards %d card(s)" % count)
 
 

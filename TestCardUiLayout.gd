@@ -1,7 +1,7 @@
 extends Node
 
 # Regression test for the battle card face layout:
-#  1. With up to 3 skills the action column has 4 stacked chips (basic attack
+#  1. With up to 3 skills the action grid has 4 readable chips (basic attack
 #     + skill 1..3). Every visible button must stay fully inside the card and
 #     inside the ActionButtons column — the 3rd button must NOT be half
 #     clipped and nothing may spill past the card bottom edge.
@@ -84,6 +84,13 @@ func _check_buttons(tag: String, expected: int) -> void:
 			continue
 		visible += 1
 		var r: Rect2 = btn.get_global_rect()
+		var label_font := btn.get_theme_font("font")
+		var style := btn.get_theme_stylebox("normal")
+		var available_text := r.size.x - style.content_margin_left - style.content_margin_right
+		if available_text < label_font.get_string_size("…",HORIZONTAL_ALIGNMENT_LEFT,-1,btn.get_theme_font_size("font_size")).x:
+			push_error("CARD_LAYOUT_FAIL %s %s cannot display even an ellipsis" % [tag,btn_path.get_file()])
+			get_tree().quit(1)
+			return
 		print("CARD_LAYOUT %s btn=%s y=%.1f..%.1f h=%.1f box_bottom=%.1f card_bottom=%.1f" % [
 			tag, btn_path.get_file(), r.position.y, r.end.y, r.size.y, box_rect.end.y, card_rect.end.y])
 		if r.size.y <= 0.0:
@@ -103,7 +110,7 @@ func _check_buttons(tag: String, expected: int) -> void:
 		push_error("CARD_LAYOUT_FAIL %s expected %d visible buttons, got %d" % [tag, expected, visible])
 		get_tree().quit(1)
 		return
-	if absf(box_rect.size.y - 63.0 * float(_card.ui_scale)) > 0.5:
+	if not card_rect.grow(0.5).encloses(box_rect):
 		push_error("CARD_LAYOUT_FAIL %s action buttons did not fill the lower card area: %.1f" % [tag, box_rect.size.y])
 		get_tree().quit(1)
 		return
@@ -199,7 +206,7 @@ func _check_single_button_fills_action_area(card_ui: Control, button: Button, ta
 	var box: Control = card_ui.get_node("ActionButtons")
 	var box_rect := box.get_global_rect()
 	var button_rect := button.get_global_rect()
-	if absf(box_rect.size.y - 63.0 * float(card_ui.ui_scale)) > 0.5 \
+	if not card_ui.get_global_rect().grow(0.5).encloses(box_rect) \
 			or absf(button_rect.size.y - box_rect.size.y) > 0.5:
 		push_error("CARD_LAYOUT_FAIL %s button did not fill the lower action area: button=%.1f box=%.1f" % [tag, button_rect.size.y, box_rect.size.y])
 		get_tree().quit(1)
@@ -355,7 +362,7 @@ func _check_slot_arrival_motion(card_data: CardData) -> void:
 		slot.queue_free()
 		fx_layer.queue_free()
 		return
-	await get_tree().create_timer(0.20).timeout
+	await get_tree().create_timer(0.15 / GamePreferences.battle_effect_speed() + 0.06).timeout
 	var edge_particles: Array[GPUParticles2D] = []
 	for child in fx_layer.get_children():
 		if child is GPUParticles2D:

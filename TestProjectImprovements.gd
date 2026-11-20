@@ -34,10 +34,8 @@ func _test_gameplay_logging() -> void:
 
 
 func _test_input_controls() -> void:
-	var selector := preload("res://BattleDeckSelect.tscn").instantiate()
 	var rows := VBoxContainer.new()
-	selector.add_child(rows)
-	var result: Dictionary = selector._make_config_check_row(rows, "测试开关", false)
+	var result: Dictionary = preload("res://presentation/BattleRulesEditor.gd")._make_config_check_row(rows, "测试开关", false)
 	var toggle = result.get("check")
 	_check(toggle is CheckButton, "battle parameter booleans must use visible sliding switches")
 	_check(toggle.has_theme_stylebox_override("normal"), "battle parameter switch must use the shared interaction outline")
@@ -46,7 +44,7 @@ func _test_input_controls() -> void:
 	var style := input.get_theme_stylebox("normal") as StyleBoxFlat
 	_check(style != null and style.get_border_width(SIDE_LEFT) > 0 and style.border_color.a > 0.5, "player text inputs need a visible soft outline")
 	input.free()
-	selector.free()
+	rows.free()
 
 
 func _test_battle_log_copy() -> void:
@@ -65,14 +63,14 @@ func _test_battle_log_copy() -> void:
 	var prior_language := Locale.language
 	Locale.language = "zh"
 	var zh := BattleLogFormatter.format_event(event, 1)
-	_check("己方·先锋 → 敌方·守卫" in zh, "Chinese attack copy must lead with actor and target")
-	_check("生命 5/5 → 3/5" in zh and "护盾 2 → 0" in zh and "状态 无 → 嘲讽（2回合）" in zh, "Chinese battle copy must show before/after HP and status values")
+	_check(zh == "己方【先锋】攻击敌方【守卫】。", "Chinese attack copy must lead with actor and target")
+	_check(not "生命" in zh and not "护盾" in zh and not "状态" in zh, "Chinese battle copy must omit effect and state details")
 	_check(not "伤害结算" in zh and not "减伤" in zh and not "吸收" in zh and not "圣水" in zh, "battle copy must not explain the causes of state changes")
-	_check("生命 5/5 → 3/5" in BattleLogFormatter.summary(zh), "broadcast summary must keep the first state change")
+	_check(BattleLogFormatter.summary(zh) == zh, "broadcast summary must keep the complete action")
 	var utility_event := event.duplicate(true)
 	utility_event.merge({"kind": "skill", "skill": "洞察", "before_state": {"p1_hp": 30, "p2_hp": 30, "cards": {}}, "after_state": {"p1_hp": 30, "p2_hp": 30, "cards": {}}}, true)
 	var utility_summary := BattleLogFormatter.summary(BattleLogFormatter.format_event(utility_event, 1))
-	_check("生命与状态无变化" in utility_summary, "actions without HP or status changes must say so without naming their effects")
+	_check(utility_summary == "己方【先锋】使用【洞察】。", "utility actions must only identify the actor and skill")
 	var parasite_event := utility_event.duplicate(true)
 	parasite_event.merge({"kind": "parasite", "source": "护命虫", "target": "先锋", "before_state": {"p1_hp": 30, "p2_hp": 30, "cards": {
 		"1:0": {"player": 1, "instance_id": "vanguard", "name": "先锋", "hp": 5, "max_hp": 5, "shield": 0, "attack": 5, "statuses": [], "parasites": []},
@@ -80,7 +78,7 @@ func _test_battle_log_copy() -> void:
 		"1:0": {"player": 1, "instance_id": "vanguard", "name": "先锋", "hp": 5, "max_hp": 5, "shield": 0, "attack": 5, "statuses": [], "parasites": [{"name": "护命虫", "hp": 2, "max_hp": 2}]},
 	}}}, true)
 	var parasite_copy := BattleLogFormatter.format_event(parasite_event, 1)
-	_check("寄生 无 → 护命虫（生命 2/2）" in parasite_copy and not "承受" in parasite_copy, "parasite broadcasts must show only attachment state changes")
+	_check(parasite_copy == "己方将【护命虫】附着到【先锋】。", "parasite broadcasts must only identify the attachment action")
 	event["source"] = "Vanguard"
 	event["target"] = "Guard"
 	event["before_state"]["cards"]["1:0"]["name"] = "Vanguard"
@@ -89,8 +87,8 @@ func _test_battle_log_copy() -> void:
 	event["after_state"]["cards"]["2:0"]["name"] = "Guard"
 	Locale.language = "en"
 	var en := BattleLogFormatter.format_event(event, 1)
-	_check("Friendly · Vanguard → Enemy · Guard" in en, "English attack copy must lead with actor and target")
-	_check("HP 5/5 → 3/5" in en and "Status None → Taunt (2 turns)" in en, "English battle copy must describe only before/after values")
+	_check(en == "Friendly [Vanguard] attacked Enemy [Guard].", "English attack copy must lead with actor and target")
+	_check(not "HP" in en and not "Status" in en, "English battle copy must omit state details")
 	_check(not "damage" in en.to_lower() and not "chance" in en.to_lower(), "English battle copy must omit causal explanations")
 	_check(not "；" in en and en.ends_with("."), "English battle copy must use English punctuation")
 	Locale.language = prior_language
@@ -130,7 +128,7 @@ func _on_event(_card: CardData, _delta: int, _hp: int) -> void:
 
 
 func _test_search_and_challenges() -> void:
-	_check(PracticeChallenges.IDS.size() == 7, "challenge catalog must contain seven lessons")
+	_check(PracticeChallenges.IDS.size() == 9, "challenge catalog must contain seven skill lessons and two action-planning lessons")
 	_check(PracticeChallenges.IDS[1] == "combination" and PracticeChallenges.IDS.back() == "parasite", "challenge sequence must preserve next and final states")
 	var old_language := Locale.language
 	for language in ["zh", "en"]:
@@ -159,6 +157,8 @@ func _test_challenge_failure_paths() -> void:
 		"cleanse": {"type": "cast", "hand_index": 1, "skill_index": 0, "target_slot": 0, "target_player": 1},
 		"dispel": {"type": "cast", "hand_index": 1, "skill_index": 0, "target_slot": 0, "target_player": 1},
 		"execute": {"type": "cast", "hand_index": 1, "skill_index": 0, "target_slot": 0, "target_player": 2},
+		"action_reserve": {"type": "cast", "hand_index": 0, "skill_index": 0, "target_slot": 0, "target_player": 2},
+		"action_finish": {"type": "end_turn"},
 		"parasite": {"type": "attach", "hand_index": 0, "target_slot": 0, "target_player": 2},
 	}
 	for id in PracticeChallenges.IDS:
@@ -199,6 +199,14 @@ func _test_challenge_solution_paths() -> void:
 		"parasite": [
 			{"type": "attach", "hand_index": 0, "target_slot": 0, "target_player": 1},
 			{"type": "attack", "source_slot": 0, "target_slot": 0},
+		],
+		"action_reserve": [
+			{"type": "activate", "slot": 0, "skill_index": 0, "target_slot": 1, "target_player": 1},
+			{"type": "attack", "source_slot": 1, "target_slot": 0},
+		],
+		"action_finish": [
+			{"type": "cast", "hand_index": 0, "skill_index": 0, "target_slot": 0, "target_player": 1},
+			{"type": "end_turn"},
 		],
 	}
 	for id in PracticeChallenges.IDS:

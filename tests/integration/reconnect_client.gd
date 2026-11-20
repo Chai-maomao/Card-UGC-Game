@@ -2,6 +2,7 @@ extends Node
 
 var _role: int = 1
 var _room_code: String = ""
+var _server_address := "127.0.0.1"
 var _elapsed: float = 0.0
 var _room_ready_count: int = 0
 var _disconnect_started: bool = false
@@ -19,6 +20,8 @@ func _ready() -> void:
 			_role = int(arg.get_slice("=", 1))
 		elif arg.begins_with("--code="):
 			_room_code = arg.get_slice("=", 1)
+		elif arg.begins_with("--address="):
+			_server_address = arg.get_slice("=", 1)
 	if _room_code.is_empty():
 		_fail("missing room code")
 		return
@@ -33,7 +36,7 @@ func _ready() -> void:
 	EventBus.rpc_game_intent_received.connect(_on_game_intent)
 	NetworkManager.reconnect_failed.connect(func(reason: String): _fail("reconnect failed: %s" % reason))
 	NetworkManager.game_command_status.connect(_on_game_command_status)
-	var error := NetworkManager.connect_to_lobby("127.0.0.1", Callable(self, "_on_lobby_response"))
+	var error := NetworkManager.connect_to_lobby(_server_address, Callable(self, "_on_lobby_response"))
 	if error != OK:
 		_fail("lobby connect error %d" % error)
 
@@ -64,7 +67,7 @@ func _on_lobby_response(data: Dictionary) -> void:
 	var port := int(data.get("port", 0))
 	var assigned := int(data.get("player", 0))
 	var token := str(data.get("reconnect_token", ""))
-	var error := NetworkManager.connect_to_game_room("127.0.0.1", port, assigned, _room_code, token)
+	var error := NetworkManager.connect_to_game_room(_server_address, port, assigned, _room_code, token)
 	if error != OK:
 		_fail("room connect error %d" % error)
 

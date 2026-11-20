@@ -36,13 +36,13 @@ static func generate_legal_actions(game: RefCounted) -> Array:
 			taunt_slots.append(slot)
 	for source_slot in range(field.slots.size()):
 		var source: CardData = field.slots[source_slot]
-		if source == null or not source.is_alive() or source.has_acted:
+		if source == null or not source.is_alive() or not game.can_pay_action():
 			continue
-		if game.turn_number > 1 and (not source.is_silenced() or source.attack_ignores_silence):
+		if not source.has_acted and game.turn_number > 1 and not source.has_stun():
 			var targets := taunt_slots if not taunt_slots.is_empty() else _live_slots(enemy)
 			for target_slot in targets:
 				actions.append({"type": "attack", "source_slot": source_slot, "target_slot": target_slot})
-		if not source.is_silenced():
+		if not source.has_attacked and not source.skills_disabled():
 			for skill_index in range(source.skills.size()):
 				var skill: Dictionary = source.skills[skill_index]
 				if str(skill.get("trigger", "")) != SkillEngine.TRIGGER_ON_ACTIVATE:
@@ -71,6 +71,8 @@ static func choose_action(game: RefCounted, difficulty: String, rng: RandomNumbe
 	)
 	if scored.is_empty():
 		return {"type": "end_turn", "score": 0.0, "explanation": ["no_legal_action"]}
+	if scored[0].get("explanation", []).has("automatic_lethal"):
+		return scored[0]
 	var level := difficulty if difficulty in DIFFICULTIES else "normal"
 	if level == "hard" and scored.size() > 1 and BattleSearch.needs_search(game):
 		return BattleSearch.choose(game, scored)
@@ -86,6 +88,8 @@ static func choose_action(game: RefCounted, difficulty: String, rng: RandomNumbe
 static func score_action(game: RefCounted, action: Dictionary) -> Dictionary:
 	var factors: Array[String] = []
 	var score := 0.0
+	if str(action.get("type", "")) in ["attack", "activate"]:
+		score -= int(game.next_action_payment()["mana"]) * 5.0
 	match str(action.get("type", "")):
 		"attack":
 			var attacker: CardData = game.active_field().slots[int(action["source_slot"])]
@@ -117,9 +121,12 @@ static func score_action(game: RefCounted, action: Dictionary) -> Dictionary:
 				factors.append("resource_reserved")
 		"activate", "cast":
 			var skill := _action_skill(game, action)
-			var estimate := _estimate_skill(skill, game, action)
+			var recovery := _bounded_recovery_value(skill, game, action)
+			var estimate := float(recovery.value) if not recovery.is_empty() else _estimate_skill(skill, game, action)
 			score += estimate
 			factors.append("skill_value:%.1f" % estimate)
+			if not recovery.is_empty() and recovery.no_effect:
+				factors.append("no_immediate_effect")
 			if str(action.get("type")) == "cast":
 				var spell: CardData = game.active_hand()[int(action["hand_index"])]
 				score -= spell.cost * 0.25
@@ -133,6 +140,10 @@ static func score_action(game: RefCounted, action: Dictionary) -> Dictionary:
 		"end_turn":
 			score = -4.0 if _has_non_end_action(generate_legal_actions(game)) else 0.0
 			factors.append("end_turn")
+			var plan: Dictionary = game.preview_end_turn_attacks()
+			if not plan.conditional and int(plan.total_damage) >= game.opponent_field().player_hp:
+				score = 100000.0
+				factors.append("automatic_lethal")
 	return {"score": score, "factors": factors}
 
 
@@ -188,6 +199,62 @@ static func _skill_target_side(skill: Dictionary) -> String:
 		if str(effect.get("target", "")) in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES]:
 			return str(effect.get("target_side", SkillEngine.TARGET_SIDE_ENEMY))
 	return SkillEngine.TARGET_SIDE_ENEMY
+
+
+# Exact immediate recovery for a single constant effect. Mixed, conditional,
+# random and reactive UGC keep the conservative heuristic below: simulating
+# their consequences here would duplicate the authoritative skill engine.
+static func _bounded_recovery_value(skill: Dictionary, game: RefCounted, action: Dictionary) -> Dictionary:
+	var effects := SkillEngine.legacy_skill_effects(skill)
+	if effects.size() != 1 or int(skill.get("probability", 100)) < 100:
+		return {}
+	var effect: Dictionary = effects[0]
+	var effect_id := str(effect.get("effect", ""))
+	if effect_id not in [SkillEngine.EFFECT_GAIN_MANA, SkillEngine.EFFECT_HEAL]:
+		return {}
+	for key in effect:
+		if str(key).begins_with("condition") or key in ["lhs", "logic", "value_var", "value_expr", "value_min", "value_max"]:
+			return {}
+	if int(effect.get("probability", 100)) < 100 or int(effect.get("random_count", 0)) > 0:
+		return {}
+	var field: BattleField = game.active_field()
+	var source: CardData = game.active_hand()[int(action.hand_index)] if str(action.type) == "cast" else field.slots[int(action.get("slot", -1))]
+	if source == null or source.get_misfortune() > 0:
+		return {}
+	var value := int(effect.get("value", 1))
+	if value < 0:
+		return {}
+	var total := 0.0
+	if effect_id == SkillEngine.EFFECT_GAIN_MANA:
+		if field.current_mana > field.max_mana:
+			return {}
+		var payment := source.cost if str(action.type) == "cast" else int(game.next_action_payment().mana)
+		var permanent_after_payment := field.current_mana - maxi(0, payment - field.temp_mana)
+		total = mini(value, maxi(0, field.max_mana - permanent_after_payment)) * 3.0
+	else:
+		var target_id := str(effect.get("target", SkillEngine.TARGET_SINGLE))
+		var context := {"player_field": field, "enemy_field": game.opponent_field(), "current_player": game.current_player, "target_player": int(action.get("target_player", 0)), "target_slot": int(action.get("target_slot", -1)), "source_slot": int(action.get("slot", -1))}
+		var targets := SkillTargetResolver.resolve_targets(target_id, source, context, str(effect.get("target_side", SkillTargetResolver.default_target_side(target_id))))
+		for target in targets:
+			var actual := 0
+			if target is BattleField:
+				if target != field or target.player_hp > target.max_player_hp:
+					return {}
+				actual = mini(value, maxi(0, target.max_player_hp - target.player_hp)) if target.player_hp > 0 else 0
+			elif target is CardData:
+				if target not in field.slots or target.hp > target.max_hp:
+					return {}
+				# Even a zero-point heal fires on_healed. Do not discard its setup value.
+				for reaction in target.skills:
+					if str(reaction.get("trigger", "")) == SkillEngine.TRIGGER_ON_HEALED:
+						return {}
+				actual = mini(value, maxi(0, target.max_hp - target.hp)) if target.is_alive() else 0
+			total += actual * 2.0
+			if actual > 0 and target is CardData and int(action.get("target_slot", -1)) == field.slots.find(target) and int(action.get("target_player", 0)) == game.current_player:
+				total += actual * 3.0 + target.effective_atk() * 0.75
+	# Below end-turn's -4: a known no-op must not consume an action/skill use
+	# merely because the legal action list contains it. It remains legal.
+	return {"value": total if total > 0.0 else -8.0, "no_effect": total <= 0.0}
 
 
 static func _estimate_skill(skill: Dictionary, game: RefCounted, action: Dictionary) -> float:

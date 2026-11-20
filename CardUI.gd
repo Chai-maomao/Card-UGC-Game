@@ -1,7 +1,10 @@
 extends Control
+const CardArtwork = preload("res://CardArtwork.gd")
 
 const _TextFormatter = preload("res://SkillTextFormatter.gd")
 const SpellRules = preload("res://SpellRules.gd")
+const PrintedFace = preload("res://presentation/ClassicBattleCardFace.gd")
+var _printed_face: Control
 
 signal attack_requested
 signal skill1_requested
@@ -46,6 +49,9 @@ var _hover_tween: Tween = null
 var _pointer_inside := false
 var _pointer_pressed := false
 var _drag_source := false
+var _printed_art: TextureRect
+var _printed_art_path := "__unbound__"
+const DEFAULT_ART = preload("res://res/tabletop/unillustrated_card.png")
 var _surface_sheen: GradientTexture2D = null
 # Layout caching: apply_ui_scale runs on every full-screen refresh for every
 # card on screen (10 slots + hand). With unchanged scale AND card type the
@@ -107,51 +113,82 @@ func apply_ui_scale(scale_value: float) -> void:
 	# The sheen is inset past the border so its dark tail can never tint the
 	# golden stroke drawn by Background.
 	_scale_child_rect(card_surface, 4, 3, 116, 155)
-	_scale_child_rect(type_accent, 6, 23, 114, 25)
-	_scale_child_rect(type_label, 62, 26, 114, 40)
+	_scale_child_rect(type_accent, 6, 28, 114, 29)
+	_scale_child_rect(type_label, 62, 31, 114, 50)
 	var is_special_card := current_card_data != null and (current_card_data.is_spell() or current_card_data.is_parasite())
+	var is_parasite_card := current_card_data != null and current_card_data.is_parasite()
 	if is_special_card:
-		_scale_child_rect(name_label, 6, 4, 114, 22)
-		_scale_child_rect(cost_label, 6, 26, 58, 40)
-		_scale_child_rect(gender_label, 72, 24, 114, 40)
-		_scale_child_rect(hp_label, 6, 42, 94, 72)
-		_scale_child_rect(atk_label, 6, 58, 94, 72)
-		_scale_child_rect(action_buttons, 6, 90, 114, 153)
+		_scale_child_rect(name_label, 6, 4, 114, 28)
+		_scale_child_rect(cost_label, 6, 31, 58, 50)
+		_scale_child_rect(gender_label, 72, 31, 114, 50)
+		if is_parasite_card:
+			# Compact mode text has a dedicated row; full HP and explanation
+			# remain in its tooltip. Preserve the complete lower action area.
+			_scale_child_rect(hp_label, 6, 51, 114, 78)
+			_scale_child_rect(atk_label, 6, 78, 114, 105)
+		else:
+			_scale_child_rect(hp_label, 6, 51, 114, 78)
+			_scale_child_rect(atk_label, 6, 78, 114, 105)
+		_scale_child_rect(action_buttons, 6, 118, 114, 157)
 	else:
-		_scale_child_rect(name_label, 6, 4, 114, 22)
-		_scale_child_rect(cost_label, 6, 26, 58, 40)
-		_scale_child_rect(gender_label, 72, 24, 114, 40)
-		_scale_child_rect(hp_label, 6, 42, 94, 56)
-		_scale_child_rect(atk_label, 6, 58, 94, 72)
-		_scale_child_rect(action_buttons, 6, 90, 114, 153)
+		_scale_child_rect(name_label, 6, 4, 114, 28)
+		_scale_child_rect(cost_label, 6, 31, 58, 50)
+		_scale_child_rect(gender_label, 72, 31, 114, 50)
+		_scale_child_rect(hp_label, 6, 51, 114, 78)
+		_scale_child_rect(atk_label, 6, 78, 114, 105)
+		_scale_child_rect(action_buttons, 6, 118, 114, 157)
 	if name_label:
-		name_label.add_theme_font_size_override("font_size", max(10, int(13 * ui_scale)))
+		name_label.add_theme_font_size_override("font_size", max(12, int(16 * ui_scale)))
+		name_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	if gender_label:
 		gender_label.add_theme_font_size_override("font_size", max(8, int(10 * ui_scale)))
 	if type_label:
-		type_label.add_theme_font_size_override("font_size", max(7, int(8 * ui_scale)))
+		type_label.add_theme_font_size_override("font_size", max(10, int(12 * ui_scale)))
 	for label in [cost_label, hp_label, atk_label]:
 		if label:
-			label.add_theme_font_size_override("font_size", max(9, int(11 * ui_scale)))
+			label.add_theme_font_size_override("font_size", max(13, int(18 * ui_scale)))
+	if cost_label: cost_label.add_theme_font_size_override("font_size",max(12,int(13*ui_scale)))
 	# Every visible action button shares the complete lower action area. The
 	# compact font keeps a four-button stack readable across platform fonts.
 	for button in [normal_atk_btn, skill1_btn, skill2_btn, skill3_btn]:
 		if button:
-			button.add_theme_font_size_override("font_size", max(7, int(9 * ui_scale)))
+			button.add_theme_font_size_override("font_size", max(10, int(12 * ui_scale)))
 	if action_buttons:
-		action_buttons.add_theme_constant_override("separation", max(1, int(2 * ui_scale)))
+		action_buttons.add_theme_constant_override("h_separation",max(1,int(2*ui_scale)))
+		action_buttons.add_theme_constant_override("v_separation",max(1,int(2*ui_scale)))
 	if status_icons:
-		status_icons.position = Vector2(6, 73) * ui_scale
+		status_icons.position = Vector2(6, 105) * ui_scale
 		status_icons.add_theme_constant_override("separation", max(1, int(1 * ui_scale)))
 	_apply_card_visual_style()
+	_layout_printed_art()
 	_update_card_layout_for_type()
 	_is_layout_applying = false
+	_sync_printed_face()
+
+func _sync_printed_face() -> void:
+	if not is_inside_tree() or name_label == null: return
+	if _printed_face == null:
+		_printed_face = PrintedFace.new()
+		_printed_face.name = "PrintedCardFace"
+		_printed_face.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_printed_face.z_index = 5
+		add_child(_printed_face)
+	_printed_face.size = Vector2(384,528)
+	_printed_face.scale = Vector2(size.x/384.0,size.y/528.0)
+	_printed_face.visible = current_card_data != null
+	if current_card_data != null: _printed_face.bind(current_card_data,false)
+	for visual in [background_panel,card_surface,type_accent,type_label,name_label,cost_label,gender_label,hp_label,atk_label,action_buttons]:
+		if visual != null: visual.modulate.a = 0
+	for button in [normal_atk_btn,skill1_btn,skill2_btn,skill3_btn]:
+		if button != null:
+			button.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			button.focus_mode = Control.FOCUS_NONE
 
 
 func _apply_card_visual_style() -> void:
 	if card_shadow:
 		var shadow_style := StyleBoxFlat.new()
-		shadow_style.bg_color = Color(0.0, 0.0, 0.0, 0.42)
+		shadow_style.bg_color = Color(Color.BLACK, 0.42)
 		shadow_style.set_corner_radius_all(max(3, int(7 * ui_scale)))
 		card_shadow.add_theme_stylebox_override("panel", shadow_style)
 	if background_panel:
@@ -159,34 +196,29 @@ func _apply_card_visual_style() -> void:
 		UITheme.apply_card_surface(background_panel, card_type, ui_scale)
 	for label in [name_label, cost_label, hp_label, atk_label]:
 		if label:
-			label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.75))
+			label.add_theme_color_override("font_shadow_color", Color.TRANSPARENT)
 			label.add_theme_constant_override("shadow_offset_x", max(1, int(1 * ui_scale)))
 			label.add_theme_constant_override("shadow_offset_y", max(1, int(1 * ui_scale)))
-	if name_label:
-		name_label.add_theme_color_override("font_color", Color(1.0, 0.94, 0.72))
 	for label in [cost_label, hp_label, atk_label]:
 		if label:
-			label.add_theme_color_override("font_color", Color(0.92, 0.94, 1.0))
+			label.add_theme_color_override("font_color", UITheme.Tokens.INK)
 	if gender_label:
-		gender_label.add_theme_color_override("font_color", Color(0.78, 0.86, 1.0))
-		gender_label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.75))
+		gender_label.add_theme_color_override("font_color", UITheme.Tokens.INK)
+		gender_label.add_theme_color_override("font_shadow_color", Color.TRANSPARENT)
 		gender_label.add_theme_constant_override("shadow_offset_x", max(1, int(1 * ui_scale)))
 		gender_label.add_theme_constant_override("shadow_offset_y", max(1, int(1 * ui_scale)))
 	if type_accent:
-		var accent := UITheme.COLOR_GOLD
-		if current_card_data != null and current_card_data.is_spell():
-			accent = UITheme.COLOR_ARCANE
-		elif current_card_data != null and current_card_data.is_parasite():
-			accent = Color(0.68, 0.38, 0.78)
-		type_accent.color = accent
+		type_accent.color = UITheme.card_type_accent(current_card_data.card_type if current_card_data != null else "minion")
 	if type_label:
 		UITheme.apply_label(type_label, true)
+	if name_label: name_label.add_theme_color_override("font_color",UITheme.Tokens.INK)
+	if type_label: type_label.add_theme_color_override("font_color",UITheme.Tokens.INK)
 	_apply_surface_sheen()
 	if normal_atk_btn:
-		UITheme.apply_button(normal_atk_btn, "primary")
+		UITheme.apply_card_action(normal_atk_btn)
 	for button in [skill1_btn, skill2_btn, skill3_btn]:
 		if button:
-			UITheme.apply_button(button)
+			UITheme.apply_card_action(button)
 	# Card action chips deliberately have no vertical content padding. Their
 	# text remains centred while the last skill and its hover shadow stay inside
 	# the face instead of forcing the VBox past its requested lower edge.
@@ -226,6 +258,7 @@ func _ready():
 	mouse_entered.connect(_on_hover_enter)
 	mouse_exited.connect(_on_hover_exit)
 	gui_input.connect(_on_card_gui_input)
+	_connect_child_hover(self)
 
 	_auto_hide_if_enemy()
 	if current_card_data != null:
@@ -238,18 +271,49 @@ func _ready():
 # Hand cards pop up (scale from bottom-center + raise) while hovered so the
 # player can see the card clearly before dragging it onto the battlefield.
 func _on_hover_enter() -> void:
+	var just_entered := not _pointer_inside
 	_pointer_inside = true
+	if get_meta("tabletop_proxy",false): return
+	if just_entered: AppAudio.play_hover(self,true)
 	if not is_hand_card or not is_inside_tree():
 		return
+	var entry_tween: Tween = get_meta("hand_entry_tween") if has_meta("hand_entry_tween") else null
+	if entry_tween != null and entry_tween.is_valid():
+		entry_tween.kill()
+		modulate.a = 1.0
 	if _hover_tween and _hover_tween.is_valid():
 		_hover_tween.kill()
 	z_index = 20
 	pivot_offset = Vector2(size.x * 0.5, size.y)
-	_hover_tween = create_tween()
-	_hover_tween.tween_property(self, "scale", Vector2(1.035, 1.035), 0.11).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	_hover_tween = create_tween().set_parallel(true)
+	if has_meta("hand_rest_position"):
+		_hover_tween.tween_property(self, "position", get_meta("hand_rest_position") - Vector2(0, 14 * ui_scale), 0.11)
+	_hover_tween.tween_property(self, "scale", Vector2(1.14, 1.14), 0.11).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+
+
+func _connect_child_hover(root: Node) -> void:
+	for child in root.get_children():
+		if child is Control:
+			child.mouse_entered.connect(_on_hover_enter)
+			child.mouse_exited.connect(_on_hover_exit)
+		_connect_child_hover(child)
 
 
 func _on_hover_exit() -> void:
+	if get_meta("tabletop_proxy",false):
+		_pointer_inside = false
+		return
+	# A child button can take hover from its parent without leaving the card.
+	# Wait for the viewport to finish switching its hovered control.
+	_finish_hover_exit.call_deferred()
+
+
+func _finish_hover_exit() -> void:
+	if not is_inside_tree():
+		return
+	var hovered := get_viewport().gui_get_hovered_control()
+	if hovered == self or (hovered != null and is_ancestor_of(hovered)):
+		return
 	_pointer_inside = false
 	if not is_hand_card or not is_inside_tree():
 		return
@@ -257,12 +321,15 @@ func _on_hover_exit() -> void:
 		return
 	if _hover_tween and _hover_tween.is_valid():
 		_hover_tween.kill()
-	_hover_tween = create_tween()
+	_hover_tween = create_tween().set_parallel(true)
+	if has_meta("hand_rest_position"):
+		_hover_tween.tween_property(self, "position", get_meta("hand_rest_position"), 0.10)
 	_hover_tween.tween_property(self, "scale", Vector2.ONE, 0.10).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	z_index = 0
 
 
 func _on_card_gui_input(event: InputEvent) -> void:
+	if get_meta("tabletop_proxy",false) or get_meta("tabletop_arriving",false): return
 	if not is_hand_card or not event is InputEventMouseButton:
 		return
 	var mouse_event := event as InputEventMouseButton
@@ -280,8 +347,8 @@ func _animate_pointer_state() -> void:
 	if _hover_tween and _hover_tween.is_valid():
 		_hover_tween.kill()
 	pivot_offset = Vector2(size.x * 0.5, size.y)
-	var target_scale := Vector2(0.985, 0.985) if _pointer_pressed else (Vector2(1.035, 1.035) if _pointer_inside else Vector2.ONE)
-	var target_modulate := Color(0.90, 0.92, 0.96, 1.0) if _pointer_pressed else Color.WHITE
+	var target_scale := Vector2(0.985, 0.985) if _pointer_pressed else (Vector2(1.14, 1.14) if _pointer_inside else Vector2.ONE)
+	var target_modulate := Color.WHITE.darkened(0.08) if _pointer_pressed else Color.WHITE
 	_hover_tween = create_tween().set_parallel(true)
 	_hover_tween.tween_property(self, "scale", target_scale, 0.055 if _pointer_pressed else 0.11).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	_hover_tween.tween_property(self, "modulate", target_modulate, 0.055 if _pointer_pressed else 0.11)
@@ -294,10 +361,10 @@ func _apply_surface_sheen() -> void:
 		var gradient := Gradient.new()
 		gradient.offsets = PackedFloat32Array([0.0, 0.28, 0.68, 1.0])
 		gradient.colors = PackedColorArray([
-			Color(1.0, 1.0, 1.0, 0.075),
-			Color(1.0, 1.0, 1.0, 0.012),
-			Color(0.0, 0.0, 0.0, 0.015),
-			Color(0.0, 0.0, 0.0, 0.14),
+			Color(Color.WHITE, 0.075),
+			Color(Color.WHITE, 0.012),
+			Color(Color.BLACK, 0.015),
+			Color(Color.BLACK, 0.14),
 		])
 		_surface_sheen = GradientTexture2D.new()
 		_surface_sheen.gradient = gradient
@@ -306,6 +373,29 @@ func _apply_surface_sheen() -> void:
 		_surface_sheen.fill_from = Vector2(0.5, 0.0)
 		_surface_sheen.fill_to = Vector2(0.5, 1.0)
 	card_surface.texture = _surface_sheen
+
+
+func _layout_printed_art() -> void:
+	if _printed_art == null: return
+	_printed_art.position = Vector2(4,25)*ui_scale
+	_printed_art.size = Vector2(112,129)*ui_scale
+
+
+func _bind_printed_art(card_data: CardData) -> void:
+	if _printed_art == null:
+		_printed_art = TextureRect.new()
+		_printed_art.name = "PrintedIllustration"
+		_printed_art.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_printed_art.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+		_printed_art.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+		_printed_art.modulate.a = 0.14
+		add_child(_printed_art)
+		move_child(_printed_art,3)
+		_layout_printed_art()
+	var selected := CardArtwork.selected_path(card_data)
+	if selected != _printed_art_path:
+		_printed_art_path = selected
+		_printed_art.texture = CardArtwork.texture_for(card_data)
 
 
 func set_card(card_data: CardData):
@@ -325,8 +415,10 @@ func set_card(card_data: CardData):
 		self.modulate = Color.WHITE
 		_clear_status_icons()
 		_last_status_signature = ""
+		_sync_printed_face()
 		return
 
+	_bind_printed_art(card_data)
 	_update_card_layout_for_type()
 	if name_label:
 		name_label.text = card_data.card_name
@@ -351,7 +443,7 @@ func set_card(card_data: CardData):
 			atk_label.text = Locale.t("card.parasite_atk", [card_data.atk])
 	else:
 		if hp_label:
-			hp_label.add_theme_color_override("font_color", Color(0.92, 0.94, 1.0))
+			hp_label.add_theme_color_override("font_color", UITheme.Tokens.INK)
 		var eff_atk: int = card_data.effective_atk()
 		var bonus: int = eff_atk - card_data.atk
 		if bonus > 0:
@@ -363,16 +455,21 @@ func set_card(card_data: CardData):
 
 	_update_status_icons()
 	_update_skill_buttons()
+	_update_action_columns()
 	if card_data.is_spell() and card_data.skills.size() > 0:
 		tooltip_text = _TextFormatter.format_skill_tooltip(SpellRules.spell_skill(card_data))
 	elif card_data.is_parasite():
 		tooltip_text = ""
 	else:
 		tooltip_text = _parasite_tooltip(card_data)
+		for skill in card_data.skills:
+			var description := _TextFormatter.format_skill_tooltip(skill)
+			if not description.is_empty(): tooltip_text += ("\n\n" if not tooltip_text.is_empty() else "")+description
 	if action_buttons:
-		action_buttons.visible = _actions_visible and not card_data.is_silenced() and _has_visible_action_buttons()
-	self.modulate = Color(0.5, 0.5, 0.5) if card_data.is_silenced() else Color.WHITE
+		action_buttons.visible = _actions_visible and not card_data.has_stun() and _has_visible_action_buttons()
+	self.modulate = Color.WHITE.darkened(0.2) if card_data.skills_disabled() else Color.WHITE
 	_auto_hide_if_enemy()
+	_sync_printed_face()
 
 
 func set_presentation_hp(value: int, max_value: int = -1) -> void:
@@ -409,8 +506,8 @@ func _refresh_hp_display(card_data: CardData) -> void:
 	if card_data.is_spell():
 		hp_label.text = ""
 	elif card_data.is_parasite():
-		hp_label.text = Locale.t("card.parasite_hp", [shown_hp, shown_max_hp]) if card_data.parasite_absorbs_host_damage() else Locale.t("card.parasite_linked")
-		hp_label.tooltip_text = Locale.t("card.parasite_absorb_help") if card_data.parasite_absorbs_host_damage() else Locale.t("card.parasite_linked_help")
+		hp_label.text = Locale.t("card.parasite_hp_compact", [shown_hp, shown_max_hp]) if card_data.parasite_absorbs_host_damage() else Locale.t("card.parasite_linked_compact")
+		hp_label.tooltip_text = hp_label.text + "\n" + (Locale.t("card.parasite_absorb_help") if card_data.parasite_absorbs_host_damage() else Locale.t("card.parasite_linked_help"))
 	elif absorber != null:
 		hp_label.tooltip_text = Locale.t("card.host_parasite_hp_tooltip", [absorber.card_name, absorber.hp, absorber.max_hp])
 
@@ -421,13 +518,14 @@ func refresh_cost_display() -> void:
 	var value: String = Locale.t("card.cost", [current_card_data.cost])
 	if cost_label.text != value:
 		cost_label.text = value
-		cost_label.add_theme_color_override("font_color", Color.WHITE)
+		cost_label.add_theme_color_override("font_color", UITheme.Tokens.INK)
 		_last_cost_color = Color(-1, -1, -1, -1)
 	if current_card_data.is_cost_reduced():
 		# Match the battle castability palette exactly; otherwise a reused hand
 		# node can restore a different green while its tint cache still says the
 		# correct color is already applied.
-		cost_label.add_theme_color_override("font_color", Color(0.35, 1.0, 0.48))
+		cost_label.add_theme_color_override("font_color", UITheme.Tokens.CARD_DISCOUNT)
+	_sync_printed_face()
 
 
 func _update_card_layout_for_type() -> void:
@@ -436,8 +534,9 @@ func _update_card_layout_for_type() -> void:
 		gender_label.visible = false
 		gender_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	if hp_label:
-		hp_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART if is_special_card else TextServer.AUTOWRAP_OFF
-		hp_label.clip_text = not is_special_card
+		var is_spell_card := current_card_data != null and current_card_data.is_spell()
+		hp_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART if is_spell_card else TextServer.AUTOWRAP_OFF
+		hp_label.clip_text = not is_spell_card
 		hp_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
 	if normal_atk_btn:
 		normal_atk_btn.visible = not is_special_card
@@ -510,7 +609,7 @@ func _update_status_icons() -> void:
 			parasite_symbol += str(parasite_tooltips.size())
 		entries.append({
 			"symbol": parasite_symbol,
-			"color": Color(1.0, 0.74, 0.18),
+			"color": UITheme.Tokens.WARNING,
 			"tooltip": "\n\n".join(parasite_tooltips),
 		})
 
@@ -529,7 +628,7 @@ func _update_status_icons() -> void:
 			hidden_tooltips.append(entries[i].get("tooltip", ""))
 		badges.append({
 			"symbol": "+%d" % (entries.size() - visible_count),
-			"color": Color(0.72, 0.78, 0.88),
+			"color": UITheme.Tokens.MUTED,
 			"tooltip": "\n\n".join(hidden_tooltips),
 		})
 	# Signature check: identical visible content means the existing badge nodes
@@ -552,10 +651,10 @@ func _update_status_icons() -> void:
 func _status_visual(polarity: String) -> Dictionary:
 	match polarity:
 		"positive":
-			return {"symbol": "↑", "color": Color(0.35, 0.95, 0.5)}
+			return {"symbol": "↑", "color": UITheme.Tokens.SUCCESS}
 		"negative":
-			return {"symbol": "↓", "color": Color(0.95, 0.34, 0.42)}
-	return {"symbol": "•", "color": Color(0.72, 0.78, 0.88)}
+			return {"symbol": "↓", "color": UITheme.Tokens.ENEMY}
+	return {"symbol": "•", "color": UITheme.Tokens.MUTED}
 
 
 func _make_status_badge(symbol: String, color: Color, tooltip: String) -> PanelContainer:
@@ -565,7 +664,7 @@ func _make_status_badge(symbol: String, color: Color, tooltip: String) -> PanelC
 	badge.tooltip_text = tooltip
 	badge.mouse_filter = Control.MOUSE_FILTER_STOP
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(0.025, 0.035, 0.055, 0.94)
+	style.bg_color = Color(UITheme.Tokens.PANEL_DARK, 0.94)
 	style.border_color = color
 	var border_width: int = max(1, int(ui_scale))
 	style.border_width_left = border_width
@@ -618,6 +717,7 @@ func _format_buff_tooltip(eff: Dictionary) -> String:
 	var val: int = eff.get("value", 0)
 	var dur: int = eff.get("duration", 0)
 	var name: String = Locale.term("buff", bid)
+	if not SkillRegistry.buff_uses_value(bid): return Locale.t("card.buff_tooltip_status", [name, dur])
 	var detail := SkillEngine.format_buff_value(bid, str(val))
 	return Locale.t("card.buff_tooltip_detail", [name, detail, dur])
 
@@ -647,7 +747,7 @@ func _gender_text(gender: String) -> String:
 func _update_skill_buttons():
 	if current_card_data == null:
 		return
-	var silenced: bool = current_card_data.is_silenced()
+	var silenced: bool = current_card_data.skills_disabled()
 	if current_card_data.is_spell():
 		var spell_skill := SpellRules.spell_skill(current_card_data)
 		if skill1_btn:
@@ -714,17 +814,17 @@ func _update_skill_buttons():
 		if current_card_data.is_spell():
 			skill3_btn.visible = false
 
-	# Silence: grey out all skill buttons and normal attack. When silence
-	# expires the next set_card re-runs this method with silenced=false and
-	# restores each button's proper state (see the else branch below).
+	# Silence and stun disable skills. Only stun disables basic attacks.
+	if normal_atk_btn:
+		normal_atk_btn.disabled = current_card_data.has_stun() or (_embedded_in_slot and current_card_data.has_acted)
 	if silenced:
-		for btn in [skill1_btn, skill2_btn, skill3_btn, normal_atk_btn]:
+		for btn in [skill1_btn, skill2_btn, skill3_btn]:
 			if btn and btn.visible:
 				btn.disabled = true
-				btn.modulate = Color(0.5, 0.5, 0.5)
+				btn.modulate = Color.WHITE
 	else:
 		if normal_atk_btn:
-			normal_atk_btn.disabled = false
+			normal_atk_btn.disabled = current_card_data.has_stun() or (_embedded_in_slot and current_card_data.has_acted)
 			normal_atk_btn.modulate = Color.WHITE
 		if skill1_btn and skill1_btn.visible and (current_card_data.is_spell() or _is_action_skill_index(0)):
 			var s1: Dictionary = SpellRules.spell_skill(current_card_data) if current_card_data.is_spell() else current_card_data.skills[0]
@@ -762,7 +862,7 @@ func _apply_skill_button_state(btn: Button, skill: Dictionary, skill_index: int)
 		unavailable = true
 		unavailable_reason = Locale.t("card.skill_action_spent")
 	btn.disabled = unavailable
-	btn.modulate = Color(0.5, 0.5, 0.5) if unavailable else Color.WHITE
+	btn.modulate = Color.WHITE
 	var base_tooltip := _TextFormatter.format_skill_tooltip(skill)
 	btn.tooltip_text = "%s\n\n%s" % [base_tooltip, unavailable_reason] if unavailable else base_tooltip
 
@@ -832,6 +932,7 @@ func set_skill_preview_visible(visible: bool) -> void:
 
 
 func _get_drag_data(position: Vector2):
+	if get_meta("tabletop_proxy",false) or get_meta("tabletop_arriving",false): return null
 	# Deck grids, library entries, editor previews and picker cards all reuse
 	# CardUI, but they are displays rather than loose battle objects.
 	if current_card_data == null or _preview_only or not _battle_drag_enabled:
@@ -842,7 +943,7 @@ func _get_drag_data(position: Vector2):
 	z_index = 30
 	pivot_offset = Vector2(size.x * 0.5, size.y)
 	scale = Vector2(0.97, 0.97)
-	modulate = Color(1.0, 1.0, 1.0, 0.38)
+	modulate = Color(Color.WHITE, 0.38)
 
 	var preview_holder := _build_drag_preview(position)
 	set_drag_preview(preview_holder)
@@ -867,7 +968,7 @@ func _build_drag_preview(grab_position: Vector2) -> Control:
 	# duplicated hand card from restoring its normal shadow during _ready().
 	preview_card.is_hand_card = false
 	preview_card.set_battle_drag_enabled(false)
-	preview_card.modulate = Color(1.02, 1.02, 1.02, 0.97)
+	preview_card.modulate = Color(Color.WHITE, 0.97)
 	preview_card.anchor_right = 0.0
 	preview_card.anchor_bottom = 0.0
 	preview_card.pivot_offset = Vector2.ZERO
@@ -903,9 +1004,9 @@ func _build_drag_preview(grab_position: Vector2) -> Control:
 	preview_shadow.position = preview_origin + DRAG_SHADOW_OFFSET * ui_scale
 	preview_shadow.size = (preview_size - DRAG_SHADOW_INSET * 2.0 * ui_scale).max(Vector2.ONE)
 	var shadow_style := StyleBoxFlat.new()
-	shadow_style.bg_color = Color(0.0, 0.0, 0.0, 0.30)
+	shadow_style.bg_color = Color(Color.BLACK, 0.30)
 	shadow_style.set_corner_radius_all(max(3, int(7 * ui_scale)))
-	shadow_style.shadow_color = Color(0.0, 0.0, 0.0, 0.16)
+	shadow_style.shadow_color = Color(Color.BLACK, 0.16)
 	shadow_style.shadow_size = max(1, int(2 * ui_scale))
 	shadow_style.shadow_offset = Vector2(-1, -1) * ui_scale
 	preview_shadow.add_theme_stylebox_override("panel", shadow_style)
@@ -923,3 +1024,11 @@ func _notification(what: int) -> void:
 	z_index = 20 if _pointer_inside and is_hand_card else 0
 	if is_inside_tree():
 		_animate_pointer_state()
+
+
+func _update_action_columns() -> void:
+	if action_buttons == null: return
+	var count := 0
+	for button in [normal_atk_btn,skill1_btn,skill2_btn,skill3_btn]:
+		if button != null and button.visible: count += 1
+	action_buttons.columns = 1 if count <= 1 else 2

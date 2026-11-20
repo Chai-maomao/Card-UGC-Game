@@ -19,9 +19,8 @@ static func player_starters() -> Array:
 
 
 # Beginner deck: 16 cards, cost curve 1/2/3/4 = 4/6/4/2.
-# Repeated roles make early draws reliable. Skilled units each teach a different
-# editor building block without asking a new player to parse multi-effect skills.
-# Return fresh instances so test battles and new collections never share runtime state.
+# Pairs make early draws reliable. Familiar roles introduce the editor's
+# triggers, then spells and stronger units introduce nested blocks.
 static func beginner_deck() -> Array:
 	var cards: Array = []
 	for _copy in range(2):
@@ -36,10 +35,22 @@ static func beginner_deck() -> Array:
 			]),
 		]))
 		cards.append(CardData.new("剑士", 2, 3, 2, []))
-		cards.append(CardData.new("重装骑士", 4, 6, 3, []))
+		cards.append(CardData.new("重装骑士", 4, 5, 2, [
+			_fx_skill("整备", SkillEngine.TRIGGER_ON_SUMMON, [
+				{"effect": SkillEngine.EFFECT_IF_ELSE, "condition": {
+					"op": SkillEngine.CONDITION_OP_GTE,
+					"lhs": {"kind": "var", "var_id": SkillEngine.VAR_HAND_COUNT},
+					"rhs": {"kind": "num", "value": 3},
+				}, "then_effects": [
+					_fx(SkillEngine.TARGET_SELF, SkillEngine.EFFECT_SHIELD, 2),
+				], "else_effects": [
+					_fx(SkillEngine.TARGET_SELF, SkillEngine.EFFECT_DRAW_CARDS, 1),
+				]},
+			]),
+		]))
 		cards.append(CardData.new("弓箭手", 3, 3, 2, [
 			_fx_skill("箭雨", SkillEngine.TRIGGER_ON_ACTIVATE, [
-				_fx(SkillEngine.TARGET_SIDES, SkillEngine.EFFECT_DAMAGE, 1, "", 0, 0, 100, SkillEngine.TARGET_SIDE_ENEMY),
+				_fx_random(SkillEngine.TARGET_SIDES, SkillEngine.EFFECT_DAMAGE, 1, 2, "", 0, 0, 100, SkillEngine.TARGET_SIDE_ENEMY),
 			]),
 		]))
 		cards.append(CardData.new("医护兵", 3, 4, 1, [
@@ -48,20 +59,17 @@ static func beginner_deck() -> Array:
 			]),
 		]))
 		cards.append(_spell_card("火花", 1, [
-			_fx_skill("火花", SkillEngine.TRIGGER_ON_CAST, [
-				_fx(SkillEngine.TARGET_SINGLE, SkillEngine.EFFECT_DAMAGE, 2, "", 0, 0, 100, SkillEngine.TARGET_SIDE_ENEMY),
+			_fx_skill("连闪", SkillEngine.TRIGGER_ON_CAST, [
+				{"effect": SkillEngine.EFFECT_REPEAT, "repeat_count": 2, "then_effects": [
+					_fx(SkillEngine.TARGET_SINGLE, SkillEngine.EFFECT_DAMAGE, 1, "", 0, 0, 100, SkillEngine.TARGET_SIDE_ENEMY),
+				]},
+		]),
+	]))
+		cards.append(_spell_card("补给", 2, [
+			_fx_skill("补给", SkillEngine.TRIGGER_ON_CAST, [
+				_fx(SkillEngine.TARGET_SELF, SkillEngine.EFFECT_DRAW_CARDS, 2),
 			]),
 		]))
-	cards.append(_spell_card("急救", 2, [
-		_fx_skill("急救", SkillEngine.TRIGGER_ON_CAST, [
-			_fx(SkillEngine.TARGET_SINGLE, SkillEngine.EFFECT_HEAL, 3, "", 0, 0, 100, SkillEngine.TARGET_SIDE_ALLY),
-		]),
-	]))
-	cards.append(_spell_card("补给", 2, [
-		_fx_skill("补给", SkillEngine.TRIGGER_ON_CAST, [
-			_fx(SkillEngine.TARGET_SELF, SkillEngine.EFFECT_DRAW_CARDS, 2),
-		]),
-	]))
 	return cards
 
 

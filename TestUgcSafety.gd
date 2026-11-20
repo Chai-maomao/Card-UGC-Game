@@ -8,6 +8,9 @@ var failures: Array[String] = []
 class MockEditor:
 	extends Control
 	var effect_data: Array = []
+	var current_trigger_key := SkillEngine.TRIGGER_ON_ACTIVATE
+	func _is_talent_mode() -> bool:
+		return false
 
 
 func _ready() -> void:

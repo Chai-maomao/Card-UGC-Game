@@ -58,12 +58,12 @@ var zero_cost_until_deploy: bool = false
 # unit and follows that host's battlefield lifecycle).
 var card_type: String = "minion"
 
-# Parasites may either intercept directed damage for their host or remain
+# Parasites may either intercept attack and skill damage for their host or remain
 # linked without taking damage. Missing legacy data defaults to interception.
 var parasite_damage_mode: String = PARASITE_DAMAGE_ABSORB
 
 # Parasite cards attached to this unit. Only attachments configured for damage
-# interception take directed attack/skill damage before this unit loses HP.
+# interception take attack/skill damage, including area hits, before this unit loses HP.
 var parasite_cards: Array = []
 
 # Temporary HP (shield replacement, expires when its owner is about to act again)
@@ -74,6 +74,7 @@ var skills: Array = []
 
 # Splash art texture path (empty = no art)
 var art_path: String = ""
+var damaged_art_path: String = ""
 
 # Runtime status effects / buffs
 # Each buff: { "buff_id": String, "value": int, "duration": int }
@@ -235,6 +236,7 @@ func take_damage_without_reduction(amount: int) -> int:
 
 
 func single_damage_cap() -> int:
+	if skills_disabled(): return 0
 	var result := 0
 	for skill_value in skills:
 		if not skill_value is Dictionary:
@@ -330,8 +332,7 @@ func has_taunt() -> bool:
 	return false
 
 
-# Stun: the card skips its next turn. Buffs are consumed by consume_stun()
-# when the owner's turn starts; they are exempt from the normal duration tick.
+# Stun suppresses attacks and skills immediately, through the next friendly turn.
 func has_stun() -> bool:
 	for eff in status_effects:
 		if eff.get("buff_id", "") == SkillEngine.BUFF_STUN and eff.get("value", 0) > 0:
@@ -339,10 +340,20 @@ func has_stun() -> bool:
 	return false
 
 
+func skills_disabled() -> bool:
+	return is_silenced() or has_stun()
+
+
+func finish_stun_turn() -> void:
+	for i in range(status_effects.size() - 1, -1, -1):
+		if status_effects[i].get("buff_id", "") == SkillEngine.BUFF_STUN and status_effects[i].get("stun_active", false):
+			status_effects.remove_at(i)
+
+
 func consume_stun() -> bool:
 	for i in range(status_effects.size()):
 		if status_effects[i].get("buff_id", "") == SkillEngine.BUFF_STUN and status_effects[i].get("value", 0) > 0:
-			status_effects.remove_at(i)
+			status_effects[i]["stun_active"] = true
 			_GameplayLog.write("  [Stun] %s is stunned and skips its turn" % card_name)
 			return true
 	return false
@@ -385,27 +396,43 @@ func process_mana_refund(owner_player: int) -> int:
 	return total
 
 
+# Poison follows the afflicted unit's current side, not the caster's side.
+func tick_poison(metrics: Callable = Callable()) -> void:
+	var expired: Array[int] = []
+	for index in range(status_effects.size()):
+		var effect: Dictionary = status_effects[index]
+		if effect.get("buff_id","") != SkillEngine.BUFF_POISON: continue
+		var before := hp
+		if int(effect.get("duration",0)) > 0 and hp > 0:
+			hp = maxi(0,hp-maxi(0,int(effect.get("value",0))))
+		if metrics.is_valid() and hp != before:
+			metrics.call({"kind":"damage","source_card":null,"target_card":self,"source_player":int(effect.get("owner",0)),"amount":before-hp,"status":effect})
+		effect["duration"] = int(effect.get("duration",0))-1
+		if int(effect.duration) <= 0:
+			if metrics.is_valid(): metrics.call({"kind":"status_expired","status":effect})
+			expired.append(index)
+	for index in range(expired.size()-1,-1,-1): status_effects.remove_at(expired[index])
+
+
 # Tick buffs belonging to a specific player
-func tick_buffs(owner_player: int) -> void:
+func tick_buffs(owner_player: int, metrics: Callable = Callable()) -> void:
 	var to_remove: Array = []
 	for i in range(status_effects.size()):
 		var eff: Dictionary = status_effects[i]
 		if eff.get("owner", 0) != owner_player:
 			continue
 		var buff_id: String = eff.get("buff_id", "")
-		if buff_id == SkillEngine.BUFF_MANA_REFUND or buff_id == SkillEngine.BUFF_STUN:
+		if buff_id in [SkillEngine.BUFF_MANA_REFUND, SkillEngine.BUFF_STUN, SkillEngine.BUFF_POISON]:
 			continue
+		var hp_before := hp
 
 		if buff_id == SkillEngine.BUFF_REGEN:
 			var regen_val: int = eff.get("value", 0)
 			if regen_val > 0 and hp > 0:
 				heal(regen_val)
 				_GameplayLog.write("  [Regen] %s heals %d (HP: %d)" % [card_name, regen_val, hp])
-		elif buff_id == SkillEngine.BUFF_POISON:
-			var poison_val: int = eff.get("value", 0)
-			if poison_val > 0 and hp > 0:
-				hp = max(0, hp - poison_val)
-				_GameplayLog.write("  [Poison] %s takes %d poison (HP: %d)" % [card_name, poison_val, hp])
+		if metrics.is_valid() and hp != hp_before:
+			metrics.call({"kind": "healing" if hp > hp_before else "damage", "source_card": null, "target_card": self, "source_player": owner_player, "amount": absi(hp - hp_before), "status": eff})
 
 		eff["duration"] = eff.get("duration", 0) - 1
 		if eff["duration"] <= 0:
@@ -414,6 +441,7 @@ func tick_buffs(owner_player: int) -> void:
 	for j in range(to_remove.size() - 1, -1, -1):
 		var idx: int = to_remove[j]
 		var expired: Dictionary = status_effects[idx]
+		if metrics.is_valid(): metrics.call({"kind": "status_expired", "status": expired})
 		_GameplayLog.write("  [Buff] %s's %s expired" % [card_name, expired.get("buff_id", "")])
 		status_effects.remove_at(idx)
 
@@ -478,6 +506,7 @@ func duplicate_card() -> CardData:
 	copy.immune_lethal = immune_lethal
 	copy.zero_cost_until_deploy = zero_cost_until_deploy
 	copy.art_path = art_path
+	copy.damaged_art_path = damaged_art_path
 	copy.status_effects = status_effects.duplicate(true)
 	return copy
 

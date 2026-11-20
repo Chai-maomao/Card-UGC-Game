@@ -17,8 +17,29 @@ func _ready() -> void:
 	var content := hud.get_node("Margin/Content") as HBoxContainer
 	var hp_bar := content.get_node("HpBar") as ProgressBar
 	var mana_bar := content.get_node("ManaBar") as ProgressBar
+	var action_bar := content.get_node("ActionBar") as ProgressBar
 	battle.call("_update_battle_status_huds")
 	_assert(_count_named(layer, "StatusFx_") == 0, "initial status binding must not fabricate feedback")
+	_assert(action_bar.visible and action_bar.value == game.player_field.action_points and action_bar.max_value == game.player_field.action_budget, "action bar initially shows the authoritative budget")
+	game.player_field.action_points -= 2
+	battle.call("_update_battle_status_huds")
+	await get_tree().process_frame
+	_assert(action_bar.value > game.player_field.action_points, "action spending animates the action bar")
+	await get_tree().create_timer(0.45).timeout
+	_assert(action_bar.value == game.player_field.action_points, "action bar settles on the remaining points")
+	game.player_field.action_points = 0
+	game.player_field.action_budget = 0
+	battle.set("_suppress_status_feedback_once", true)
+	battle.call("_update_battle_status_huds")
+	_assert(action_bar.value == 0 and action_bar.max_value == 1, "zero budget uses an empty valid bar")
+	var saved_base = game.battle_config.get("action_base")
+	game.battle_config.erase("action_base")
+	battle.call("_update_battle_status_huds")
+	_assert(not action_bar.visible, "legacy matches hide the action bar")
+	game.battle_config["action_base"] = saved_base
+	game.reset_action_budget(1)
+	battle.set("_suppress_status_feedback_once", true)
+	battle.call("_update_battle_status_huds")
 
 	var hp_before: int = game.player_field.player_hp
 	var mana_before: int = game.player_field.get_total_mana()
@@ -60,6 +81,7 @@ func _ready() -> void:
 
 	await _verify_staged_card_hp(battle)
 	await _verify_card_feedback_restoration(layer)
+	_verify_discard_feedback(battle)
 
 	if failures.is_empty():
 		print("TEST_BATTLE_STATUS_FX_OK")
@@ -68,6 +90,21 @@ func _ready() -> void:
 		for failure in failures:
 			push_error("TEST_BATTLE_STATUS_FX_FAILED: %s" % failure)
 		get_tree().quit(1)
+
+
+func _verify_discard_feedback(battle: Node) -> void:
+	var field: BattleField = battle._my_field()
+	field.current_mana = field.max_mana - 1
+	field.temp_mana = 0
+	var hand_card: CardData = battle._my_hand()[0]
+	battle._on_card_discarded(hand_card)
+	_assert(not battle._my_hand().has(hand_card) and field.current_mana == field.max_mana, "discarding from hand must refund the last available point")
+	_assert(battle.combat_broadcast_label.tooltip_text == Locale.t("tip.discard_mana"), "discarding below the cap must announce the refund")
+	var field_card := CardData.new("测试弃牌", 1, 4, 0)
+	field.slots[0] = field_card
+	battle._on_card_discarded(field_card)
+	_assert(field.slots[0] == null and field.current_mana == field.max_mana, "discarding from the field at full mana must still remove the card")
+	_assert(battle.combat_broadcast_label.tooltip_text == Locale.t("tip.discard_mana_full"), "discarding at the cap must announce that mana is full")
 
 
 func _verify_staged_card_hp(battle: Node) -> void:
@@ -82,6 +119,10 @@ func _verify_staged_card_hp(battle: Node) -> void:
 
 	# Gameplay has already reached its final 1/4 state, but presentation must
 	# keep the card at 4/4 until the first stage, then show 2/4 for 0.2 seconds.
+	# This timing assertion exercises standard mode, independently of the
+	# user's saved animation preference; restore that preference afterwards.
+	var prior_acceleration := GamePreferences.animation_acceleration_enabled()
+	GamePreferences.set_animation_acceleration(false)
 	target.hp = 1
 	battle._queue_presentation_feedback([
 		{"kind": "hp", "player": 2, "slot": 0, "delta": -2, "before_hp": 4, "new_hp": 2, "max_hp": 4, "feedback_group": 0},
@@ -96,6 +137,7 @@ func _verify_staged_card_hp(battle: Node) -> void:
 	_assert(card_ui.hp_label.text == Locale.t("card.hp", [2, 4]), "the skill stage must retain the full 0.2-second gap")
 	await get_tree().create_timer(0.14).timeout
 	_assert(card_ui.hp_label.text == Locale.t("card.hp", [1, 4]), "the skill stage must advance the card to its final 1/4 HP")
+	GamePreferences.set_animation_acceleration(prior_acceleration)
 
 
 func _verify_card_feedback_restoration(layer: CanvasLayer) -> void:

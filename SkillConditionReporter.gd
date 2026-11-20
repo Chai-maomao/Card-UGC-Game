@@ -18,6 +18,7 @@ extends HBoxContainer
 var block: Node           # owning SkillBlock (for _drop_condition)
 var payload: Dictionary = {}   # boolean_block / logic_block payload
 var preview_text: String = ""
+var _drag_parent: WeakRef
 
 
 func setup(p_block: Node, p_cond: Dictionary, p_payload: Dictionary) -> void:
@@ -40,33 +41,39 @@ func setup(p_block: Node, p_cond: Dictionary, p_payload: Dictionary) -> void:
 func _slot_get_drag_data(_pos: Vector2):
 	if payload.is_empty():
 		return null
-	var teal := Color(0.28, 0.60, 0.56)
-	var lbl := Label.new()
-	lbl.text = preview_text
-	lbl.add_theme_font_size_override("font_size", 12)
-	lbl.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
-	var st := StyleBoxFlat.new()
-	st.bg_color = teal
-	st.border_color = teal.darkened(0.3)
-	st.set_border_width_all(1)
-	st.set_corner_radius_all(12)
-	st.content_margin_left = 8
-	st.content_margin_right = 8
-	st.content_margin_top = 3
-	st.content_margin_bottom = 3
-	lbl.add_theme_stylebox_override("normal", st)
+	var socket: Control = get_parent()
+	_drag_parent = weakref(socket)
+	socket.modulate.a = 0.48
+	var point := get_global_transform() * _pos
+	var grab := socket.get_global_transform().affine_inverse() * point
+	var preview := SkillBlock.make_condition_preview(payload.get("boolean", payload.get("condition", {})))
+	preview.scale = socket.get_global_transform().get_scale()
+	preview.position = -grab * preview.scale
+	preview.size = preview.get_combined_minimum_size()
 	var wrap := Control.new()
-	wrap.add_child(lbl)
+	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	wrap.add_child(preview)
 	set_drag_preview(wrap)
-	return payload
+	var result := payload.duplicate()
+	result["grab_offset"] = [grab.x,grab.y]
+	return result
+
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_DRAG_END and _drag_parent != null:
+		var socket = _drag_parent.get_ref()
+		if socket != null: socket.modulate.a = 1.0
+		_drag_parent = null
+
 
 
 # Filled reporter: accept palette drops (and other reporters) and forward them
 # to the if gap so replacing the condition still works.
 func _can_drop_data(_pos: Vector2, data) -> bool:
-	return data is Dictionary and data.get("type", "") in ["boolean_block", "logic_block", "condition_block"]
+	var socket := get_parent()
+	return socket != null and socket.has_method("_can_drop_data") and socket._can_drop_data(_pos, data)
 
 
 func _drop_data(_pos: Vector2, data) -> void:
-	if block != null and block.has_method("_drop_condition"):
-		block.call("_drop_condition", Vector2.ZERO, data)
+	var socket := get_parent()
+	if socket != null and socket.has_method("_drop_data"):
+		socket._drop_data(_pos, data)

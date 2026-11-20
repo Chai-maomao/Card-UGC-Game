@@ -1,10 +1,13 @@
-[gd_scene load_steps=10 format=3 uid="uid://c5vcnqomic4ja"]
+[gd_scene load_steps=12 format=3 uid="uid://c5vcnqomic4ja"]
 
 [ext_resource type="Script" uid="uid://ccd1flnpmy3lm" path="res://Main.gd" id="1_ig7tw"]
 [ext_resource type="PackedScene" uid="uid://cehdtymn5plrv" path="res://SlotUI.tscn" id="2_0xm2m"]
-[ext_resource type="Script" uid="uid://ja8vgee7rvlk" path="res://DiscardZone.gd" id="3_discard"]
 [ext_resource type="Script" path="res://ArrowLine.gd" id="4_arrow"]
 [ext_resource type="Script" path="res://BattleBackdrop2D.gd" id="6_backdrop2d"]
+
+[ext_resource type="Script" path="res://HandFanLayout.gd" id="7_handfan"]
+[ext_resource type="Script" path="res://EndTurnButton.gd" id="8_endturn"]
+[ext_resource type="Script" path="res://presentation/ActionReveal.gd" id="9_reveal"]
 
 [sub_resource type="Gradient" id="Gradient_enemy_aura"]
 offsets = PackedFloat32Array(0, 0.18, 0.5, 0.82, 1)
@@ -146,9 +149,17 @@ show_percentage = false
 [node name="HandLabel" type="Label" parent="CanvasLayer/MainBackground/MainLayout/EnemyStatusRow/EnemyStatusHUD/Margin/Content"]
 custom_minimum_size = Vector2(104, 0)
 layout_mode = 2
-text = "Hand 0/6"
+text = "AP 10/10"
 horizontal_alignment = 2
 vertical_alignment = 1
+
+[node name="ActionBar" type="ProgressBar" parent="CanvasLayer/MainBackground/MainLayout/EnemyStatusRow/EnemyStatusHUD/Margin/Content"]
+custom_minimum_size = Vector2(88, 14)
+layout_mode = 2
+size_flags_vertical = 4
+max_value = 10.0
+value = 10.0
+show_percentage = false
 
 [node name="EnemySide" type="HBoxContainer" parent="CanvasLayer/MainBackground/MainLayout" unique_id=1339047512]
 layout_mode = 2
@@ -187,24 +198,33 @@ anchor_bottom = 1.0
 grow_horizontal = 2
 grow_vertical = 2
 theme_override_constants/separation = 20
-alignment = 1
-
-[node name="LeftSpacer" type="Control" parent="CanvasLayer/MainBackground/MainLayout/MiddleInfoBar/InfoHBox" unique_id=2001003]
-layout_mode = 2
-size_flags_horizontal = 3
 
 [node name="TurnLabel" type="Label" parent="CanvasLayer/MainBackground/MainLayout/MiddleInfoBar/InfoHBox" unique_id=1827879917]
 layout_mode = 2
-horizontal_alignment = 1
 vertical_alignment = 1
 
-[node name="EndTurnButton" type="Button" parent="CanvasLayer/MainBackground/MainLayout/MiddleInfoBar/InfoHBox" unique_id=2004276860]
+[node name="CombatBroadcastStrip" type="Label" parent="CanvasLayer/MainBackground/MainLayout/MiddleInfoBar/InfoHBox"]
+custom_minimum_size = Vector2(330, 44)
 layout_mode = 2
-text = "End Turn"
+mouse_filter = 1
+vertical_alignment = 1
+autowrap_mode = 3
+max_lines_visible = 2
 
 [node name="RightSpacer" type="Control" parent="CanvasLayer/MainBackground/MainLayout/MiddleInfoBar/InfoHBox" unique_id=2001004]
 layout_mode = 2
 size_flags_horizontal = 3
+
+[node name="FaceManaButton" type="Button" parent="CanvasLayer/MainBackground/MainLayout/MiddleInfoBar/InfoHBox"]
+layout_mode = 2
+toggle_mode = true
+text = "圣水补付"
+script = ExtResource("8_endturn")
+
+[node name="EndTurnButton" type="Button" parent="CanvasLayer/MainBackground/MainLayout/MiddleInfoBar/InfoHBox" unique_id=2004276860]
+layout_mode = 2
+text = "End Turn"
+script = ExtResource("8_endturn")
 
 [node name="BottomSpacer" type="Control" parent="CanvasLayer/MainBackground/MainLayout" unique_id=2001005]
 custom_minimum_size = Vector2(0, 4)
@@ -292,9 +312,17 @@ show_percentage = false
 [node name="HandLabel" type="Label" parent="CanvasLayer/MainBackground/MainLayout/PlayerStatusRow/PlayerStatusHUD/Margin/Content"]
 custom_minimum_size = Vector2(104, 0)
 layout_mode = 2
-text = "Hand 0/6"
+text = "AP 10/10"
 horizontal_alignment = 2
 vertical_alignment = 1
+
+[node name="ActionBar" type="ProgressBar" parent="CanvasLayer/MainBackground/MainLayout/PlayerStatusRow/PlayerStatusHUD/Margin/Content"]
+custom_minimum_size = Vector2(88, 14)
+layout_mode = 2
+size_flags_vertical = 4
+max_value = 10.0
+value = 10.0
+show_percentage = false
 
 [node name="HandSpacer" type="Control" parent="CanvasLayer/MainBackground/MainLayout" unique_id=2001006]
 custom_minimum_size = Vector2(0, 4)
@@ -316,7 +344,7 @@ theme_override_constants/separation = 12
 alignment = 1
 
 [node name="PileColumn" type="VBoxContainer" parent="CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock"]
-custom_minimum_size = Vector2(112, 0)
+custom_minimum_size = Vector2(140, 0)
 layout_mode = 2
 theme_override_constants/separation = 8
 alignment = 1
@@ -363,75 +391,29 @@ size_flags_horizontal = 3
 size_flags_vertical = 3
 clip_contents = false
 vertical_scroll_mode = 0
+horizontal_scroll_mode = 0
 
-[node name="HandContainer" type="HBoxContainer" parent="CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock/HandArea/HandContent/HandScroll" unique_id=454726733]
+[node name="HandContainer" type="Container" parent="CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock/HandArea/HandContent/HandScroll" unique_id=454726733]
 layout_mode = 2
 theme_override_constants/separation = 8
-alignment = 1
+size_flags_horizontal = 3
+size_flags_vertical = 3
+script = ExtResource("7_handfan")
 
 [node name="DiscardColumn" type="VBoxContainer" parent="CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock"]
-custom_minimum_size = Vector2(150, 0)
+custom_minimum_size = Vector2(140, 0)
 layout_mode = 2
 alignment = 1
 
-[node name="DiscardZone" type="Panel" parent="CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock/DiscardColumn" unique_id=4560001]
-custom_minimum_size = Vector2(150, 72)
-layout_mode = 2
-script = ExtResource("3_discard")
-
-[node name="DiscardLabel" type="Label" parent="CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock/DiscardColumn/DiscardZone" unique_id=4560002]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-text = "DISCARD"
-horizontal_alignment = 1
-vertical_alignment = 1
-
-[node name="SplashPanel" type="Panel" parent="CanvasLayer" unique_id=3000001]
+[node name="SplashPanel" type="Control" parent="CanvasLayer" unique_id=3000001]
+visible = false
 modulate = Color(1, 1, 1, 0)
-anchors_preset = 1
-anchor_left = 1.0
-anchor_right = 1.0
-offset_left = -360.0
-offset_top = 80.0
-offset_bottom = 560.0
-grow_horizontal = 0
+offset_left = -216.0
+offset_top = 100.0
+offset_right = -16.0
+offset_bottom = 380.0
 mouse_filter = 2
-
-[node name="SplashArt" type="TextureRect" parent="CanvasLayer/SplashPanel" unique_id=3000002]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-mouse_filter = 2
-expand_mode = 1
-stretch_mode = 5
-
-[node name="SplashName" type="Label" parent="CanvasLayer/SplashPanel" unique_id=3000003]
-layout_mode = 0
-offset_left = 4.0
-offset_top = 4.0
-offset_right = 340.0
-offset_bottom = 28.0
-theme_override_font_sizes/font_size = 18
-horizontal_alignment = 2
-
-[node name="SplashText" type="Label" parent="CanvasLayer/SplashPanel" unique_id=3000004]
-layout_mode = 1
-anchors_preset = 15
-anchor_right = 1.0
-anchor_bottom = 1.0
-grow_horizontal = 2
-grow_vertical = 2
-theme_override_font_sizes/font_size = 48
-horizontal_alignment = 1
-vertical_alignment = 1
-autowrap_mode = 3
+script = ExtResource("9_reveal")
 
 [node name="AttackArrow" type="Node2D" parent="CanvasLayer" unique_id=150108613]
 script = ExtResource("4_arrow")

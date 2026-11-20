@@ -6,10 +6,17 @@ const ProgressStore = preload("res://TutorialProgress.gd")
 enum Phase {
 	INTRO,
 	HUD,
+	BOARD,
+	HAND,
+	RESOURCES,
+	ACTIONS,
 	SUMMON,
 	SKILL,
+	CARD_STATS,
 	ATTACK_SOURCE,
 	ATTACK_TARGET,
+	COMBAT_RESULT,
+	FACE_DAMAGE,
 	END_TURN,
 	COMPLETE,
 }
@@ -27,7 +34,9 @@ var skip_button: Button
 var exit_button: Button
 var focus_frames: Array[Panel] = []
 var _panel_tween: Tween
-var progress_path: String = ProgressStore.DEFAULT_PATH
+var progress_path: String = PlayerData.tutorial_progress_path
+var _attack_target_hp := 0
+var _attack_payment: Dictionary = {}
 
 
 static func configure_game(game) -> void:
@@ -75,6 +84,10 @@ static func configure_game(game) -> void:
 	game.first_switch = false
 	game.allow_first_turn_attacks = true
 	game.state_revision = 0
+	# This sandbox replaces the opening hand/board after init_game. Quote its
+	# actual opening layout, rather than retaining the starter-deck budget.
+	game.reset_action_budget(1)
+	game.reset_action_budget(2)
 
 
 func start(owner_battle: Node) -> void:
@@ -98,6 +111,10 @@ func allows(action: String, context: Dictionary = {}) -> bool:
 			allowed = false
 	if not allowed:
 		_remind()
+	elif phase == Phase.ATTACK_TARGET:
+		var target: CardData = battle.game.player2_field.slots[2]
+		_attack_target_hp = target.hp if target != null else 0
+		_attack_payment = battle.game.next_action_payment().duplicate()
 	return allowed
 
 
@@ -108,7 +125,7 @@ func notify_action(action: String, _context: Dictionary = {}) -> void:
 		Phase.ATTACK_SOURCE when action == "attack_source":
 			set_phase(Phase.ATTACK_TARGET)
 		Phase.ATTACK_TARGET when action == "attack_target":
-			set_phase(Phase.END_TURN)
+			set_phase(Phase.COMBAT_RESULT)
 		Phase.END_TURN when action == "end_turn":
 			ProgressStore.new(progress_path).mark_completed()
 			set_phase(Phase.COMPLETE)
@@ -117,28 +134,43 @@ func notify_action(action: String, _context: Dictionary = {}) -> void:
 func set_phase(next_phase: int) -> void:
 	phase = next_phase
 	_clear_focus()
-	var total := 7
+	var total := Phase.size()
 	match phase:
 		Phase.INTRO:
 			_set_copy(1, "tutorial.intro_title", "tutorial.intro_body", true)
 		Phase.HUD:
 			_set_copy(2, "tutorial.hud_title", "tutorial.hud_body", true)
-			_focus_controls([battle.player_status_hud, battle.enemy_status_hud])
+		Phase.BOARD:
+			_set_copy(3, "tutorial.board_title", "tutorial.board_body", true)
+		Phase.HAND:
+			_set_copy(4, "tutorial.hand_title", "tutorial.hand_body", true, [SkillEngine.MAX_HAND_SIZE])
+		Phase.RESOURCES:
+			_set_copy(5, "tutorial.resources_title", "tutorial.resources_body", true)
+		Phase.ACTIONS:
+			var config: Dictionary = battle.game.battle_config
+			if config.has("action_base"):
+				_set_copy(6, "tutorial.actions_title", "tutorial.actions_body", true, [str(config.get("action_base", 3)), str(config.get("action_empty_slot_factor", 1)), str(config.get("action_empty_hand_factor", 0.5)), str(config.get("action_mana_factor", 1))])
+			else:
+				_set_copy(6, "tutorial.actions_title", "tutorial.actions_legacy_body", true)
 		Phase.SUMMON:
-			_set_copy(3, "tutorial.summon_title", "tutorial.summon_body")
-			_focus_controls(_summon_focus_controls())
+			var card: CardData = battle.game.player_hand[0]
+			_set_copy(7, "tutorial.summon_title", "tutorial.summon_body", false, [card.cost, battle.game.player_field.get_total_mana()])
 		Phase.SKILL:
-			_set_copy(4, "tutorial.skill_title", "tutorial.skill_body", true)
-			_focus_controls([battle._my_slots_ui()[2]])
+			_set_copy(8, "tutorial.skill_title", "tutorial.skill_body", true)
+		Phase.CARD_STATS:
+			var card: CardData = battle.game.player_field.slots[2]
+			_set_copy(9, "tutorial.stats_title", "tutorial.stats_body", true, [card.cost, card.hp, card.effective_atk()])
 		Phase.ATTACK_SOURCE:
-			_set_copy(5, "tutorial.attack_title", "tutorial.attack_body")
-			_focus_controls([battle._my_slots_ui()[2]])
+			_set_copy(10, "tutorial.attack_title", "tutorial.attack_body")
 		Phase.ATTACK_TARGET:
-			_set_copy(5, "tutorial.target_title", "tutorial.target_body")
-			_focus_controls([battle._their_slots_ui()[2]])
+			_set_copy(11, "tutorial.target_title", "tutorial.target_body")
+		Phase.COMBAT_RESULT:
+			var target: CardData = battle.game.player2_field.slots[2]
+			_set_copy(12, "tutorial.result_title", "tutorial.result_body", true, [_attack_target_hp, target.hp if target != null else 0, int(_attack_payment.get("points", 0)), int(_attack_payment.get("mana", 0)), int(battle.game.next_action_payment().cost)])
+		Phase.FACE_DAMAGE:
+			_set_copy(13, "tutorial.face_title", "tutorial.face_body", true)
 		Phase.END_TURN:
-			_set_copy(6, "tutorial.end_title", "tutorial.end_body")
-			_focus_controls([battle.end_turn_button])
+			_set_copy(14, "tutorial.end_title", "tutorial.end_body", false, [int(battle.game.battle_config.get("mana_per_turn", 2)), int(battle.game.battle_config.get("draw_per_turn", 2))])
 		Phase.COMPLETE:
 			_set_copy(total, "tutorial.complete_title", "tutorial.complete_body", true)
 			next_button.text = Locale.t("tutorial.continue_battle")
@@ -147,13 +179,14 @@ func set_phase(next_phase: int) -> void:
 			skip_button.visible = false
 			exit_button.text = Locale.t("tutorial.exit_tutorial")
 			exit_button.custom_minimum_size.x = 96
-	step_label.text = Locale.t("tutorial.step", [mini(phase + 1, total), total])
+	_focus_controls(_phase_focus_controls())
+	step_label.text = Locale.t("tutorial.step", [phase + 1, total])
 	_refresh_focus_deferred.call_deferred()
 
 
-func _set_copy(_step: int, title_key: String, body_key: String, show_next: bool = false) -> void:
+func _set_copy(_step: int, title_key: String, body_key: String, show_next: bool = false, args: Array = []) -> void:
 	title_label.text = Locale.t(title_key)
-	body_label.text = Locale.t(body_key)
+	body_label.text = Locale.t(body_key, args)
 	next_button.visible = true
 	next_button.disabled = not show_next
 	next_button.text = Locale.t("tutorial.next") if show_next else Locale.t("tutorial.complete_action")
@@ -178,29 +211,34 @@ func _build_ui() -> void:
 	overlay_layer.add_child(overlay_root)
 
 	instruction_panel = PanelContainer.new()
-	instruction_panel.position = Vector2(18, 92)
-	instruction_panel.custom_minimum_size = Vector2(300, 224)
+	instruction_panel.custom_minimum_size = Vector2(740, 0)
 	instruction_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	instruction_panel.z_index = 10
-	UITheme.apply_panel(instruction_panel, "gold")
+	UITheme.apply_popup_frame(instruction_panel, "gold", false)
 	overlay_root.add_child(instruction_panel)
 	var margin := MarginContainer.new()
 	for side in ["left", "right", "top", "bottom"]:
-		margin.add_theme_constant_override("margin_%s" % side, 16)
+		# The shared panel style already supplies padding.
+		margin.add_theme_constant_override("margin_%s" % side, 6)
 	instruction_panel.add_child(margin)
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation", 9)
 	margin.add_child(box)
+	var heading := HBoxContainer.new()
+	heading.add_theme_constant_override("separation", 14)
+	box.add_child(heading)
 	step_label = Label.new()
 	step_label.add_theme_font_size_override("font_size", 12)
 	UITheme.apply_label(step_label, true)
-	box.add_child(step_label)
+	heading.add_child(step_label)
 	title_label = Label.new()
-	UITheme.apply_title(title_label, 21)
-	box.add_child(title_label)
+	title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UITheme.apply_title(title_label, 20)
+	heading.add_child(title_label)
 	body_label = Label.new()
 	body_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	body_label.custom_minimum_size = Vector2(268, 72)
+	body_label.custom_minimum_size = Vector2(0, 48)
 	body_label.add_theme_font_size_override("font_size", 14)
 	UITheme.apply_label(body_label)
 	box.add_child(body_label)
@@ -228,16 +266,13 @@ func _build_ui() -> void:
 	UITheme.apply_button(exit_button, "secondary")
 	exit_button.pressed.connect(_on_exit)
 	buttons.add_child(exit_button)
+	_position_panel()
 	UITheme.animate_popup_enter(instruction_panel)
 
 
 func _on_next() -> void:
-	if phase == Phase.INTRO:
-		set_phase(Phase.HUD)
-	elif phase == Phase.HUD:
-		set_phase(Phase.SUMMON)
-	elif phase == Phase.SKILL:
-		set_phase(Phase.ATTACK_SOURCE)
+	if phase in [Phase.INTRO, Phase.HUD, Phase.BOARD, Phase.HAND, Phase.RESOURCES, Phase.ACTIONS, Phase.SKILL, Phase.CARD_STATS, Phase.COMBAT_RESULT, Phase.FACE_DAMAGE]:
+		set_phase(phase + 1)
 	elif phase == Phase.COMPLETE:
 		_continue_battle()
 
@@ -275,18 +310,73 @@ func _summon_focus_controls() -> Array:
 	return controls
 
 
+func _phase_focus_controls() -> Array:
+	var content: Node = battle.player_status_hud.get_node("Margin/Content")
+	match phase:
+		Phase.HUD:
+			return [content.get_node("HpBar"), battle.enemy_status_hud.get_node("Margin/Content/HpBar")]
+		Phase.BOARD:
+			return battle._my_slots_ui() + battle._their_slots_ui()
+		Phase.HAND:
+			return [battle.hand_area, battle.draw_pile_btn, battle.discard_zone]
+		Phase.RESOURCES:
+			return [content.get_node("ManaBar"), content.get_node("ActionBar")] if battle.game.battle_config.has("action_base") else [content.get_node("ManaBar")]
+		Phase.ACTIONS:
+			return [content.get_node("HandLabel"), content.get_node("ActionBar")] if battle.game.battle_config.has("action_base") else [battle.player_status_hud]
+		Phase.SUMMON:
+			return _summon_focus_controls()
+		Phase.SKILL:
+			return [battle._my_slots_ui()[2], battle.hand_area]
+		Phase.CARD_STATS:
+			if battle.get("tabletop") != null:
+				return [battle._my_slots_ui()[2]]
+			var card_ui = battle._my_slots_ui()[2].current_card_ui
+			return [card_ui.cost_label, card_ui.hp_label, card_ui.atk_label] if card_ui != null else []
+		Phase.ATTACK_SOURCE:
+			return [battle._my_slots_ui()[2]]
+		Phase.ATTACK_TARGET:
+			return [battle._their_slots_ui()[2]]
+		Phase.COMBAT_RESULT:
+			return [battle._their_slots_ui()[2]]
+		Phase.FACE_DAMAGE:
+			return battle._their_slots_ui() + [battle.enemy_status_hud.get_node("Margin/Content/HpBar")]
+		Phase.END_TURN:
+			return [battle.end_turn_button]
+	return []
+
+
+func _position_panel() -> void:
+	var viewport_size: Vector2 = battle.get_viewport_rect().size
+	var width := minf(900, viewport_size.x - 32)
+	instruction_panel.custom_minimum_size.x = width
+	instruction_panel.size.x = width
+	instruction_panel.size.y = instruction_panel.get_combined_minimum_size().y
+	var y: float = viewport_size.y - instruction_panel.size.y - 14
+	if phase in [Phase.HUD, Phase.HAND, Phase.RESOURCES, Phase.ACTIONS, Phase.SUMMON, Phase.SKILL]:
+		y = minf(44, y)
+	instruction_panel.position = Vector2((viewport_size.x - width) / 2, maxf(14, y))
+
+
+func _process(_delta: float) -> void:
+	if battle != null and instruction_panel != null:
+		_position_panel()
+		_refresh_focus(_phase_focus_controls())
+
+
 func _focus_controls(controls: Array) -> void:
 	for control in controls:
 		if control is Control and is_instance_valid(control):
-			var frame := Panel.new()
+			var frame := preload("res://presentation/TutorialFocusFrame.gd").new()
 			frame.mouse_filter = Control.MOUSE_FILTER_IGNORE
 			var style := StyleBoxFlat.new()
-			style.bg_color = Color(0, 0, 0, 0)
+			style.bg_color = Color.TRANSPARENT
 			style.border_color = UITheme.COLOR_GOLD
-			style.set_border_width_all(4)
-			style.set_corner_radius_all(10)
-			style.shadow_color = Color(UITheme.COLOR_GOLD.r, UITheme.COLOR_GOLD.g, UITheme.COLOR_GOLD.b, 0.38)
-			style.shadow_size = 8
+			# Compact stat rows need a fine outline outside their text bounds.
+			style.set_border_width_all(1 if phase == Phase.CARD_STATS else 4)
+			style.set_corner_radius_all(2 if phase == Phase.CARD_STATS else 10)
+			# A StyleBox shadow also fills the transparent interior, obscuring the
+			# board. Keep the outline clear so players can read the real card face.
+			style.shadow_size = 0
 			frame.add_theme_stylebox_override("panel", style)
 			overlay_root.add_child(frame)
 			focus_frames.append(frame)
@@ -301,23 +391,43 @@ func _refresh_focus(controls: Array) -> void:
 	for i in range(mini(controls.size(), focus_frames.size())):
 		var control := controls[i] as Control
 		var frame := focus_frames[i]
-		frame.position = control.global_position - Vector2(6, 6)
-		frame.size = control.size + Vector2(12, 12)
+		var table: Node = battle.get("tabletop")
+		var slot_key: int = battle._my_slots_ui().find(control)
+		if slot_key < 0:
+			var far: int = battle._their_slots_ui().find(control)
+			if far >= 0: slot_key = far + 5
+		if slot_key < 0 and table != null:
+			var hand_index: int = battle.hand_container.get_children().find(control)
+			if hand_index >= 0: slot_key = 10+hand_index
+		if table != null and slot_key >= 0:
+			var points: PackedVector2Array = table.projected_slot_corners(slot_key)
+			if points.is_empty(): frame.hide(); continue
+			var bounds := Rect2(points[0],Vector2.ZERO)
+			for point in points: bounds = bounds.expand(point)
+			frame.position = bounds.position
+			frame.size = bounds.size
+			for j in range(points.size()): points[j] -= bounds.position
+			frame.set("polygon",points)
+			(frame.get_theme_stylebox("panel") as StyleBoxFlat).set_border_width_all(0)
+			frame.visible = control.is_visible_in_tree()
+			frame.queue_redraw()
+			continue
+		var bounds := control.get_global_rect().grow(1.0 if phase == Phase.CARD_STATS else 6.0)
+		if phase == Phase.CARD_STATS:
+			# Font minimum heights leave less than one pixel between these rows.
+			# Keep the vertical bounds intact while outlining the horizontal rim.
+			bounds.position.y = control.global_position.y
+			bounds.size.y = control.get_global_rect().size.y
+		# The hand area can extend below the viewport to make room for the card fan.
+		bounds = bounds.intersection(battle.get_viewport().get_visible_rect().grow(-2.0))
+		frame.position = bounds.position
+		frame.size = bounds.size
+		frame.visible = control.is_visible_in_tree() and control.size.x > 1 and control.size.y > 1 and bounds.has_area()
 
 
 func _refresh_focus_deferred() -> void:
 	await get_tree().process_frame
-	match phase:
-		Phase.HUD:
-			_refresh_focus([battle.player_status_hud, battle.enemy_status_hud])
-		Phase.SUMMON:
-			_refresh_focus(_summon_focus_controls())
-		Phase.SKILL, Phase.ATTACK_SOURCE:
-			_refresh_focus([battle._my_slots_ui()[2]])
-		Phase.ATTACK_TARGET:
-			_refresh_focus([battle._their_slots_ui()[2]])
-		Phase.END_TURN:
-			_refresh_focus([battle.end_turn_button])
+	_refresh_focus(_phase_focus_controls())
 
 
 func _clear_focus() -> void:

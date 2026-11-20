@@ -1,15 +1,13 @@
 class_name BattleSearch
 extends RefCounted
 
-const Game = preload("res://GameState.gd")
 const WIDTH := 4
 const MAX_NODES := 24
 
 
 static func choose(game: RefCounted, ranked: Array) -> Dictionary:
-	var initial: Dictionary = game.export_initial_state()
 	var player: int = game.current_player
-	var base := _value(game, player)
+	var base := _completion_value(game, player)
 	var nodes := 0
 	var best: Dictionary = ranked[0].duplicate(true)
 	var best_score := -INF
@@ -17,16 +15,26 @@ static func choose(game: RefCounted, ranked: Array) -> Dictionary:
 	# playtest traces or network listeners. No await is allowed in this scope.
 	var previously_blocked := EventBus.is_blocking_signals()
 	EventBus.set_block_signals(true)
-	for candidate in _diverse_actions(ranked, WIDTH):
+	var candidates := _diverse_actions(ranked, WIDTH)
+	if not candidates.any(func(action): return str(action.get("type", "")) == "end_turn"):
+		for action in ranked:
+			if str(action.get("type", "")) == "end_turn":
+				candidates.append(action)
+				break
+	for candidate in candidates:
 		if str(candidate.get("type", "")) == "end_turn":
+			var end_score := float(candidate.get("score", 0)) * 0.02
+			if end_score > best_score:
+				best_score = end_score
+				best = candidate.duplicate(true)
 			continue
 		if not _supported(game, candidate): continue
-		var simulated := _clone(initial)
+		var simulated: RefCounted = game.copy_for_simulation()
 		nodes += 1
 		if not BattleRepro.apply_action(simulated, candidate).get("ok", false):
 			continue
 		simulated.cleanup_deaths()
-		var outcome := _value(simulated, player) - base
+		var outcome := _completion_value(simulated, player) - base
 		var followups: Array = []
 		for action in BattleAiPlanner.generate_legal_actions(simulated):
 			if str(action.get("type", "")) == "end_turn":
@@ -35,21 +43,24 @@ static func choose(game: RefCounted, ranked: Array) -> Dictionary:
 			row["score"] = BattleAiPlanner.score_action(simulated, action)["score"]
 			followups.append(row)
 		followups.sort_custom(func(a: Dictionary, b: Dictionary): return float(a.score) > float(b.score))
-		var next_state: Dictionary = simulated.export_initial_state()
 		for action in _diverse_actions(followups, WIDTH):
 			if not _supported(simulated, action): continue
 			if nodes >= MAX_NODES:
 				break
-			var next := _clone(next_state)
+			var next: RefCounted = simulated.copy_for_simulation()
 			nodes += 1
 			if BattleRepro.apply_action(next, action).get("ok", false):
 				next.cleanup_deaths()
-				outcome = maxf(outcome, _value(next, player) - base)
+				outcome = maxf(outcome, _completion_value(next, player) - base)
 		var score := outcome + float(candidate.get("score", 0)) * 0.02
 		if score > best_score:
 			best_score = score
 			best = candidate.duplicate(true)
 	EventBus.set_block_signals(previously_blocked)
+	if nodes == 0:
+		# UGC that requests a manual choice cannot be simulated synchronously.
+		# Keep the legal heuristic choice rather than surrendering the turn.
+		return ranked[0].duplicate(true)
 	if best_score == -INF: return best
 	best["search_nodes"] = nodes
 	best["search_depth"] = 2
@@ -59,12 +70,28 @@ static func choose(game: RefCounted, ranked: Array) -> Dictionary:
 
 static func _diverse_actions(ranked: Array, limit: int) -> Array:
 	var result: Array = []
+	if limit <= 0:
+		return result
 	var seen := {}
+	var families := {}
+	var alternate_positions: Array = []
 	for action in ranked:
 		var key := _action_key(action)
 		if seen.has(key):
 			continue
 		seen[key] = true
+		# Preserve variety across cards/actions before spending spare width on
+		# alternate deployments. Slot order and adjacent UGC make those distinct
+		# actions; only identical actions may be discarded as duplicates.
+		var family := "summon:%d" % int(action.get("hand_index", -1)) if str(action.get("type", "")) == "summon" else key
+		if families.has(family):
+			alternate_positions.append(action)
+			continue
+		families[family] = true
+		result.append(action)
+		if result.size() >= limit:
+			return result
+	for action in alternate_positions:
 		result.append(action)
 		if result.size() >= limit:
 			break
@@ -73,10 +100,6 @@ static func _diverse_actions(ranked: Array, limit: int) -> Array:
 
 static func _action_key(action: Dictionary) -> String:
 	var action_type := str(action.get("type", ""))
-	if action_type == "summon":
-		# Empty-slot choices are strategically equivalent in the current rules.
-		# Keeping one leaves the bounded search room for other cards and actions.
-		return "summon:%d" % int(action.get("hand_index", -1))
 	return "%s:%d:%d:%d:%d:%d" % [
 		action_type,
 		int(action.get("hand_index", -1)),
@@ -85,14 +108,6 @@ static func _action_key(action: Dictionary) -> String:
 		int(action.get("target_player", -1)),
 		int(action.get("skill_index", -1)),
 	]
-
-
-static func _clone(state: Dictionary) -> RefCounted:
-	var game := Game.new()
-	game.quiet = true
-	game.apply_initial_state(state, false)
-	game.draw_callable = game.draw_cards
-	return game
 
 
 static func _value(game: RefCounted, player: int) -> float:
@@ -109,10 +124,37 @@ static func _value(game: RefCounted, player: int) -> float:
 				score += float(pair[1]) * (card.effective_atk() * 3.0 + card.hp * 1.5 + card.temp_hp + card.cost + 4.0)
 	var hand: Array = game.player_hand if player == 1 else game.player2_hand
 	score += hand.size() * 1.0 + ally.get_total_mana() * 0.4
+	if game.battle_config.has("action_base"):
+		score += ally.action_points * 0.3
 	return score
 
 
+static func _completion_value(game: RefCounted, player: int) -> float:
+	var value := _value(game, player)
+	if absf(value) >= 100000.0:
+		return value
+	var plan: Dictionary = game.preview_end_turn_attacks()
+	if not plan.conditional and int(plan.total_damage) >= game.opponent_field().player_hp:
+		return 100000.0
+	# The quote includes action payments and ignores expired temporary Elixir.
+	# Conditional UGC outcomes are estimates and never treated as certain lethal.
+	var damage_weight := 1.5 if plan.conditional else 3.0
+	return value + int(plan.total_damage) * damage_weight - int(plan.points) * 0.3 - int(plan.mana) * 0.4
+
+
 static func needs_search(game: RefCounted) -> bool:
+	if game.battle_config.has("action_base"):
+		var unit_actions := 0
+		for card in game.active_field().slots:
+			if card != null and card.is_alive() and not card.has_acted:
+				unit_actions += 1
+		var payments: Array = game.preview_action_payments(2)
+		if unit_actions >= 2 and payments.size() == 2 and not payments[1].ok:
+			return true
+		if unit_actions > 0 and payments[0].ok:
+			for card in game.active_hand():
+				if card.cost <= game.active_field().get_total_mana() and card.cost + int(payments[0].mana) > game.active_field().get_total_mana():
+					return true
 	# Setup effects benefit from look-ahead. Plain trades keep the cheap planner.
 	for card in game.active_hand() + game.active_field().slots:
 		if card == null:

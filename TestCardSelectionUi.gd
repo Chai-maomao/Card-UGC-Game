@@ -19,7 +19,7 @@ func _ready() -> void:
 		card.cost = 4
 		card.base_cost = 4
 		cards.append(card)
-	battle.game.player_hand = cards
+	battle.game.player_hand = cards.duplicate()
 	battle._refresh_hand_ui()
 	await _settle()
 	var first_ui = battle.hand_container.get_child(0)
@@ -30,19 +30,19 @@ func _ready() -> void:
 	dialog._select(true, 0)
 	dialog._select(true, 1)
 	_assert(dialog.selected.size() == 1, "selection must obey the one-card limit")
-	_assert(not dialog.selection_overlays[0].visible and dialog.selection_overlays[1].visible, "selected card must light up while unselected cards remain shaded")
+	_assert(dialog.selection_overlays[0].button_pressed and not dialog.selection_overlays[1].button_pressed, "the card mask must mark only the selected card")
 	dialog._confirm()
 	await _settle()
 	_assert(cards[0].cost == 2 and cards[0].turn_cost_reduction == 2 and cards[1].cost == 4, "selection must reduce exactly the chosen card by X")
 	_assert(battle.hand_container.get_child(0) == first_ui, "refresh must retain the existing hand node")
 	_assert(first_ui.cost_label.text == Locale.t("card.cost", [2]), "reused node must display the changed cost immediately")
-	_assert(first_ui.cost_label.get_theme_color("font_color") == Color(0.35, 1.0, 0.48), "only a discounted card must show a green cost")
+	_assert(first_ui.cost_label.get_theme_color("font_color") == UITheme.Tokens.CARD_DISCOUNT, "only a discounted card must show a green cost")
 	var ordinary: Control = battle.hand_container.get_child(1)
-	_assert(ordinary.cost_label.get_theme_color("font_color") == Color.WHITE, "an affordable undiscounted card must show a white cost")
+	_assert(ordinary.cost_label.get_theme_color("font_color") == UITheme.Tokens.INK, "an affordable undiscounted card must show a neutral ink cost")
 	battle.game.player_field.current_mana = 0
 	battle._refresh_hand_ui()
-	_assert(battle.hand_container.get_child(1).cost_label.get_theme_color("font_color") == Color(1.0, 0.35, 0.3), "an unaffordable card must show a red cost")
-	_assert(battle.hand_container.get_child(0).cost_label.get_theme_color("font_color") == Color(0.35, 1.0, 0.48), "a discounted card stays green even when unaffordable")
+	_assert(battle.hand_container.get_child(1).cost_label.get_theme_color("font_color") == UITheme.Tokens.CARD_DANGER, "an unaffordable card must show a red cost")
+	_assert(battle.hand_container.get_child(0).cost_label.get_theme_color("font_color") == UITheme.Tokens.CARD_DISCOUNT, "a discounted card stays green even when unaffordable")
 	var parasite: CardData = CardDatabase.playtest_deck().back()
 	first_ui.set_card(parasite)
 	_assert(first_ui.tooltip_text == "", "parasite face must not show its own redundant explanation")
@@ -55,7 +55,7 @@ func _ready() -> void:
 	first_ui.set_card(tinted)
 	tinted.reset_charm_cost()
 	first_ui.refresh_cost_display()
-	_assert(first_ui.cost_label.get_theme_color("font_color") == Color.WHITE, "restored cost must clear the charm tint")
+	_assert(first_ui.cost_label.get_theme_color("font_color") == UITheme.Tokens.INK, "restored cost must clear the charm tint")
 	first_ui.set_card(cards[0])
 	_test_clone_and_lethal_preview(battle)
 	if OS.get_cmdline_user_args().has("--visual"):
@@ -78,9 +78,11 @@ func _ready() -> void:
 				var face: Rect2 = card_ui.get_global_rect()
 				_assert(not card_ui.get_node("CardShadow").visible, "cards embedded in a picker must not cast a loose-card shadow")
 				_assert(absf(face.size.x / face.size.y - 0.75) < 0.001, "card preview must keep its aspect ratio")
+				_assert(absf(card_ui.action_buttons.get_global_rect().get_center().x - face.get_center().x) < 1.1, "action grid must share the card centerline")
 				for button in card_ui.action_buttons.get_children():
 					if button.visible:
-						_assert(absf(button.get_global_rect().get_center().x - face.get_center().x) < 1.1, "skill button must share the card centerline")
+						if card_ui.action_buttons.columns == 1:
+							_assert(absf(button.get_global_rect().get_center().x - face.get_center().x) < 1.1, "single-column skill button must share the card centerline")
 						_assert(face.grow(1).encloses(button.get_global_rect()), "skill button must fit inside card")
 				_assert(card_ui._get_drag_data(Vector2.ZERO) == null, "preview cards must not be draggable into battle")
 			picker.queue_free()

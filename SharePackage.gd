@@ -16,6 +16,11 @@ static func gameplay_signature(card: Dictionary) -> String:
 	var values := {}
 	for key in ["name", "cost", "atk", "max_hp", "skills", "card_type", "gender", "parasite_damage_mode"]:
 		values[key] = card.get(key)
+	# Editor layout and disconnected blocks are authoring data, not game rules.
+	if values.get("skills") is Array:
+		values["skills"] = values["skills"].duplicate(true)
+		for skill in values["skills"]:
+			if skill is Dictionary: skill.erase("_workspace")
 	return BattleRepro.canonical_text(values)
 
 

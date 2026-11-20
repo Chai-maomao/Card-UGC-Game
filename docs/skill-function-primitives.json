@@ -1,0 +1,482 @@
+{
+  "title": "技能基础操作与自定义积木设计依据",
+  "status": "design_only_not_runtime",
+  "current_model": "当前技能是字典描述的事件和效果树。SkillEngine负责触发、概率、条件、选目标、算数值和预算；SkillEffectApplier根据SkillRegistry的handler执行领域动作。多数处理函数返回void，结果通过状态变化、事件、trace和metrics体现。",
+  "proposed_general_model": "在有明确施法者、事件来源和对局随机源的上下文中，对有类型的目标集合执行领域动作，并返回结算回执。函数由有类型的输入、局部绑定、条件、循环、领域动作和输出组成。",
+  "scope": "自定义函数是长期模块。本目录先归纳现状和原型，不改引擎、不新增玩家可执行函数，也不把现有编辑器的发行完成依赖于它。",
+  "sources": [
+    "SkillRegistry.gd:EFFECT_META",
+    "SkillEngine.gd:_execute_effects",
+    "SkillEffectApplier.gd:apply_effect",
+    "SkillTargetResolver.gd:resolve_targets",
+    "CardData.gd:apply_buff",
+    "GameState.gd:make_skill_context_for_player"
+  ],
+  "pipeline": [
+    {
+      "stage": "事件与调用上下文",
+      "current": "触发器检查沉默/眩晕、使用次数、执行预算和技能概率；被动反应通过reaction_context_callable重新确定反应者视角。"
+    },
+    {
+      "stage": "控制与选择",
+      "current": "顺序执行；if/else、重复、停止由引擎解释；阵营和目标形状分别解析成集合，再限制随机目标数量。"
+    },
+    {
+      "stage": "纯值计算",
+      "current": "常量、变量和嵌套运算生成数值。读取目标属性的表达式按实际目标重新计算；不依赖目标的值共享一次结果。"
+    },
+    {
+      "stage": "领域结算",
+      "current": "handler修改CardData、BattleField，或委托GameState/交互层处理牌区与选择。"
+    },
+    {
+      "stage": "反应与呈现",
+      "current": "结算可能触发其他技能、状态或退场；trace、metrics和EventBus供检查、表现、回放使用，不应由画面再掷一次随机数。"
+    }
+  ],
+  "effects": [
+    {
+      "id": "damage",
+      "name": "伤害",
+      "handler": "_apply_damage",
+      "current_steps": "按目标类型分流；单位伤害依次处理减伤、寄生吸收、护盾与生命，发出结算事件并触发存活者受伤技能。",
+      "candidate_recipe": "造成伤害→伤害回执"
+    },
+    {
+      "id": "heal",
+      "name": "治疗",
+      "handler": "_apply_heal",
+      "current_steps": "调用单位或玩家的治疗规则，以实际恢复量记录结果；单位触发被治疗技能。",
+      "candidate_recipe": "恢复生命→治疗回执"
+    },
+    {
+      "id": "draw_cards",
+      "name": "抽牌",
+      "handler": "_apply_draw_cards",
+      "current_steps": "调用上下文draw_callable，由GameState统一处理抽牌和手牌容量。",
+      "candidate_recipe": "从牌库取牌→进入手牌"
+    },
+    {
+      "id": "shield",
+      "name": "护盾",
+      "handler": "_apply_shield",
+      "current_steps": "增加temp_hp；消耗和到期由伤害与回合流程处理。",
+      "candidate_recipe": "添加护盾→护盾回执"
+    },
+    {
+      "id": "charm",
+      "name": "魅惑",
+      "handler": "_apply_charm",
+      "current_steps": "找到场上位置，复制当前卡牌状态，施加魅惑费用，移除原场上对象，通知离场并经统一入口进入己方手牌。",
+      "candidate_recipe": "移动场上牌到手牌＋本回合费用修正"
+    },
+    {
+      "id": "add_buff",
+      "name": "添加状态",
+      "handler": "_apply_buff",
+      "current_steps": "追加包含状态ID、强度、时长、施加方的状态记录；具体功效由属性读取、战斗或回合流程解释。",
+      "candidate_recipe": "附加状态实例"
+    },
+    {
+      "id": "lifesteal_damage",
+      "name": "吸血伤害",
+      "handler": "_apply_lifesteal_damage",
+      "current_steps": "单独实现与普通伤害相似的减伤、吸收和扣血步骤，再按返回的实际伤害治疗存活施法者。",
+      "candidate_recipe": "令伤害回执=造成伤害；恢复施法者生命(回执.实际伤害)"
+    },
+    {
+      "id": "execute",
+      "name": "处决",
+      "handler": "_apply_execute",
+      "current_steps": "目标生命不高于阈值时执行致命处理，仍保留免疫致命规则；发出伤害结果。",
+      "candidate_recipe": "若生命≤阈值：执行致命处置→处置回执"
+    },
+    {
+      "id": "cleanse",
+      "name": "净化",
+      "handler": "_apply_cleanse",
+      "current_steps": "按注册表负面状态集合调用共用的状态移除逻辑。",
+      "candidate_recipe": "移除满足负面分类的状态"
+    },
+    {
+      "id": "dispel",
+      "name": "驱散",
+      "handler": "_apply_dispel",
+      "current_steps": "按注册表正面状态集合调用同一状态移除逻辑。",
+      "candidate_recipe": "移除满足正面分类的状态"
+    },
+    {
+      "id": "gain_mana",
+      "name": "获得圣水",
+      "handler": "_apply_gain_mana",
+      "current_steps": "修改己方圣水，增加受上限限制，负值扣除时不低于零，记录实际变化量。",
+      "candidate_recipe": "改变玩家资源(圣水,数量)→实际变化"
+    },
+    {
+      "id": "gain_attack",
+      "name": "改变攻击",
+      "handler": "_apply_gain_attack",
+      "current_steps": "改变field_atk_bonus；有效攻击还会合并状态与寄生牌加成。",
+      "candidate_recipe": "添加属性修正(攻击,场上作用域)"
+    },
+    {
+      "id": "gain_max_hp",
+      "name": "改变生命上限",
+      "handler": "_apply_gain_max_hp",
+      "current_steps": "改变当前max_hp，负向变化不低于1；正向同时增加生命，负向把生命限制在新上限内。",
+      "candidate_recipe": "改变上限(生命,场上作用域,配套生命策略)"
+    },
+    {
+      "id": "view_discard_select",
+      "name": "弃牌堆选牌",
+      "handler": "_apply_view_discard_select",
+      "current_steps": "发出view_discard_select请求，实际选择由战斗交互层接续。",
+      "candidate_recipe": "请求选择(弃牌堆,查看数,保留数)→进入手牌"
+    },
+    {
+      "id": "view_deck_select",
+      "name": "牌库选牌",
+      "handler": "_apply_view_deck_select",
+      "current_steps": "牌库空时请求洗回弃牌堆，再发出view_deck_select请求。",
+      "candidate_recipe": "确保牌库可用→请求选择(牌库)→进入手牌"
+    },
+    {
+      "id": "make_zero_cost",
+      "name": "降低手牌费用",
+      "handler": "_apply_make_zero_cost",
+      "current_steps": "先筛选费用大于零的手牌；全体、随机数量、手动锚点及相邻目标分别处理；修正分本回合和永久两种。",
+      "candidate_recipe": "筛选手牌→选择或采样→添加费用修正(作用域)"
+    },
+    {
+      "id": "mana_drain",
+      "name": "汲取圣水",
+      "handler": "_apply_mana_drain",
+      "current_steps": "先从敌方实际拥有的圣水中扣除，再给己方增加这个实际扣除量，己方仍受资源上限限制。",
+      "candidate_recipe": "令回执=扣除敌方资源；增加己方资源(回执.实际扣除)"
+    },
+    {
+      "id": "swap_attack",
+      "name": "交换攻击",
+      "handler": "_apply_swap_attack",
+      "current_steps": "互换双方atk和base_atk；field_atk_bonus及状态加成不随之交换。",
+      "candidate_recipe": "交换属性组(基础与当前攻击)"
+    },
+    {
+      "id": "discard_hand",
+      "name": "弃置敌方手牌",
+      "handler": "_apply_discard_hand",
+      "current_steps": "使用对局RNG随机取敌方手牌，移出手牌并调用统一弃置回调；另外发出表现用事件。",
+      "candidate_recipe": "采样敌方手牌→弃置牌→弃置回执"
+    },
+    {
+      "id": "copy_hand",
+      "name": "复制手牌",
+      "handler": "_apply_copy_hand",
+      "current_steps": "从执行前的手牌快照随机取样，复制卡牌并重设顶层实例ID，经统一入口进入手牌；新复制牌不成为本次取样候选。",
+      "candidate_recipe": "冻结候选集→采样→复制对象→进入手牌"
+    },
+    {
+      "id": "clone_enemy",
+      "name": "复制敌方单位",
+      "handler": "_apply_clone_enemy",
+      "current_steps": "复制敌方单位当前完整状态，递归重设卡牌与寄生牌实例ID，经统一入口进入己方手牌。",
+      "candidate_recipe": "复制对象树(保留当前状态,重设身份)→进入手牌"
+    },
+    {
+      "id": "change_cost",
+      "name": "改变费用",
+      "handler": "_apply_change_cost",
+      "current_steps": "调用CardData.apply_cost_change修改本局费用；不等价于直接改cost显示字段。",
+      "candidate_recipe": "添加费用修正(本局作用域)"
+    },
+    {
+      "id": "match_max_hp",
+      "name": "本局生命上限",
+      "handler": "_apply_match_max_hp",
+      "current_steps": "同时增加base_max_hp、max_hp和hp，用于获得时天赋的本局成长。",
+      "candidate_recipe": "改变上限(生命,本局作用域,配套生命策略)"
+    },
+    {
+      "id": "damage_cap",
+      "name": "单次伤害上限",
+      "handler": "_apply_damage_cap",
+      "current_steps": "命令处理函数为空；实际在CardData受伤时读取持续天赋中的伤害上限。",
+      "candidate_recipe": "注册伤害规则修正(每次伤害的上限)"
+    }
+  ],
+  "prototype_types": [
+    "整数",
+    "布尔值",
+    "卡牌引用",
+    "玩家引用",
+    "牌区引用",
+    "有类型的集合",
+    "结算回执"
+  ],
+  "prototype_operations": [
+    {
+      "name": "读取属性",
+      "inputs": [
+        "对象",
+        "属性"
+      ],
+      "output": "整数或布尔值",
+      "boundary": "读取有效攻击、当前费用等领域值，而不是任意反射字段。"
+    },
+    {
+      "name": "筛选和采样集合",
+      "inputs": [
+        "集合",
+        "谓词",
+        "数量",
+        "对局随机源"
+      ],
+      "output": "集合",
+      "boundary": "施法时冻结候选集；规定是否重复取样。"
+    },
+    {
+      "name": "造成伤害与恢复生命",
+      "inputs": [
+        "施法者",
+        "目标",
+        "数值"
+      ],
+      "output": "结算回执",
+      "boundary": "保留减伤、护盾、寄生、免疫致命和反应技能，不开放裸减hp来代替。"
+    },
+    {
+      "name": "改变资源和属性修正",
+      "inputs": [
+        "对象",
+        "属性",
+        "变化量",
+        "作用域"
+      ],
+      "output": "实际变化量",
+      "boundary": "本回合、场上、本局、状态时长是不同作用域。"
+    },
+    {
+      "name": "移动和复制牌",
+      "inputs": [
+        "对象或集合",
+        "来源牌区",
+        "目标牌区",
+        "身份策略"
+      ],
+      "output": "牌区变化回执",
+      "boundary": "统一处理手牌容量、离场/获得/弃置事件和实例ID。"
+    },
+    {
+      "name": "请求玩家选择",
+      "inputs": [
+        "候选集",
+        "选择条件",
+        "操作者"
+      ],
+      "output": "选择后的集合",
+      "boundary": "将来应是可等待的命令；后续函数体等待选择完成，不能把发出EventBus请求误当作已经选好。"
+    },
+    {
+      "name": "附加与移除状态",
+      "inputs": [
+        "对象",
+        "状态定义",
+        "参数",
+        "持续规则",
+        "归属方"
+      ],
+      "output": "状态实例集合",
+      "boundary": "持续规则修改、周期效果、事件反应不是同一类简单加减。"
+    },
+    {
+      "name": "顺序 条件 循环 局部变量 返回",
+      "inputs": [
+        "有类型的参数和子流程"
+      ],
+      "output": "声明的返回类型",
+      "boundary": "保留共享预算、调用栈、停止当前块语义；递归与循环都计入对局预算。"
+    }
+  ],
+  "operation_semantics": {
+    "control": [
+      "if选中then_effects或else_effects",
+      "repeat计算次数并受上限限制",
+      "stop停止当前效果列表；循环体中的stop不取消后续迭代"
+    ],
+    "numbers": [
+      "加减乘除",
+      "除法可选择取整，除零当前返回0",
+      "rand上下限含端点，倒置上下限先交换",
+      "场上数量、空槽数量、双方手牌/圣水、回合、牌库数量、自身/目标生命百分比、目标有效攻击及费用"
+    ],
+    "booleans": [
+      ">=、<=、==",
+      "and、or、not",
+      "目标是否有指定状态",
+      "当前and/or会先求两边表达式；若将来引入短路求值，含随机数时会改变RNG消耗，不能默默替换"
+    ],
+    "chance": [
+      "技能概率和效果概率扣除施法者厄运影响",
+      "概率块使用1至100整数判定；普通概率使用现有百分比掷值路径",
+      "随机数来自上下文对局RNG，展现只重放结果"
+    ],
+    "targets": [
+      "施法者",
+      "指定目标及相邻",
+      "施法者相邻",
+      "按阵营选择全体",
+      "玩家本体",
+      "按性别筛选单位"
+    ]
+  },
+  "states": [
+    {
+      "id": "atk_boost",
+      "mechanism": "有效攻击读取时叠加状态值"
+    },
+    {
+      "id": "regen",
+      "mechanism": "tick_buffs在归属方的到期时钟中调用治疗"
+    },
+    {
+      "id": "mana_refund",
+      "mechanism": "归属方回合结束汇总返还并递减时长"
+    },
+    {
+      "id": "thorns",
+      "mechanism": "普通攻击流程读取反伤值并对攻击者结算；不等价于所有伤害事件都反击"
+    },
+    {
+      "id": "damage_reduction",
+      "mechanism": "受伤流程读取并合计减伤比例"
+    },
+    {
+      "id": "taunt",
+      "mechanism": "存在性状态参与合法攻击目标判定，不读取强度"
+    },
+    {
+      "id": "silence",
+      "mechanism": "技能触发入口禁止发动"
+    },
+    {
+      "id": "misfortune",
+      "mechanism": "技能和效果概率判定读取并降低概率"
+    },
+    {
+      "id": "immune_lethal",
+      "mechanism": "状态并设置免疫标志，由致命受伤路径消费规则"
+    },
+    {
+      "id": "poison",
+      "mechanism": "跟随受影响单位当前阵营的回合时钟，直接扣生命并递减时长；不是普通伤害管线"
+    },
+    {
+      "id": "stun",
+      "mechanism": "攻击和技能权限检查；consume_stun标记生效回合，finish_stun_turn结束该回合状态"
+    }
+  ],
+  "function_prototypes": [
+    {
+      "name": "吸血攻击",
+      "arguments": {
+        "目标": "卡牌",
+        "伤害": "整数"
+      },
+      "body": [
+        "令结果=造成伤害(目标,伤害)",
+        "如果施法者存活且结果.实际伤害>0：恢复生命(施法者,结果.实际伤害)"
+      ]
+    },
+    {
+      "name": "资源汲取",
+      "arguments": {
+        "敌方": "玩家",
+        "数量": "整数"
+      },
+      "body": [
+        "令结果=扣除资源(敌方,圣水,数量)",
+        "增加资源(施法者所属玩家,圣水,结果.实际扣除)"
+      ]
+    },
+    {
+      "name": "净化",
+      "arguments": {
+        "目标": "卡牌"
+      },
+      "body": [
+        "令集合=筛选(目标的状态,极性=负面)",
+        "移除状态(目标,集合)"
+      ]
+    }
+  ],
+  "implementation_order": [
+    "先提供命令函数和有类型参数、局部绑定与回执；复用现有事件帽、类型槽与效果树",
+    "再提供纯数值/条件函数；将随机判定作为显式操作，不能伪装成可重复求值的纯函数",
+    "再研究集合、交互等待和自定义状态；保留原生领域操作边界，不让用户脚本直接访问Node、网络或磁盘"
+  ],
+  "open_design_points": [
+    "当前吸血与普通伤害重复计算管线，提取原语前需用实际伤害/吸收/触发顺序行为对照",
+    "手牌复制只重设顶层ID，敌方复制递归重设寄生对象ID；统一复制原语前需明确身份策略",
+    "选牌相关当前发出请求后返回，函数模块需要明确等待与恢复语义",
+    "持续伤害上限从天赋树读取，必须归为规则钩子而不是一次性动作",
+    "状态到期归属、战场换边和本局/本回合修正要保留明确定义"
+  ],
+  "events": [
+    {
+      "id": "on_attack",
+      "meaning": "普通攻击时"
+    },
+    {
+      "id": "on_activate",
+      "meaning": "主动发动"
+    },
+    {
+      "id": "on_summon",
+      "meaning": "召唤时"
+    },
+    {
+      "id": "on_death",
+      "meaning": "死亡离场前"
+    },
+    {
+      "id": "on_damaged",
+      "meaning": "存活受伤后"
+    },
+    {
+      "id": "on_cast",
+      "meaning": "法术发动"
+    },
+    {
+      "id": "on_turn_start",
+      "meaning": "回合开始"
+    },
+    {
+      "id": "on_turn_end",
+      "meaning": "回合结束"
+    },
+    {
+      "id": "on_healed",
+      "meaning": "被治疗时"
+    },
+    {
+      "id": "on_attacked",
+      "meaning": "被攻击时"
+    },
+    {
+      "id": "on_added",
+      "meaning": "获得牌时"
+    },
+    {
+      "id": "on_discarded",
+      "meaning": "弃置牌时"
+    },
+    {
+      "id": "on_board_changed",
+      "meaning": "场上单位变动"
+    },
+    {
+      "id": "always",
+      "meaning": "持续规则"
+    }
+  ]
+}

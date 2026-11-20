@@ -8,6 +8,7 @@ enum Phase {
 	NAME,
 	TRIGGER,
 	EFFECT,
+	VALUE,
 	REVIEW,
 	SAVE,
 }
@@ -26,7 +27,7 @@ var exit_button: Button
 var focus_frames: Array[Panel] = []
 var _focused_controls: Array[Control] = []
 var _panel_tween: Tween
-var progress_path: String = ProgressStore.DEFAULT_PATH
+var progress_path: String = PlayerData.tutorial_progress_path
 var navigate_on_complete: bool = true
 
 
@@ -67,7 +68,9 @@ func notify_action(action: String, _context: Dictionary = {}) -> void:
 		Phase.TRIGGER when action == "trigger":
 			set_phase(Phase.EFFECT)
 		Phase.EFFECT when action == "effect":
-			set_phase(Phase.REVIEW)
+			set_phase(Phase.VALUE)
+		Phase.VALUE when action == "value":
+			_update_value_step()
 
 
 func handle_save(skill: Dictionary) -> bool:
@@ -105,13 +108,20 @@ func set_phase(next_phase: int) -> void:
 		Phase.EFFECT:
 			_set_copy("tutorial.editor_effect_title", "tutorial.editor_effect_body", false)
 			_focus_controls([_effect_button()])
+		Phase.VALUE:
+			_set_copy("tutorial.editor_value_title", "tutorial.editor_value_body", false)
+			_update_value_step()
 		Phase.REVIEW:
 			_set_copy("tutorial.editor_review_title", "tutorial.editor_review_body", true)
-			_focus_controls([editor.preview_panel])
+			if editor.workbench != null:
+				editor.workbench.compile_preview()
+				_focus_controls([editor.workbench.preview_section])
+			else:
+				_focus_controls([editor.preview_panel])
 		Phase.SAVE:
 			_set_copy("tutorial.editor_save_title", "tutorial.editor_save_body", false)
 			_focus_controls([editor.save_button])
-	step_label.text = Locale.t("tutorial.editor_step", [phase + 1, 6])
+	step_label.text = Locale.t("tutorial.editor_step", [phase + 1, Phase.size()])
 	_configure_editor_controls()
 	_refresh_focus_deferred.call_deferred()
 
@@ -139,7 +149,7 @@ func _build_ui() -> void:
 	instruction_panel.custom_minimum_size = Vector2(350, 238)
 	instruction_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	instruction_panel.z_index = 10
-	UITheme.apply_panel(instruction_panel, "gold")
+	UITheme.apply_popup_frame(instruction_panel, "gold", false)
 	overlay_root.add_child(instruction_panel)
 	var margin := MarginContainer.new()
 	for side in ["left", "right", "top", "bottom"]:
@@ -190,7 +200,39 @@ func _build_ui() -> void:
 
 func _position_panel() -> void:
 	var viewport_size := editor.get_viewport_rect().size
-	instruction_panel.position = Vector2(maxf(18.0, viewport_size.x - 370.0), 18.0)
+	var panel_size := instruction_panel.size.max(instruction_panel.get_combined_minimum_size())
+	var bounds := Rect2(Vector2(18, 18), viewport_size - Vector2(36, 36))
+	var last_position := (bounds.end - panel_size).max(bounds.position)
+	var preferred := Vector2(bounds.position.x, maxf(84, (viewport_size.y-panel_size.y)*0.5)) if phase in [Phase.REVIEW, Phase.SAVE] else Vector2(last_position.x, bounds.position.y)
+	var candidates: Array[Vector2] = [preferred]
+	var targets: Array[Rect2] = []
+	for control in _focused_controls:
+		if not is_instance_valid(control) or not control.is_visible_in_tree():
+			continue
+		var target := control.get_global_rect().grow(12)
+		targets.append(target)
+		candidates.append(Vector2(target.position.x - panel_size.x, target.position.y))
+		candidates.append(Vector2(target.end.x, target.position.y))
+		candidates.append(Vector2(target.position.x, target.end.y))
+		candidates.append(Vector2(target.position.x, target.position.y - panel_size.y))
+	candidates.append(bounds.position)
+	candidates.append(Vector2(last_position.x, last_position.y))
+	candidates.append(Vector2(bounds.position.x, last_position.y))
+	var best_position := preferred
+	var best_overlap := INF
+	var best_distance := INF
+	for candidate in candidates:
+		candidate = candidate.clamp(bounds.position, last_position)
+		var panel_rect := Rect2(candidate, panel_size)
+		var overlap := 0.0
+		for target in targets:
+			overlap += panel_rect.intersection(target).get_area()
+		var distance := candidate.distance_squared_to(preferred)
+		if overlap < best_overlap or (is_equal_approx(overlap, best_overlap) and distance < best_distance):
+			best_overlap = overlap
+			best_distance = distance
+			best_position = candidate
+	instruction_panel.position = best_position
 
 
 func _on_next() -> void:
@@ -198,6 +240,8 @@ func _on_next() -> void:
 		set_phase(Phase.NAME)
 	elif phase == Phase.NAME and not editor.skill_name_input.text.strip_edges().is_empty():
 		set_phase(Phase.TRIGGER)
+	elif phase == Phase.VALUE and _has_draw_count():
+		set_phase(Phase.REVIEW)
 	elif phase == Phase.REVIEW:
 		set_phase(Phase.SAVE)
 
@@ -217,6 +261,8 @@ func _on_exit() -> void:
 
 func _configure_editor_controls() -> void:
 	editor.skill_name_input.editable = phase == Phase.NAME
+	# Searching can hide the required block and strand the guided step.
+	editor.palette_search.editable = false
 	editor.save_button.disabled = phase != Phase.SAVE
 	editor.cancel_button.disabled = true
 	if editor._undo_btn:
@@ -225,6 +271,8 @@ func _configure_editor_controls() -> void:
 		editor._redo_btn.disabled = true
 	if editor._template_btn:
 		editor._template_btn.disabled = true
+	if editor.workbench != null:
+		editor.workbench.compile_button.disabled = phase not in [Phase.REVIEW, Phase.SAVE]
 	for button in editor.palette_vbox.find_children("*", "Button", true, false):
 		var palette_button := button as Button
 		palette_button.disabled = true
@@ -234,6 +282,37 @@ func _configure_editor_controls() -> void:
 		expected.disabled = false
 	_set_control_tree_enabled(editor.settings_row, false)
 	_set_control_tree_enabled(editor.effects_list, false)
+	if phase == Phase.VALUE:
+		_focus_draw_count.call_deferred()
+
+
+func _has_draw_count() -> bool:
+	return editor.effect_data.size() == 1 and int(editor.effect_data[0].get("value", 0)) == 1
+
+
+func _update_value_step() -> void:
+	var ready := _has_draw_count()
+	next_button.disabled = not ready
+	next_button.text = Locale.t("tutorial.next") if ready else Locale.t("tutorial.complete_action")
+
+
+func _draw_count_input() -> LineEdit:
+	for slot in editor.effects_list.find_children("*", "ValueSlot", true, false):
+		if slot.is_queued_for_deletion():
+			continue
+		for child in slot.get_children():
+			if child is LineEdit and not child.is_queued_for_deletion():
+				return child
+	return null
+
+
+func _focus_draw_count() -> void:
+	if phase != Phase.VALUE:
+		return
+	var input := _draw_count_input()
+	if input != null:
+		input.editable = true
+		_focus_controls([input])
 
 
 func _keep_disabled_button_colored(button: Button) -> void:
@@ -242,7 +321,10 @@ func _keep_disabled_button_colored(button: Button) -> void:
 	var normal_style := button.get_theme_stylebox("normal")
 	if normal_style != null:
 		button.add_theme_stylebox_override("disabled", normal_style.duplicate())
-	button.add_theme_color_override("font_disabled_color", button.get_theme_color("font_color"))
+	button.set_meta("tutorial_disabled_tint",true)
+	var text_color := button.get_theme_color("font_color")
+	if text_color.a > 0:
+		button.add_theme_color_override("font_disabled_color", Color(text_color, text_color.a * 0.45))
 	button.add_theme_color_override("icon_disabled_color", Color.WHITE)
 
 
@@ -283,10 +365,10 @@ func _focus_controls(controls: Array) -> void:
 			var style := StyleBoxFlat.new()
 			style.bg_color = Color(0, 0, 0, 0)
 			style.border_color = UITheme.COLOR_GOLD
-			style.set_border_width_all(4)
+			var scroll := _palette_scroll()
+			style.set_border_width_all(2 if scroll != null and scroll.is_ancestor_of(control) else 4)
 			style.set_corner_radius_all(10)
-			style.shadow_color = Color(UITheme.COLOR_GOLD.r, UITheme.COLOR_GOLD.g, UITheme.COLOR_GOLD.b, 0.38)
-			style.shadow_size = 8
+			style.shadow_size = 0
 			frame.add_theme_stylebox_override("panel", style)
 			overlay_root.add_child(frame)
 			focus_frames.append(frame)
@@ -298,6 +380,8 @@ func _focus_controls(controls: Array) -> void:
 
 
 func _process(_delta: float) -> void:
+	if editor != null and instruction_panel != null:
+		_position_panel()
 	if not focus_frames.is_empty():
 		_refresh_focus()
 
@@ -308,23 +392,30 @@ func _refresh_focus() -> void:
 		if control == null or not is_instance_valid(control):
 			focus_frames[i].visible = false
 			continue
-		var frame_rect := control.get_global_rect().grow(6.0)
+		var palette_scroll := _palette_scroll()
+		var in_palette := palette_scroll != null and palette_scroll.is_ancestor_of(control)
+		# Palette highlights share the block's bounds and scaled corner radius.
+		var frame_rect := control.get_global_rect().grow(0.0 if in_palette else 6.0)
+		if in_palette and control is BaseButton:
+			var block_style := control.get_theme_stylebox("normal") as StyleBoxFlat
+			var frame_style := focus_frames[i].get_theme_stylebox("panel") as StyleBoxFlat
+			if block_style != null and frame_style != null:
+				frame_style.set_corner_radius_all(roundi(block_style.corner_radius_top_left*control.get_global_transform().get_scale().x))
 		# Keep the guide geometrically attached to the real block. Clamping the
 		# frame to the scroll viewport made its edge appear pinned while the block
 		# continued moving underneath it.
 		focus_frames[i].position = frame_rect.position
 		focus_frames[i].size = frame_rect.size
-		var palette_scroll := _palette_scroll()
-		if palette_scroll != null and palette_scroll.is_ancestor_of(control):
+		if in_palette:
 			var clip_rect := palette_scroll.get_global_rect()
 			if not clip_rect.encloses(frame_rect):
 				focus_frames[i].visible = false
 				continue
-		focus_frames[i].visible = frame_rect.size.x > 1.0 and frame_rect.size.y > 1.0
+		focus_frames[i].visible = control.is_visible_in_tree() and frame_rect.size.x > 1.0 and frame_rect.size.y > 1.0
 
 
 func _palette_scroll() -> ScrollContainer:
-	return editor.get_node_or_null("Panel/Margin/HBox/PalettePanel/Margin/VBox/PaletteScroll") as ScrollContainer
+	return editor.palette_vbox.get_parent() as ScrollContainer
 
 
 func _refresh_focus_deferred() -> void:

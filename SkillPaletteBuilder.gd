@@ -29,11 +29,11 @@ func build() -> void:
 		)
 
 	# Effect blocks grouped by category.
-	for category in ["attack", "defense", "utility"]:
+	for category in ["attack", "defense", "status", "utility"]:
 		var available_effects: Array[String] = []
 		for effect_id: String in SkillRegistry.EFFECT_IDS:
 			var meta: Dictionary = SkillRegistry.effect_meta(effect_id)
-			if str(meta.get("category", "")) != category:
+			if SkillRegistry.palette_category(effect_id) != category:
 				continue
 			if editor.call("_is_talent_mode"):
 				if not SkillRegistry.is_effect_allowed_for_talent_trigger(effect_id, str(editor.get("current_trigger_key"))):
@@ -46,6 +46,12 @@ func build() -> void:
 		var section_key := "skill_editor.palette_%s" % category
 		_add_section(palette_vbox, Locale.t(section_key), true, func(box: VBoxContainer, cat: String = category):
 			for effect_id: String in available_effects:
+				if effect_id == SkillRegistry.EFFECT_ADD_BUFF:
+					for buff: String in SkillRegistry.BUFF_IDS:
+						var button := palette_button(Locale.term("buff", buff), SkillBlock.category_color(cat), Callable(editor, "_add_effect_block").bind(effect_id, buff), effect_id) as SkillPaletteBlock
+						button.buff_id = buff
+						box.add_child(button)
+					continue
 				box.add_child(palette_button(Locale.term("effect", effect_id),
 						SkillBlock.category_color(cat), Callable(editor, "_add_effect_block").bind(effect_id), effect_id))
 		)
@@ -82,6 +88,8 @@ func build() -> void:
 				Callable(editor, "_add_if_block"), SkillEngine.EFFECT_IF))
 		box.add_child(palette_button(Locale.t("skill_editor.palette_if_else"), SkillBlock.control_color(),
 				Callable(editor, "_add_if_else_block"), SkillEngine.EFFECT_IF_ELSE))
+		box.add_child(palette_button(Locale.t("skill_editor.palette_chance"), SkillBlock.control_color(),
+				Callable(editor, "_add_chance_block"), SkillRegistry.CHANCE_PALETTE_ID))
 		box.add_child(palette_button(Locale.t("skill_editor.palette_repeat"), SkillBlock.repeat_color(),
 				Callable(editor, "_add_repeat_block"), SkillEngine.EFFECT_REPEAT))
 		box.add_child(palette_button(Locale.t("skill_editor.palette_stop"), SkillBlock.stop_color(),
@@ -128,6 +136,7 @@ func build() -> void:
 # hidden so the palette scroll never buries the common blocks.
 func _add_section(palette_vbox: VBoxContainer, title_text: String, default_open: bool, builder: Callable) -> void:
 	var header := Button.new()
+	header.set_meta("keyword_literal",true)
 	header.text = "%s %s" % ["-" if default_open else "+", title_text]
 	header.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	header.add_theme_font_size_override("font_size", 13)
@@ -155,6 +164,8 @@ func _add_section(palette_vbox: VBoxContainer, title_text: String, default_open:
 	box.add_theme_constant_override("separation", 5)
 	box.visible = default_open
 	palette_vbox.add_child(box)
+	box.visibility_changed.connect(func():
+		header.text = "%s %s" % ["-" if box.visible else "+", title_text])
 
 	header.pressed.connect(func():
 		box.visible = not box.visible
@@ -251,7 +262,7 @@ func expr_palette_button(text: String, kind: String) -> Button:
 	btn.text = text
 	btn.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	btn.add_theme_font_size_override("font_size", 13)
-	var color := SkillBlock.math_color()
+	var color := SkillBlock.random_color() if kind == "rand" else SkillBlock.math_color()
 	_apply_palette_style(btn, color, 14, false)
 	btn.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	btn.tooltip_text = Locale.t("skill_editor.math_drag_hint")
@@ -268,7 +279,7 @@ func expr_palette_label(kind: String) -> String:
 		"/":
 			return "a / b"
 		"rand":
-			return Locale.t("skill_editor.op_random") + Locale.t("skill_editor.op_range")
+			return "a ~ b"
 		_:
 			return "a + b"
 
@@ -295,32 +306,57 @@ func logic_palette_button(text: String, kind: String) -> Button:
 # semantic edge and lifted hover state. Keep horizontal borders and padding
 # symmetric so pressed/focus layers cover the button evenly on both sides.
 func _apply_palette_style(btn: Button, color: Color, radius: int, _left_accent: bool = true) -> void:
+	btn.clip_text = true
+	btn.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	var normal := StyleBoxFlat.new()
-	normal.bg_color = color.darkened(0.08)
-	normal.border_color = color.darkened(0.22)
+	normal.bg_color = UITheme.COLOR_PANEL_SOFT.lerp(color, 0.78)
+	normal.border_color = color.darkened(0.28)
 	normal.set_border_width_all(1)
 	normal.set_corner_radius_all(radius)
 	normal.shadow_size = 0
-	normal.content_margin_left = 9
-	normal.content_margin_right = 9
-	normal.content_margin_top = 5
-	normal.content_margin_bottom = 5
+	normal.content_margin_left = 12
+	normal.content_margin_right = 12
+	normal.content_margin_top = 8
+	normal.content_margin_bottom = 8
 	btn.add_theme_stylebox_override("normal", normal)
 
 	var hover: StyleBoxFlat = normal.duplicate()
-	hover.bg_color = color.lightened(0.08)
-	hover.border_color = color.lightened(0.14)
+	hover.bg_color = UITheme.COLOR_PANEL_SOFT.lerp(color, 0.87)
+	hover.border_color = color.darkened(0.18)
 	hover.shadow_size = 0
 	btn.add_theme_stylebox_override("hover", hover)
 
 	var pressed: StyleBoxFlat = normal.duplicate()
-	pressed.bg_color = color.darkened(0.18)
+	pressed.bg_color = UITheme.COLOR_PANEL_DARK.lerp(color, 0.3)
 	pressed.border_color = color.lightened(0.08)
 	pressed.shadow_size = 0
 	pressed.content_margin_top = 6
 	pressed.content_margin_bottom = 4
 	btn.add_theme_stylebox_override("pressed", pressed)
+	if btn is SkillPaletteBlock:
+		var kind := ""
+		if btn.var_id != "" or btn.expr_kind != "":
+			for style in [normal, hover, pressed]: style.set_corner_radius_all(999)
+		if btn.boolean_kind != "" or btn.logic_kind != "" or btn.condition_id != "": kind = "boolean"
+		elif btn.target_kind != "": kind = "target"
+		elif btn.side_kind != "": kind = "side"
+		elif btn.effect_id == SkillEngine.EFFECT_STOP: kind = "terminal"
+		elif SkillRegistry.is_control_effect(btn.effect_id) or btn.effect_id == SkillRegistry.CHANCE_PALETTE_ID:
+			kind = "control"
+			btn.custom_minimum_size.y = 64
+			for style in [normal, hover, pressed]:
+				style.content_margin_top = 6
+				style.content_margin_bottom = 32
+		elif btn.effect_id != "": kind = "stack"
+		if kind != "":
+			for state in ["normal", "hover", "pressed"]:
+				btn.add_theme_stylebox_override(state, preload("res://SkillSocketStyle.gd").from_flat(btn.get_theme_stylebox(state), kind))
 
+	if not btn is SkillPaletteBlock:
+		for state in ["normal", "hover", "pressed"]:
+			var style: StyleBoxFlat = btn.get_theme_stylebox(state)
+			style.content_margin_top = 16
+			btn.add_theme_stylebox_override(state, preload("res://SkillSocketStyle.gd").from_flat(style, "hat"))
 	# Focus must not paint another filled StyleBox over the current button
 	# state; that overlay exposed the old asymmetric left/right border widths.
 	btn.add_theme_stylebox_override("focus", StyleBoxEmpty.new())

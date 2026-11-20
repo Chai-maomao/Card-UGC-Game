@@ -37,7 +37,9 @@ static func new_accumulator(kind: String, requested_games: int) -> Dictionary:
 		"mana_spent": 0,
 		"unused_mana": 0,
 		"stability_failures": 0,
+		"lost_status_origins": 0,
 		"candidate": _empty_candidate_metrics(),
+		"reference": _empty_candidate_metrics(),
 	}
 
 
@@ -51,12 +53,19 @@ static func add_game(accumulator: Dictionary, result: Dictionary) -> void:
 	accumulator["rounds_total"] = int(accumulator.get("rounds_total", 0)) + int(result.get("rounds", 0))
 	accumulator["mana_spent"] = int(accumulator.get("mana_spent", 0)) + int(result.get("mana_spent", 0))
 	accumulator["unused_mana"] = int(accumulator.get("unused_mana", 0)) + int(result.get("unused_mana", 0))
+	accumulator["lost_status_origins"] = int(accumulator.get("lost_status_origins", 0)) + int(result.get("lost_status_origins", 0))
 	if not bool(result.get("stable", false)):
 		accumulator["stability_failures"] = int(accumulator.get("stability_failures", 0)) + 1
 	var candidate: Dictionary = accumulator.get("candidate", {})
 	var metrics: Dictionary = result.get("cards", {}).get(CANDIDATE_METRIC_KEY, {})
 	for key in candidate.keys():
 		candidate[key] = int(candidate.get(key, 0)) + int(metrics.get(key, 0))
+	var reference: Dictionary = accumulator["reference"]
+	for card_name in result.get("cards", {}):
+		if card_name in [CANDIDATE_METRIC_KEY, BattleMetrics.UNKNOWN]: continue
+		var row: Dictionary = result["cards"][card_name]
+		for key in reference:
+			reference[key] = int(reference[key]) + int(row.get(key, 0))
 
 
 static func finalize(accumulator: Dictionary) -> Dictionary:
@@ -67,13 +76,16 @@ static func finalize(accumulator: Dictionary) -> Dictionary:
 	var unused := int(accumulator.get("unused_mana", 0))
 	var candidate: Dictionary = accumulator.get("candidate", {}).duplicate(true)
 	var plays := int(candidate.get("summons", 0)) + int(candidate.get("casts", 0)) + int(candidate.get("attaches", 0))
-	var actions := int(candidate.get("skills", 0)) + int(candidate.get("attacks", 0))
+	var actions := int(candidate.get("unit_actions", 0))
 	candidate["plays"] = plays
 	candidate["plays_per_game"] = float(plays) / games
 	candidate["actions_per_game"] = float(actions) / games
 	candidate["damage_per_game"] = float(candidate.get("damage", 0)) / games
 	candidate["healing_per_game"] = float(candidate.get("healing", 0)) / games
+	for key in ["action_points_spent", "action_mana_spent", "mana_spent", "mana_gained", "automatic_attacks", "shield_damage", "parasite_damage"]:
+		candidate[key + "_per_game"] = float(candidate.get(key, 0)) / games
 	var result := {
+		"metrics_version": BattleMetrics.VERSION,
 		"pool": str(accumulator.get("pool", "units")),
 		"games": int(accumulator.get("games", 0)),
 		"wins": wins.duplicate(true),
@@ -82,28 +94,49 @@ static func finalize(accumulator: Dictionary) -> Dictionary:
 		"average_rounds": float(accumulator.get("rounds_total", 0)) / games,
 		"mana_utilization": float(spent) / maxf(1.0, float(spent + unused)),
 		"stability_failures": int(accumulator.get("stability_failures", 0)),
+		"lost_status_origins": int(accumulator.get("lost_status_origins", 0)),
 		"candidate": candidate,
 		"warnings": [],
 	}
 	var warnings: Array = result["warnings"]
 	if int(result["stability_failures"]) > 0:
 		warnings.append("unstable")
+	if int(result["lost_status_origins"]) > 0:
+		warnings.append("incomplete_attribution")
 	if float(result["draw_rate"]) >= 0.25:
 		warnings.append("high_draw_rate")
 	if decisive >= maxi(8, int(ceil(float(games) * 0.5))) and (float(result["first_player_win_rate"]) < 0.35 or float(result["first_player_win_rate"]) > 0.65):
 		warnings.append("first_player_skew")
 	if plays == 0:
 		warnings.append("candidate_unused")
+	var reference: Dictionary = accumulator.get("reference", {})
+	result["strength_score"] = null
+	if int(candidate.get("unmeasured_effects",0)) > 0:
+		warnings.append("incomplete_contribution")
+	if plays>0 and int(candidate.get("unmeasured_effects",0)) == 0 and _plays(reference)>0 and int(result.stability_failures)==0 and int(result.lost_status_origins)==0:
+		var value := _efficiency(candidate)
+		var baseline := _efficiency(reference)
+		if value+baseline>0.0:
+			result["strength_score"] = relative_score(value,baseline)
 	return result
+
+static func relative_score(value: float, reference: float) -> int:
+	value = maxf(0.0,value)
+	reference = maxf(0.0,reference)
+	if value+reference<=0.0: return 100
+	return clampi(roundi(200.0*value/(value+reference)),0,200)
+
+static func _plays(metrics: Dictionary) -> int:
+	return int(metrics.get("summons",0))+int(metrics.get("casts",0))+int(metrics.get("attaches",0))
+
+static func _efficiency(metrics: Dictionary) -> float:
+	# Shared draw pools cannot attribute a winner to the candidate. Compare its
+	# observed contribution per resource with the other cards in the same games.
+	var resource_gain := float(metrics.get("mana_gained",0))+float(metrics.get("mana_refunded",0))+float(metrics.get("mana_drained",0))-float(metrics.get("enemy_mana_gained",0))
+	var contribution := float(metrics.get("damage",0))+float(metrics.get("healing",0))+float(metrics.get("shield_damage",0))+float(metrics.get("damage_prevented",0))+0.5*float(metrics.get("shield_granted",0))+BalanceEvaluator.POINTS_PER_COST*resource_gain-float(metrics.get("friendly_damage",0))-float(metrics.get("enemy_healing",0))
+	var spent := float(metrics.get("mana_spent",0))+0.5*float(metrics.get("action_points_spent",0))+float(_plays(metrics))
+	return maxf(0.0,contribution)/maxf(1.0,spent)
 
 
 static func _empty_candidate_metrics() -> Dictionary:
-	return {
-		"summons": 0,
-		"casts": 0,
-		"attaches": 0,
-		"skills": 0,
-		"attacks": 0,
-		"damage": 0,
-		"healing": 0,
-	}
+	return BattleMetrics.empty()

@@ -1,6 +1,7 @@
 extends Node
 
 const MatchHistoryScript = preload("res://MatchHistory.gd")
+var failed := false
 
 
 func _ready() -> void:
@@ -8,9 +9,10 @@ func _ready() -> void:
 	_test_filtered_entries()
 	_test_entry_stats()
 	_test_format_duration()
-	_test_scene_render()
-	print("TEST_MATCH_HISTORY_OK")
-	get_tree().quit(0)
+	await _test_scene_render()
+	if not failed:
+		print("TEST_MATCH_HISTORY_OK")
+	get_tree().quit(1 if failed else 0)
 
 
 func _make_entry(outcome: String, mode: String, turns: int, duration: int, local: int, p1_stats: Dictionary, p2_stats: Dictionary) -> Dictionary:
@@ -67,6 +69,11 @@ func _test_compute_summary() -> void:
 	_assert(str(loss_summary["streak_type"]) == "loss", "forfeit should start a loss streak")
 	_assert(int(loss_summary["streak_count"]) == 2, "loss streak should span defeat+forfeit")
 	_assert(int(loss_summary["losses"]) == 2, "forfeit should count as a loss")
+	entries.push_front(_make_entry("interrupted", "online", 1, 50, 2, {}, {}))
+	var interrupted := MatchHistoryScript.compute_summary(entries)
+	_assert(int(interrupted["total"]) == 5, "the interruption should appear in match history")
+	_assert(int(interrupted["wins"]) == 2 and int(interrupted["losses"]) == 1 and int(interrupted["win_rate"]) == 50, "the interruption must not affect wins, losses or win rate")
+	_assert(interrupted["streak_type"] == "win" and int(interrupted["streak_count"]) == 2, "the interruption should leave the completed streak intact")
 
 
 func _test_filtered_entries() -> void:
@@ -97,21 +104,29 @@ func _test_entry_stats() -> void:
 
 
 func _test_format_duration() -> void:
-	_assert(MatchHistoryScript.format_duration(0) == "0:00", "zero duration formatting mismatch")
-	_assert(MatchHistoryScript.format_duration(65) == "1:05", "65s formatting mismatch")
-	_assert(MatchHistoryScript.format_duration(600) == "10:00", "600s formatting mismatch")
-	_assert(MatchHistoryScript.format_duration(-5) == "0:00", "negative duration should clamp to zero")
+	var language: String = Locale.language
+	Locale.language = "zh"
+	_assert(MatchHistoryScript.format_duration(0) == "0秒", "zero duration formatting mismatch")
+	_assert(MatchHistoryScript.format_duration(65) == "1分5秒", "65s formatting mismatch")
+	_assert(MatchHistoryScript.format_duration(600) == "10分", "600s formatting mismatch")
+	_assert(MatchHistoryScript.format_duration(98293) == "27小时18分13秒", "long duration should keep clear unit labels")
+	_assert(MatchHistoryScript.format_duration(-5) == "0秒", "negative duration should clamp to zero")
+	Locale.language = "en"
+	_assert(MatchHistoryScript.format_duration(98293) == "27h 18m 13s", "English duration should keep clear unit labels")
+	Locale.language = language
 
 
 func _test_scene_render() -> void:
 	# 用混合数据（新格式+旧格式）渲染真实场景，确保 UI 构建不崩溃
 	var saved: Array = PlayerData.match_history
+	var display_test := DisplayServer.get_name() != "headless" and OS.get_cmdline_user_args().has("--visual")
 	PlayerData.match_history = [
 		_make_entry("victory", "online", 9, 540, 2,
 			{"summons": 2, "spells": 1, "parasites": 0, "cards_drawn": 11, "card_damage": 18, "hero_damage": 20, "kills": 4, "mana_spent": 30},
 			{"summons": 5, "spells": 3, "parasites": 1, "cards_drawn": 12, "card_damage": 26, "hero_damage": 8, "kills": 2, "mana_spent": 34}),
-		_make_entry("defeat", "practice", 6, 300, 1, {"summons": 3}, {"summons": 4}),
+		_make_entry("defeat", "practice", 6, 98293, 1, {"summons": 3}, {"summons": 4}),
 		{"outcome": "finished", "mode": "hotseat", "turns": 4, "timestamp": 1787100000, "player_hp": 3, "opponent_hp": 3},
+		{"outcome": "interrupted", "mode": "online", "turns": 2, "timestamp": 1787200000, "player_hp": 12, "opponent_hp": 15},
 	]
 	var scene: Control = load("res://MatchHistory.tscn").instantiate()
 	add_child(scene)
@@ -122,16 +137,68 @@ func _test_scene_render() -> void:
 	for child in (scene.get("list_box") as VBoxContainer).get_children():
 		if child is PanelContainer:
 			cards += 1
-	_assert(cards == 3, "should render 3 match cards, got %d" % cards)
+	_assert(cards == 4, "should render 4 match cards, got %d" % cards)
+	if display_test:
+		await RenderingServer.frame_post_draw
+		_assert(get_viewport().get_texture().get_image().save_png("user://match-history-durations.png") == OK, "could not capture the duration labels")
+	await get_tree().process_frame
+	var rows := (scene.get("list_box") as VBoxContainer).find_children("*", "PanelContainer", false, false)
+	(rows[0] as Control).grab_focus()
+	_press_key(KEY_DOWN)
+	_assert(get_viewport().gui_get_focus_owner() == rows[1], "Down did not move focus to the next match")
+	_press_key(KEY_ENTER)
+	await get_tree().process_frame
+	var detail := scene.get_node_or_null("MatchDetail")
+	_assert(detail != null and UIMotion.top_popup() == detail, "Enter did not open the focused match")
+	if display_test and detail != null:
+		await RenderingServer.frame_post_draw
+		_assert(get_viewport().get_texture().get_image().save_png("user://match-history-detail.png") == OK, "could not capture the focused match details")
+	_press_key(KEY_ESCAPE)
+	await get_tree().process_frame
+	await get_tree().process_frame
+	_assert(UIMotion.top_popup() == null and get_viewport().gui_get_focus_owner() == rows[1], "Escape did not restore the focused match")
+	var hover := InputEventMouseMotion.new()
+	hover.position = Vector2(2, 2)
+	get_viewport().push_input(hover, true)
+	hover.position = (rows[0] as Control).get_global_rect().get_center()
+	get_viewport().push_input(hover, true)
+	await get_tree().process_frame
+	_assert(get_viewport().gui_get_focus_owner() == rows[0], "hover did not move focus to the match under the pointer")
+	var outcome_filter := scene.get("outcome_filter") as OptionButton
+	var interrupted_index := -1
+	for index in range(outcome_filter.item_count):
+		if outcome_filter.get_item_text(index) == Locale.t("history.outcome.interrupted"):
+			interrupted_index = index
+			break
+	_assert(interrupted_index >= 0, "the history filter is missing interrupted matches")
+	if interrupted_index < 0:
+		return
+	outcome_filter.select(interrupted_index)
+	outcome_filter.item_selected.emit(interrupted_index)
+	await get_tree().process_frame
+	var list := scene.get("list_box") as VBoxContainer
+	_assert(list.find_children("*", "PanelContainer", false, false).size() == 1, "filter did not isolate the interrupted match")
+	if display_test:
+		await RenderingServer.frame_post_draw
+		_assert(get_viewport().get_texture().get_image().save_png("user://match-history-interrupted.png") == OK, "could not capture the interrupted match list")
 	# 空历史也应正常渲染
 	PlayerData.match_history = []
 	scene._refresh_list()
 	PlayerData.match_history = saved
 	scene.queue_free()
+	await get_tree().process_frame
+
+
+func _press_key(key: Key) -> void:
+	for pressed in [true, false]:
+		var event := InputEventKey.new()
+		event.keycode = key
+		event.pressed = pressed
+		get_viewport().push_input(event, true)
 
 
 func _assert(condition: bool, message: String) -> void:
 	if condition:
 		return
+	failed = true
 	push_error("TEST_MATCH_HISTORY_FAILED: %s" % message)
-	get_tree().quit(1)

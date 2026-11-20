@@ -61,7 +61,7 @@ func _ready() -> void:
 	_sed.call("_refresh_script")
 	await get_tree().process_frame
 	await get_tree().process_frame
-	var effects_list: VBoxContainer = _sed.get_node("Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/EffectsList")
+	var effects_list: VBoxContainer = _sed.get("effects_list")
 	if effects_list.get_child_count() > 0:
 		var hat: SkillBlock = effects_list.get_child(0)
 		_walk_blocks(hat.body_container, 0)
@@ -86,31 +86,30 @@ func _ready() -> void:
 	_sed.call("_refresh_script")
 	await get_tree().process_frame
 	await get_tree().process_frame
-	# A wide block must stay reachable through the script area's horizontal
-	# scroll bar (bottom bar) — never clipped or spilling out of the editor.
-	var script_scroll: ScrollContainer = _sed.get_node("Panel/Margin/HBox/MainPanel/Margin/Scroll")
-	var h_auto: bool = script_scroll.horizontal_scroll_mode == ScrollContainer.SCROLL_MODE_AUTO
-	var h_max: float = script_scroll.get_h_scroll_bar().max_value
-	var v_max: float = script_scroll.get_v_scroll_bar().max_value
-	print("UI_OVERFLOW deep_cond h_auto=%s h_max=%.0f v_max=%.0f" % [h_auto, h_max, v_max])
-	if not h_auto:
-		push_error("UI_OVERFLOW_FAIL horizontal scrolling not enabled")
+	# The work area now pans/zooms instead of scrolling. Both ends of a long
+	# script must remain reachable, and its rendering must stay clipped to it.
+	var canvas: Control = _sed.workbench.workspace
+	canvas.reset_view()
+	await get_tree().process_frame
+	var widest: Control
+	for block in _sed.effects_list.find_children("*", "SkillBlock", true, false):
+		if widest == null or block.get_global_rect().size.x > widest.get_global_rect().size.x:
+			widest = block
+	assert(widest != null)
+	canvas.reveal(widest)
+	await get_tree().process_frame
+	var viewport_rect := canvas.get_global_rect()
+	var left := widest.get_global_rect().position.x
+	if not canvas.clip_contents or left < viewport_rect.position.x or left > viewport_rect.end.x:
+		push_error("UI_OVERFLOW_FAIL wide script's beginning cannot be revealed")
 		get_tree().quit(1)
 		return
-	if h_max <= 0.0:
-		push_error("UI_OVERFLOW_FAIL wide comparison has no horizontal scroll range")
-		get_tree().quit(1)
-		return
-	# The block must still live inside the scroll content area (scrolling to
-	# the far right reveals it fully).
-	var scroll_rect: Rect2 = script_scroll.get_global_rect()
-	var max_block_right: float = 0.0
-	for blk in _sed.find_children("*", "SkillBlock", true, false):
-		max_block_right = maxf(max_block_right, (blk as Control).get_global_rect().end.x)
-	var content_right: float = script_scroll.get_global_rect().position.x + script_scroll.get_h_scroll_bar().max_value + script_scroll.size.x
-	print("UI_OVERFLOW deep_cond max_right=%.0f content_right=%.0f" % [max_block_right, content_right])
-	if max_block_right > content_right + 1.0:
-		push_error("UI_OVERFLOW_FAIL block extends beyond scrollable content")
+	canvas.pan.x += viewport_rect.end.x - 24 - widest.get_global_rect().end.x
+	canvas._sync_view()
+	await get_tree().process_frame
+	var right := widest.get_global_rect().end.x
+	if right > viewport_rect.end.x or right < viewport_rect.position.x:
+		push_error("UI_OVERFLOW_FAIL wide script's end cannot be revealed")
 		get_tree().quit(1)
 		return
 
@@ -133,7 +132,7 @@ func _walk_blocks(container: VBoxContainer, depth: int) -> void:
 
 
 func _check(tag: String, eff: String) -> void:
-	var effects_list: VBoxContainer = _sed.get_node("Panel/Margin/HBox/MainPanel/Margin/Scroll/VBox/EffectsList")
+	var effects_list: VBoxContainer = _sed.get("effects_list")
 	if effects_list.get_child_count() == 0:
 		return
 	var hat: SkillBlock = effects_list.get_child(0)

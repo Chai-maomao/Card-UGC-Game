@@ -227,7 +227,7 @@ const BUFF_META := {
 	BUFF_TAUNT:            {"polarity": "positive", "value_meaningful": false},
 	BUFF_SILENCE:          {"polarity": "negative", "value_meaningful": false},
 	BUFF_MISFORTUNE:       {"polarity": "negative", "value_meaningful": true},
-	BUFF_IMMUNE_LETHAL:    {"polarity": "positive", "value_meaningful": true},
+	BUFF_IMMUNE_LETHAL:    {"polarity": "positive", "value_meaningful": false},
 	BUFF_POISON:           {"polarity": "negative", "value_meaningful": true},
 	BUFF_STUN:             {"polarity": "negative", "value_meaningful": false},
 }
@@ -309,6 +309,10 @@ const CONDITION_OP_IDS := [CONDITION_OP_GTE, CONDITION_OP_LTE, CONDITION_OP_EQ]
 
 static func effect_meta(effect_id: String) -> Dictionary:
 	return EFFECT_META.get(effect_id, {})
+
+static func palette_category(effect_id: String) -> String:
+	if effect_id in [EFFECT_ADD_BUFF, EFFECT_CLEANSE, EFFECT_DISPEL, EFFECT_CHARM]: return "status"
+	return str(effect_meta(effect_id).get("category", "utility"))
 
 
 static func is_hand_effect(effect_id: String) -> bool:
@@ -426,6 +430,26 @@ static func buff_uses_value(buff_id: String) -> bool:
 	var meta: Dictionary = BUFF_META.get(buff_id, {})
 	return bool(meta.get("value_meaningful", true))
 
+static func effect_uses_value(effect: Dictionary) -> bool:
+	var id := str(effect.get("effect", ""))
+	return uses_value(id) and (id != EFFECT_ADD_BUFF or buff_uses_value(str(effect.get("buff_id", ""))))
+
+static func buff_uses_duration(buff_id: String) -> bool:
+	return buff_id != BUFF_STUN
+
+static func percentage_value(effect: Dictionary) -> bool:
+	return effect.get("effect") == EFFECT_ADD_BUFF and effect.get("buff_id") in [BUFF_DAMAGE_REDUCTION, BUFF_MISFORTUNE]
+
+static func normalize_editor_value(effect: Dictionary) -> void:
+	if is_control_effect(str(effect.get("effect", ""))): return
+	if effect.get("effect") == EFFECT_ADD_BUFF and not buff_uses_duration(str(effect.get("buff_id", ""))): effect["duration"] = 1
+	if not effect_uses_value(effect):
+		effect.erase("value")
+		for key in ["value_var", "value_expr", "value_offset", "value_min", "value_max"]: effect.erase(key)
+	elif percentage_value(effect):
+		for key in ["value", "value_min", "value_max"]:
+			if effect.has(key): effect[key] = clampi(int(effect[key]), 0, 100)
+
 
 static func negative_buffs() -> Array:
 	return _buffs_with_polarity("negative")
@@ -446,3 +470,27 @@ static func _buffs_with_polarity(polarity: String) -> Array:
 		if buff_polarity(buff_id) == polarity:
 			result.append(buff_id)
 	return result
+
+
+# Editor shorthand compiled into the existing deterministic conditional form.
+# The palette ID is never serialized as an effect ID.
+const CHANCE_PALETTE_ID := "__chance_preset__"
+
+static func make_chance_block(percent: int = 50) -> Dictionary:
+	return {"effect": EFFECT_IF, "condition": {
+		"op": CONDITION_OP_LTE,
+		"lhs": {"kind": "expr", "op": "rand", "a": {"kind": "num", "value": 1}, "b": {"kind": "num", "value": 100}},
+		"rhs": {"kind": "num", "value": clampi(percent, 0, 100)}}, "then_effects": []}
+
+static func is_chance_block(effect: Dictionary) -> bool:
+	if str(effect.get("effect", "")) != EFFECT_IF or not effect.get("else_effects", []).is_empty(): return false
+	var condition = effect.get("condition", {})
+	if not condition is Dictionary or str(condition.get("op", "")) != CONDITION_OP_LTE: return false
+	var rhs = condition.get("rhs", {})
+	if not rhs is Dictionary or str(rhs.get("kind", "")) != "num": return false
+	var lhs = condition.get("lhs", {})
+	if not lhs is Dictionary or str(lhs.get("kind", "")) != "expr" or str(lhs.get("op", "")) != "rand": return false
+	var lower = lhs.get("a", {})
+	var upper = lhs.get("b", {})
+	if not lower is Dictionary or not upper is Dictionary: return false
+	return str(lower.get("kind", "")) == "num" and str(upper.get("kind", "")) == "num" and float(lower.get("value", 0)) == 1.0 and float(upper.get("value", 0)) == 100.0

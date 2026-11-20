@@ -1,0 +1,12 @@
+# Replace this hostname before starting Caddy.
+workshop.example.com {
+    request_body {
+        max_size 16MB
+    }
+    @admin path /v1/admin/*
+    respond @admin 403
+    reverse_proxy 127.0.0.1:8765 {
+        header_up X-Real-IP {remote_host}
+        header_up X-Forwarded-Proto https
+    }
+}

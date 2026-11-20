@@ -235,6 +235,8 @@ static func _validate_card(value: Variant, path: Array, errors: Array, parasite_
 		_validate_string(card.get("instance_id"), path + ["instance_id"], 0, MAX_ID_LENGTH, errors)
 	if card.has("art_path"):
 		_validate_string(card.get("art_path"), path + ["art_path"], 0, MAX_PATH_LENGTH, errors)
+	if card.has("damaged_art_path"):
+		_validate_string(card.get("damaged_art_path"), path + ["damaged_art_path"], 0, MAX_PATH_LENGTH, errors)
 	var skills = card.get("skills", [])
 	if not (skills is Array):
 		errors.append(_issue("skills_type", path + ["skills"], {}))
@@ -412,6 +414,24 @@ static func _validate_snapshot(value: Variant, errors: Array) -> void:
 	for key in ["player_field", "player2_field", "player_hand", "player2_hand", "shared_deck", "state_revision"]:
 		if not state.has(key):
 			errors.append(_issue("missing_field", ["state", key], {}))
+	if state.has("starting_player"):
+		var starting: Variant = state["starting_player"]
+		# JSON replay records represent integer-valued numbers as floats.
+		if not (starting is int or starting is float) or (starting != 1 and starting != 2):
+			errors.append(_issue("player", ["state", "starting_player"], {}))
+	var cost_choices: Variant = state.get("pending_cost_choices", [])
+	if not cost_choices is Array or cost_choices.size() > UgcSafety.MAX_EXECUTED_EFFECT_NODES:
+		errors.append(_issue("selection", ["state", "pending_cost_choices"], {}))
+	else:
+		for choice in cost_choices:
+			if not choice is Dictionary or choice.get("player") not in [1, 2] or not choice.get("cost_mode") is String or not choice.get("target") is String:
+				errors.append(_issue("selection", ["state", "pending_cost_choices"], {}))
+				break
+			var reduction: Variant = choice.get("reduction")
+			if not (reduction is int or reduction is float) or reduction <= 0:
+				errors.append(_issue("selection", ["state", "pending_cost_choices", "reduction"], {}))
+			else:
+				_validate_integer(reduction, ["state", "pending_cost_choices", "reduction"], errors)
 	for array_key in ["player_hand", "player2_hand", "shared_deck", "shared_discard"]:
 		var cards = state.get(array_key, [])
 		if not (cards is Array) or cards.size() > MAX_LIBRARY_CARDS:
@@ -421,6 +441,12 @@ static func _validate_snapshot(value: Variant, errors: Array) -> void:
 				_validate_card(cards[i], ["state", array_key, i], errors)
 	for field_key in ["player_field", "player2_field"]:
 		var field = state.get(field_key, {})
+		if field is Dictionary:
+			for key in ["action_points", "action_budget", "actions_taken"]:
+				if field.has(key):
+					_validate_integer(field[key], ["state", field_key, key], errors)
+					if (field[key] is int or field[key] is float) and (not is_finite(float(field[key])) or field[key] < 0 or field[key] > 100000):
+						errors.append(_issue("action_range", ["state", field_key, key], {}))
 		if field is Dictionary and field.has("slots"):
 			var slots = field.get("slots")
 			if not (slots is Array) or slots.size() != 5:

@@ -12,7 +12,6 @@ const GLOW_DOT_SIZE := 22.0
 const CARD_BACK_SIZE := Vector2(52, 72)
 const COMBAT_TEXT_RISE_TIME := 0.82
 const PROJECTILE_TIME := 0.35
-const BANNER_HOLD := 0.9
 const CARD_DRAW_STAGGER := 0.065
 const CARD_DRAW_TRAVEL_TIME := 0.40
 
@@ -104,10 +103,14 @@ func _make_card_back_texture(w: int, h: int) -> Texture2D:
 				img.set_pixel(x, y, Color(0, 0, 0, 0))
 				continue
 			if d > corner - border:
-				img.set_pixel(x, y, Color(0.95, 0.78, 0.32, 0.98))
+				img.set_pixel(x, y, Color("b9a16e"))
 				continue
-			var shine := clampf(1.0 - float(y) / (h * 0.35), 0.0, 1.0) * 0.18
-			img.set_pixel(x, y, Color(0.13 + shine, 0.19 + shine, 0.34 + shine, 0.96))
+			var color := Color("e7daba")
+			if (x in [9,w-10] and y>=9 and y<h-9) or (y in [9,h-10] and x>=9 and x<w-9): color=Color("a39574")
+			if y>=16 and y<=21 and x>=16 and x<w-16: color=Color("72a09a")
+			var diamond := absf(float(x)-w*0.5)/26.0+absf(float(y)-h*0.5)/36.0
+			if absf(diamond-1.0)<0.065: color=Color("b9a16e")
+			img.set_pixel(x,y,color)
 	return ImageTexture.create_from_image(img)
 
 
@@ -185,6 +188,7 @@ func impact_ring(layer, center: Vector2, damage: bool = true, tint: Color = Colo
 	var ring := _acquire_control("ring", func() -> Control:
 		var r := TextureRect.new()
 		r.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		r.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 		r.texture = _ring_tex
 		return r) as TextureRect
 	ring.texture = _ring_tex
@@ -194,9 +198,10 @@ func impact_ring(layer, center: Vector2, damage: bool = true, tint: Color = Colo
 	ring.modulate = base_color
 	layer.add_child(ring)
 	layer.move_child(ring, layer.get_child_count() - 1)
-	var twn := create_tween()
+	var twn: Tween = ring.create_tween()
 	twn.set_parallel(true)
-	twn.tween_property(ring, "scale", Vector2(RING_SCALE, RING_SCALE), RING_TIME).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	if not AppPreferences.get_value("reduced_motion"):
+		twn.tween_property(ring, "scale", Vector2(RING_SCALE, RING_SCALE), RING_TIME).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	twn.tween_property(ring, "modulate:a", 0.0, RING_TIME)
 	twn.chain().tween_callback(_release.bind("ring", ring))
 
@@ -233,29 +238,29 @@ func heal_particles(layer: CanvasLayer, center: Vector2, amount: int, ui_scale: 
 # Compact HUD feedback shared by hero HP and elixir bars. It overlays the
 # existing bar rather than restyling the whole status panel, preserving the
 # battle UI's restrained red/cyan/gold language.
-func status_bar_feedback(layer: CanvasLayer, bar: ProgressBar, delta: int, kind: String, ui_scale: float = 1.0) -> void:
+func status_bar_feedback(layer: CanvasLayer, bar: ProgressBar, delta: int, kind: String, ui_scale: float = 1.0) -> Tween:
 	if layer == null or bar == null or delta == 0:
-		return
+		return null
 	_ensure_textures()
 	var tint := Color(1.0, 0.31, 0.28) if kind == "damage" else (Color(0.36, 1.0, 0.64) if kind == "heal" else Color(0.30, 0.84, 1.0))
 	var padding := 3.0 * ui_scale
 	var overlay := Panel.new()
 	overlay.name = "StatusFx_%s" % kind.capitalize()
 	overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	overlay.position = bar.global_position - Vector2(padding, padding)
+	overlay.position = -Vector2(padding, padding)
 	overlay.size = bar.size + Vector2(padding * 2.0, padding * 2.0)
 	overlay.pivot_offset = overlay.size * 0.5
 	overlay.scale = Vector2(0.985, 0.72)
+	overlay.z_index = 20
 	var style := StyleBoxFlat.new()
-	style.bg_color = Color(tint.r, tint.g, tint.b, 0.10)
+	style.bg_color = Color(tint.r, tint.g, tint.b, 0.18)
 	style.border_color = Color(tint.r, tint.g, tint.b, 0.90)
 	style.set_border_width_all(maxi(1, int(round(ui_scale))))
 	style.set_corner_radius_all(maxi(5, int(round(7.0 * ui_scale))))
 	style.shadow_color = Color(tint.r, tint.g, tint.b, 0.22)
 	style.shadow_size = maxi(1, int(round(3.0 * ui_scale)))
 	overlay.add_theme_stylebox_override("panel", style)
-	layer.add_child(overlay)
-	layer.move_child(overlay, layer.get_child_count() - 1)
+	bar.add_child(overlay, true)
 
 	var value_label := Label.new()
 	value_label.name = "StatusFxValue"
@@ -268,7 +273,13 @@ func status_bar_feedback(layer: CanvasLayer, bar: ProgressBar, delta: int, kind:
 	value_label.add_theme_color_override("font_outline_color", Color(0.015, 0.025, 0.045, 0.95))
 	value_label.add_theme_constant_override("outline_size", maxi(2, int(round(3.0 * ui_scale))))
 	value_label.size = Vector2(58, 22) * ui_scale
-	value_label.position = bar.global_position + Vector2((bar.size.x - value_label.size.x) * 0.5, -4.0 * ui_scale)
+	var travel := 13.0 * ui_scale
+	var label_y := bar.global_position.y - 4.0 * ui_scale
+	if label_y - travel < layer.get_viewport().get_visible_rect().position.y + padding:
+		label_y = bar.global_position.y + bar.size.y + padding
+	else:
+		travel = -travel
+	value_label.position = Vector2(bar.global_position.x + (bar.size.x - value_label.size.x) * 0.5, label_y)
 	value_label.modulate.a = 0.0
 	layer.add_child(value_label)
 	layer.move_child(value_label, layer.get_child_count() - 1)
@@ -301,13 +312,14 @@ func status_bar_feedback(layer: CanvasLayer, bar: ProgressBar, delta: int, kind:
 	twn.tween_property(overlay, "scale", Vector2.ONE, 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	twn.tween_property(overlay, "modulate:a", 0.0, 0.26).set_delay(0.20)
 	twn.tween_property(value_label, "modulate:a", 1.0, 0.07)
-	twn.tween_property(value_label, "position:y", value_label.position.y - 13.0 * ui_scale, 0.52).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	twn.tween_property(value_label, "position:y", value_label.position.y + travel, 0.52).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	twn.tween_property(value_label, "modulate:a", 0.0, 0.18).set_delay(0.32)
 	twn.chain().tween_callback(overlay.queue_free)
 	twn.chain().tween_callback(value_label.queue_free)
 	var particle_cleanup := create_tween()
 	particle_cleanup.tween_interval(particles.lifetime + 0.12)
 	particle_cleanup.tween_callback(particles.queue_free)
+	return particle_cleanup
 
 
 func combat_text(layer: CanvasLayer, pos: Vector2, delta: int, strong: bool = false, ui_scale: float = 1.0, zero_damage: bool = false) -> void:
@@ -321,11 +333,13 @@ func combat_text(layer: CanvasLayer, pos: Vector2, delta: int, strong: bool = fa
 		l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		return l) as Label
 	lbl.text = ("-%d" % abs(delta)) if is_damage else ("+%d" % delta)
-	# Big damage hits render in a hot orange to read as critical hits.
 	var font_color: Color
 	var outline_color: Color
-	if is_crit:
-		font_color = Color(1.0, 0.42, 0.08)
+	if zero_damage:
+		font_color = Color("c8d0ce")
+		outline_color = UITheme.Tokens.INK
+	elif is_crit:
+		font_color = Color("ffad75")
 		outline_color = Color(0.18, 0.05, 0.0, 0.95)
 	elif is_damage:
 		font_color = Color(1.0, 0.22, 0.12)
@@ -335,33 +349,56 @@ func combat_text(layer: CanvasLayer, pos: Vector2, delta: int, strong: bool = fa
 		outline_color = Color(0.02, 0.08, 0.03, 0.95)
 	lbl.add_theme_color_override("font_color", font_color)
 	lbl.add_theme_color_override("font_outline_color", outline_color)
-	lbl.add_theme_constant_override("outline_size", 6 if is_crit else (5 if strong else 4))
+	lbl.add_theme_font_override("font", UITheme.bold_font())
+	lbl.add_theme_constant_override("outline_size", 4 if is_crit else 3)
 	lbl.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.85))
 	lbl.add_theme_constant_override("shadow_offset_x", 2)
 	lbl.add_theme_constant_override("shadow_offset_y", 3)
-	lbl.add_theme_font_size_override("font_size", 48 if is_crit else (42 if strong else 34))
+	lbl.add_theme_font_size_override("font_size", maxi(22, roundi((38 if is_crit else 30) * ui_scale)))
 	lbl.pivot_offset = Vector2(34, 20)
-	lbl.rotation = randf_range(-0.045, 0.045)
-	var side_offset: Vector2 = Vector2(16, -30) if is_damage else Vector2(-16, -26)
-	var random_offset := Vector2(randf_range(-20.0, 20.0), randf_range(-10.0, 12.0))
-	lbl.position = pos + side_offset + random_offset
-	lbl.scale = Vector2(0.55, 0.55) if is_damage else Vector2(0.68, 0.68)
+	var side_offset := (Vector2(19, -34) if is_damage else Vector2(-19, -26)) * ui_scale
+	lbl.position = pos + side_offset
 	lbl.modulate.a = 0.0
 	layer.add_child(lbl)
 	layer.move_child(lbl, layer.get_child_count() - 1)
 
-	var rise: float = (56.0 if is_damage else 68.0) + randf_range(-6.0, 8.0)
-	var drift: float = (12.0 if is_damage else -10.0) + randf_range(-18.0, 18.0)
-	var peak_scale: Vector2 = Vector2(1.62, 1.62) if is_crit else (Vector2(1.55, 1.55) if strong and is_damage else (Vector2(1.34, 1.34) if is_damage else Vector2(1.18, 1.18)))
-	var settle_scale: Vector2 = Vector2(1.14, 1.14) if is_damage else Vector2(1.0, 1.0)
 	var twn := create_tween()
 	twn.set_parallel(true)
-	twn.tween_property(lbl, "modulate:a", 1.0, 0.07)
-	twn.tween_property(lbl, "scale", peak_scale, 0.12).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	twn.tween_property(lbl, "position", lbl.position + Vector2(drift, -rise), COMBAT_TEXT_RISE_TIME).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
-	twn.tween_property(lbl, "scale", settle_scale, 0.18).set_delay(0.12).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	twn.tween_property(lbl, "modulate:a", 1.0, 0.04)
+	if not AppPreferences.get_value("reduced_motion"):
+		lbl.scale = Vector2.ONE * (1.18 if is_crit else 1.06)
+		twn.tween_property(lbl, "scale", Vector2.ONE, 0.16).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+		twn.tween_property(lbl, "position", lbl.position + Vector2(0, -30 * ui_scale), COMBAT_TEXT_RISE_TIME).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_OUT)
 	twn.tween_property(lbl, "modulate:a", 0.0, 0.28).set_delay(0.50)
 	twn.chain().tween_callback(_release.bind("text", lbl))
+
+
+func make_transfer_icon(ui_scale: float = 1.0) -> TextureRect:
+	_ensure_textures()
+	var icon := TextureRect.new()
+	icon.texture = _card_back_tex
+	icon.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	icon.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon.size = CARD_BACK_SIZE*ui_scale
+	return icon
+
+
+func absorb_discard_card(layer: CanvasLayer, start: Vector2, target: Vector2, ui_scale: float, on_arrival: Callable) -> Control:
+	_ensure_textures()
+	var icon := preload("res://presentation/DiscardAbsorb.gd").new()
+	icon.texture = _card_back_tex
+	icon.size = CARD_BACK_SIZE*ui_scale
+	icon.position = start-icon.size*0.5
+	icon.destination = target-icon.position
+	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	icon.set_meta("battle_fx_kind","manual_discard_card")
+	layer.add_child(icon)
+	var tween := icon.create_tween()
+	tween.tween_property(icon,"progress",1.0,0.28)
+	if on_arrival.is_valid(): tween.tween_callback(on_arrival)
+	tween.tween_callback(icon.queue_free)
+	return icon
 
 
 func spawn_draw_fly_card(layer: CanvasLayer, start: Vector2, target: Vector2, index: int, ui_scale: float = 1.0) -> void:
@@ -399,19 +436,48 @@ func spawn_draw_fly_card(layer: CanvasLayer, start: Vector2, target: Vector2, in
 	twn.set_parallel(false)
 	twn.tween_interval(index * card_draw_stagger())
 	twn.tween_property(card_back, "modulate", Color.WHITE, 0.045 * duration_scale)
-	twn.parallel().tween_property(card_back, "scale", Vector2(1.06, 1.06), launch_time).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	twn.parallel().tween_property(card_back, "rotation", deg_to_rad(3.5) * direction, launch_time).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	twn.parallel().tween_property(card_back, "position", mid - size / 2, launch_time).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	twn.tween_property(card_back, "position", end_position, settle_time).set_trans(Tween.TRANS_CUBIC).set_ease(Tween.EASE_IN)
-	twn.parallel().tween_property(card_back, "rotation", 0.0, settle_time).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
-	twn.parallel().tween_property(card_back, "scale", Vector2(0.90, 0.90), settle_time).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	twn.parallel().tween_method(func(t: float):
+		card_back.position = start.lerp(mid,t).lerp(mid.lerp(target,t),t)-size/2
+	,0.0,1.0,CARD_DRAW_TRAVEL_TIME * duration_scale).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	twn.parallel().tween_property(card_back, "rotation", 0.0, CARD_DRAW_TRAVEL_TIME * duration_scale).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN_OUT)
+	twn.parallel().tween_property(card_back, "scale", Vector2.ONE, CARD_DRAW_TRAVEL_TIME * duration_scale).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	var fade_time := 0.10 * duration_scale
-	twn.parallel().tween_property(card_back, "modulate:a", 0.0, fade_time).set_delay(maxf(0.0, settle_time - fade_time))
+	twn.parallel().tween_property(card_back, "modulate:a", 0.0, fade_time).set_delay(maxf(0.0, CARD_DRAW_TRAVEL_TIME * duration_scale - fade_time))
 	twn.chain().tween_callback(_release.bind("card_back", card_back))
 
 
 func card_draw_stagger() -> float:
 	return CARD_DRAW_STAGGER * GamePreferences.battle_animation_duration_scale()
+
+
+func reshuffle_arrival_delay(count: int) -> float:
+	if count <= 0: return 0.0
+	return (0.46 + 0.045 * (mini(count, 6) - 1)) * GamePreferences.battle_animation_duration_scale()
+
+
+func spawn_reshuffle_cards(layer: CanvasLayer, start: Vector2, target: Vector2, count: int, ui_scale: float, on_arrival: Callable = Callable()) -> void:
+	for index in range(mini(count, 6)):
+		var icon := make_transfer_icon(ui_scale * 0.72)
+		icon.set_meta("battle_fx_kind", "reshuffle_card")
+		layer.add_child(icon)
+		icon.pivot_offset = icon.size / 2
+		var origin := start + Vector2(index * 2.0, -index * 2.0) * ui_scale
+		icon.position = origin - icon.size / 2
+		icon.modulate.a = 0.0
+		icon.rotation = deg_to_rad(-8.0 + index * 3.0)
+		var bend := (origin + target) / 2 + Vector2(76, -20) * ui_scale
+		var speed := GamePreferences.battle_animation_duration_scale()
+		var tween := icon.create_tween()
+		tween.tween_interval(index * 0.045 * speed)
+		tween.tween_property(icon, "modulate:a", 1.0, 0.04 * speed)
+		tween.parallel().tween_method(func(t: float):
+			icon.position = origin.lerp(bend, t).lerp(bend.lerp(target, t), t) - icon.size / 2
+		, 0.0, 1.0, 0.42 * speed).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+		tween.parallel().tween_property(icon, "rotation", 0.0, 0.42 * speed)
+		tween.parallel().tween_property(icon, "scale", Vector2.ONE * 0.7, 0.42 * speed)
+		tween.parallel().tween_property(icon, "modulate:a", 0.0, 0.08 * speed).set_delay(0.34 * speed)
+		if on_arrival.is_valid(): tween.chain().tween_callback(on_arrival.bind(index,mini(count,6)))
+		tween.chain().tween_callback(icon.queue_free)
 
 
 func draw_card_arrival_delay(index: int) -> float:
@@ -427,7 +493,7 @@ func travel_card_arrival_delay(index: int) -> float:
 # Move a face-up card preview between two UI locations. The caller owns the
 # visual construction so this stays reusable for pile selection, charm and
 # generated-card effects without coupling BattleFx to CardUI.
-func travel_card_control(layer: CanvasLayer, card_ghost: Control, start: Vector2, target: Vector2, index: int = 0, ui_scale: float = 1.0) -> void:
+func travel_card_control(layer: CanvasLayer, card_ghost: Control, start: Vector2, target: Vector2, index: int = 0, ui_scale: float = 1.0, on_arrival: Callable = Callable(), smooth_arc: bool = false) -> void:
 	if layer == null or card_ghost == null or not is_instance_valid(card_ghost):
 		return
 	layer.add_child(card_ghost)
@@ -436,6 +502,19 @@ func travel_card_control(layer: CanvasLayer, card_ghost: Control, start: Vector2
 	card_ghost.position = start - card_ghost.size / 2
 	card_ghost.modulate.a = 0.0
 	card_ghost.set_meta("battle_fx_kind", "travel_card")
+	if smooth_arc:
+		var control := (start + target) * 0.5 + Vector2(0, -minf(180.0 * ui_scale, start.distance_to(target) * 0.25))
+		var initial_scale := card_ghost.scale
+		var flight := layer.create_tween()
+		flight.tween_method(func(t: float):
+			var point := start.lerp(control, t).lerp(control.lerp(target, t), t)
+			card_ghost.position = point - card_ghost.size * 0.5
+			card_ghost.scale = initial_scale * lerpf(1.0, 0.65, t)
+			card_ghost.modulate.a = minf(clampf(t / 0.10, 0.0, 1.0), clampf((1.0-t) / 0.16, 0.0, 1.0))
+		, 0.0, 1.0, 0.46 * GamePreferences.battle_animation_duration_scale())
+		if on_arrival.is_valid(): flight.tween_callback(on_arrival)
+		flight.tween_callback(card_ghost.queue_free)
+		return
 	var lift: float = -62.0 * ui_scale - index * 6.0
 	var mid: Vector2 = (start + target) * 0.5 + Vector2(0, lift)
 	var duration_scale := GamePreferences.battle_animation_duration_scale()
@@ -448,7 +527,33 @@ func travel_card_control(layer: CanvasLayer, card_ghost: Control, start: Vector2
 	twn.tween_property(card_ghost, "position", target - card_ghost.size / 2, duration * 0.55).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	twn.parallel().tween_property(card_ghost, "scale", card_ghost.scale * 0.78, duration * 0.55)
 	twn.parallel().tween_property(card_ghost, "modulate:a", 0.0, 0.14 * duration_scale).set_delay(duration * 0.36)
+	if on_arrival.is_valid(): twn.tween_callback(on_arrival)
 	twn.tween_callback(card_ghost.queue_free)
+
+
+func overflow_card_arrival_delay(index: int) -> float:
+	return 0.85 * GamePreferences.battle_animation_duration_scale() + maxi(0,index)*card_draw_stagger()
+
+func overflow_card_control(layer: CanvasLayer, ghost: Control, start: Vector2, hand_edge: Vector2, target: Vector2, index: int, ui_scale: float) -> void:
+	layer.add_child(ghost)
+	ghost.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ghost.pivot_offset = ghost.size/2
+	ghost.position = start-ghost.size/2
+	ghost.set_meta("battle_fx_kind","overflow_card")
+	ghost.modulate.a = 0
+	var speed := GamePreferences.battle_animation_duration_scale()
+	var curve := (start+hand_edge)*0.5+Vector2(0,-52*ui_scale)
+	var turn := (hand_edge+target)*0.5+Vector2(0,-32*ui_scale)
+	var tween := layer.create_tween()
+	tween.tween_interval(maxi(0,index)*card_draw_stagger())
+	tween.tween_property(ghost,"modulate:a",1.0,0.05*speed)
+	tween.parallel().tween_method(func(t: float): ghost.position=start.lerp(curve,t).lerp(curve.lerp(hand_edge,t),t)-ghost.size/2,0.0,1.0,0.36*speed).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tween.tween_interval(0.12*speed)
+	tween.tween_method(func(t: float): ghost.position=hand_edge.lerp(turn,t).lerp(turn.lerp(target,t),t)-ghost.size/2,0.0,1.0,0.37*speed).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tween.parallel().tween_property(ghost,"rotation",deg_to_rad(8),0.37*speed)
+	tween.parallel().tween_property(ghost,"scale",Vector2.ONE*0.6,0.37*speed)
+	tween.parallel().tween_property(ghost,"modulate:a",0.0,0.1*speed).set_delay(0.27*speed)
+	tween.tween_callback(ghost.queue_free)
 
 
 func spell_cast_projectile(layer: CanvasLayer, start: Vector2, end: Vector2, ui_scale: float = 1.0) -> void:
@@ -725,37 +830,6 @@ func victory_confetti(layer: CanvasLayer, ui_scale: float = 1.0, viewport_size: 
 		twn.tween_callback(particles.queue_free)
 
 
-func turn_banner(layer: CanvasLayer, text: String, ui_scale: float = 1.0, viewport_size: Vector2 = Vector2.ZERO) -> void:
-	if layer == null or text.is_empty():
-		return
-	if viewport_size == Vector2.ZERO:
-		viewport_size = Vector2(1152, 648)
-	var label := Label.new()
-	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	label.text = text
-	label.add_theme_font_size_override("font_size", max(22, int(30 * ui_scale)))
-	label.add_theme_color_override("font_color", Color(1.0, 0.92, 0.62))
-	label.add_theme_color_override("font_outline_color", Color(0.08, 0.05, 0.0, 0.9))
-	label.add_theme_constant_override("outline_size", max(2, int(5 * ui_scale)))
-	label.add_theme_color_override("font_shadow_color", Color(0.0, 0.0, 0.0, 0.6))
-	label.add_theme_constant_override("shadow_offset_x", 2)
-	label.add_theme_constant_override("shadow_offset_y", 3)
-	label.size = Vector2(viewport_size.x, 60 * ui_scale)
-	label.position = Vector2(0, viewport_size.y * 0.3)
-	label.pivot_offset = label.size / 2
-	label.scale = Vector2(0.8, 0.8)
-	label.modulate.a = 0.0
-	layer.add_child(label)
-	layer.move_child(label, layer.get_child_count() - 1)
-	var twn := create_tween()
-	twn.set_parallel(true)
-	twn.tween_property(label, "modulate:a", 1.0, 0.16)
-	twn.tween_property(label, "scale", Vector2.ONE, 0.18).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-	twn.tween_property(label, "modulate:a", 0.0, 0.28).set_delay(BANNER_HOLD)
-	twn.chain().tween_callback(label.queue_free)
-
-
 # ============ Animation sequences ============
 
 # Instantiates a fresh card into the layer as a visual ghost for flight/lunge
@@ -791,7 +865,10 @@ func attack_lunge(layer: CanvasLayer, card_ui, to_center: Vector2, ui_scale: flo
 	var from_center: Vector2 = card_ui.global_position + card_ui.size / 2
 	var base_position: Vector2 = ghost.position
 	var delta: Vector2 = to_center - from_center
-	var twn := create_tween()
+	# These callbacks capture the battlefield layer; cancel them with that
+	# layer when a player leaves before the lunge or recoil completes.
+	var twn := layer.create_tween()
+	twn.set_speed_scale(GamePreferences.battle_effect_speed())
 	twn.set_parallel(true)
 	twn.tween_property(ghost, "position", base_position + delta, 0.16).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	twn.tween_property(ghost, "scale", ghost.scale * 1.12, 0.16)
@@ -809,7 +886,7 @@ func attack_lunge(layer: CanvasLayer, card_ui, to_center: Vector2, ui_scale: flo
 	twn.chain().tween_callback(_attack_hit.bind(layer, ghost, base_position, delta, ui_scale))
 
 
-func _attack_hit(layer, ghost, base_position: Vector2, delta: Vector2, ui_scale: float) -> void:
+func _attack_hit(layer: CanvasLayer, ghost, base_position: Vector2, delta: Vector2, ui_scale: float) -> void:
 	if not is_instance_valid(ghost):
 		return
 	var hit_center: Vector2 = ghost.position + ghost.size / 2
@@ -818,7 +895,8 @@ func _attack_hit(layer, ghost, base_position: Vector2, delta: Vector2, ui_scale:
 	attack_slash(layer, hit_center, direction, ui_scale)
 	screen_flash(layer, Color(1.0, 0.9, 0.75), 0.14, 0.13)
 	shake_layer(layer, 2.5)
-	var twn := create_tween()
+	var twn := layer.create_tween()
+	twn.set_speed_scale(GamePreferences.battle_effect_speed())
 	twn.set_parallel(true)
 	twn.tween_property(ghost, "position", base_position, 0.11).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	twn.tween_property(ghost, "scale", ghost.scale * 0.9, 0.11)
@@ -834,7 +912,10 @@ func summon_landing(layer: CanvasLayer, slot_ui, ui_scale: float = 1.0) -> void:
 	var center: Vector2 = slot_ui.global_position + slot_ui.size / 2
 	if slot_ui.has_method("play_card_arrival"):
 		slot_ui.call("play_card_arrival", "summon")
-	var twn := create_tween()
+	# Skipping/exiting the tutorial destroys its FX layer during this delay.
+	# Bind the callback lifetime to that layer rather than the global service.
+	var twn := layer.create_tween()
+	twn.set_speed_scale(GamePreferences.battle_effect_speed())
 	twn.tween_interval(0.15)
 	twn.tween_callback(_summon_landing_finish.bind(layer, center, ui_scale))
 
@@ -878,6 +959,7 @@ func _single_move_ghost(layer: CanvasLayer, card_ui, delta: Vector2, ui_scale: f
 	var base_scale: Vector2 = ghost.scale
 	ghost.pivot_offset = ghost.size * 0.5
 	var twn := create_tween()
+	twn.set_speed_scale(GamePreferences.battle_effect_speed())
 	twn.set_parallel(true)
 	twn.tween_method(func(t: float):
 		if not is_instance_valid(ghost):
@@ -926,9 +1008,9 @@ func death_fade(layer: CanvasLayer, card_ui, ui_scale: float = 1.0, discard_targ
 	if layer == null or card_ui == null or not is_instance_valid(card_ui):
 		return
 	death_burst(layer, card_ui.global_position + card_ui.size / 2, ui_scale)
-	var ghost := spawn_card_ghost(layer, card_ui, ui_scale)
-	if ghost == null:
-		return
+	var ghost := make_transfer_icon(ui_scale)
+	layer.add_child(ghost)
+	ghost.position = card_ui.global_position+card_ui.size/2-ghost.size/2
 	ghost.set_meta("battle_fx_kind", "death_discard_card")
 	var base_position: Vector2 = ghost.position
 	var base_scale: Vector2 = ghost.scale
@@ -984,6 +1066,7 @@ func hand_card_enter(layer: CanvasLayer, card_ui: Control, ui_scale: float = 1.0
 	card_ui.scale = base_scale * 0.92
 	var duration_scale := GamePreferences.battle_animation_duration_scale()
 	var twn := create_tween()
+	card_ui.set_meta("hand_entry_tween", twn)
 	twn.set_parallel(true)
 	twn.tween_property(card_ui, "modulate:a", 1.0, 0.18 * duration_scale)
 	twn.tween_property(card_ui, "scale", base_scale, 0.22 * duration_scale).set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
@@ -1078,6 +1161,7 @@ func skill_cast_pulse(layer: CanvasLayer, target: CanvasItem, center: Vector2, u
 	impact_ring(layer, center, false, Color(0.45, 0.7, 1.0, 0.5), ui_scale)
 	skill_cast_beam(layer, center, ui_scale)
 	var twn := create_tween()
+	twn.set_speed_scale(GamePreferences.battle_effect_speed())
 	data["tween"] = twn
 	_hit_targets[key] = data
 	twn.set_parallel(true)

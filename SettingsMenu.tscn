@@ -41,10 +41,15 @@ layout_mode = 2
 custom_minimum_size = Vector2(260, 42)
 layout_mode = 2
 
-[node name="AnimationAcceleration" type="CheckButton" parent="CenterContainer/VBoxContainer"]
-custom_minimum_size = Vector2(260, 42)
+[node name="PlaybackSpeedLabel" type="Label" parent="CenterContainer/VBoxContainer"]
 layout_mode = 2
-text = "动画加速"
+
+[node name="PlaybackSpeed" type="HSlider" parent="CenterContainer/VBoxContainer"]
+layout_mode = 2
+max_value = 2.0
+step = 1.0
+tick_count = 3
+ticks_on_borders = true
 
 [node name="BackButton" type="Button" parent="CenterContainer/VBoxContainer"]
 custom_minimum_size = Vector2(260, 44)

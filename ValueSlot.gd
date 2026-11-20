@@ -3,10 +3,10 @@ extends PanelContainer
 
 # ============================================
 # Scratch-style number slot.
-# Defaults to a plain SpinBox (fixed number). Dropping a variable reporter
+# Starts with an empty rounded literal field. Dropping a variable reporter
 # oval ({"type": "var_block", "var_id": ...}) into the slot switches it to a
 # variable chip — clicking the chip opens a variable picker. Dragging the
-# chip back onto the palette restores the fixed-number mode. Used for effect
+# chip back onto the palette leaves the rounded input empty. Used for effect
 # values, repeat counts and comparison operands.
 #
 # Data contract (bound dictionary, shared reference):
@@ -24,6 +24,8 @@ var kind_field: String = ""     # if non-empty, write "num"/"var"/"expr" here to
 var expr_field: String = ""     # if non-empty, a dropped math reporter writes data[expr_field]
 var offset_field: String = ""   # if non-empty, var mode shows a +/- offset spin
 var allow_negative: bool = false
+var clamp_input := false
+var accept_reporters := true
 var max_value: float = 999.0
 var min_value: float = 0.0
 
@@ -50,19 +52,26 @@ func setup(p_data: Dictionary, p_num_field: String, p_var_field: String,
 
 
 func _apply_slot_style() -> void:
-	var st := StyleBoxFlat.new()
-	var tint := Color(0.08, 0.48, 0.48)
-	st.bg_color = Color(tint.r, tint.g, tint.b, 0.54 if _drop_highlight else 0.30)
-	st.border_color = Color(0.50, 0.95, 0.88, 1.0) if _drop_highlight else Color(tint.r, tint.g, tint.b, 0.92)
-	st.set_border_width_all(2 if _drop_highlight else 1)
-	st.set_corner_radius_all(10)
-	st.shadow_size = 0
-	st.content_margin_left = 6
-	st.content_margin_right = 6
-	st.content_margin_top = 2
-	st.content_margin_bottom = 2
-	add_theme_stylebox_override("panel", st)
-	custom_minimum_size = Vector2(58, 26)
+	if _slot_mode() == "expr":
+		var st := StyleBoxFlat.new()
+		var tint := SkillBlock.random_color() if _expr_inner().get("op") == "rand" else SkillBlock.math_color()
+		st.bg_color = UITheme.COLOR_PANEL_SOFT.lerp(tint, 0.78)
+		if _drop_highlight: st.bg_color = st.bg_color.lightened(0.10)
+		st.border_color = Color(0.50, 0.95, 0.88) if _drop_highlight else tint.darkened(0.28)
+		st.set_border_width_all(2 if _drop_highlight else 1)
+		st.set_corner_radius_all(999)
+		st.set_content_margin_all(2)
+		st.content_margin_left = 6
+		st.content_margin_right = 6
+		add_theme_stylebox_override("panel", st)
+	else:
+		add_theme_stylebox_override("panel", StyleBoxEmpty.new())
+		for input in find_children("*", "LineEdit", false, false):
+			input.add_theme_stylebox_override("normal", _param_style())
+		if _slot_mode() == "var":
+			for chip in find_children("*", "Button", true, false):
+				chip.add_theme_stylebox_override("normal", _variable_style())
+	custom_minimum_size = Vector2(52, 26)
 	# PASS so a fixed-number slot does not swallow the press: when nothing is
 	# draggable here (_slot_get_drag_data returns null), the drag bubbles up to
 	# the enclosing reporter / block (Scratch: grab the whole reporter from
@@ -76,7 +85,12 @@ func _apply_slot_style() -> void:
 	)
 
 
+func _init() -> void:
+	set_meta("keyword_literal_fields",true)
+
+
 func _ready() -> void:
+	if get_meta("drag_preview", false): return
 	gui_input.connect(_on_rounding_input.bind(self))
 	if data.is_empty():
 		return
@@ -113,6 +127,7 @@ func _rebuild() -> void:
 	for child in get_children():
 		child.queue_free()
 	_mode = _slot_mode()
+	_apply_slot_style()
 	if _mode == "var":
 		tooltip_text = SkillHelp.description("value_var", str(data.get(var_field, "")))
 	elif _mode == "expr":
@@ -133,33 +148,36 @@ func _rebuild() -> void:
 # ============================================
 
 func _build_num_mode() -> void:
-	var spin := SpinBox.new()
-	spin.add_theme_stylebox_override("normal", _param_style())
-	spin.add_theme_stylebox_override("hover", _param_style())
-	spin.add_theme_font_size_override("font_size", 12)
-	spin.custom_minimum_size = Vector2(52, 24)
-	spin.allow_greater = true
-	spin.min_value = min_value
-	spin.max_value = max_value
-	spin.value = float(int(data.get(num_field, 1)))
-	var le: LineEdit = spin.get_line_edit()
-	if le != null:
-		le.add_theme_stylebox_override("normal", _param_style())
-		le.add_theme_color_override("font_color", Color(1, 1, 1, 0.97))
-		le.add_theme_font_size_override("font_size", 12)
-		le.alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_set_param_pass(spin)
-	spin.value_changed.connect(func(v: float):
-		data[num_field] = int(v)
-		if kind_field != "":
-			data[kind_field] = "num"
-		data.erase(var_field)
-		data.erase(offset_field)
-		if expr_field != "":
-			data.erase(expr_field)
-		changed.emit()
-	)
-	add_child(spin)
+	var input := LineEdit.new()
+	input.custom_minimum_size = Vector2(52, 26)
+	input.alignment = HORIZONTAL_ALIGNMENT_CENTER
+	input.add_theme_stylebox_override("normal", _param_style())
+	input.add_theme_stylebox_override("focus", _focus_style())
+	input.add_theme_color_override("font_color", Color(1, 1, 1, 0.97))
+	input.add_theme_font_size_override("font_size", 14)
+	input.text = str(int(data[num_field])) if data.has(num_field) else ""
+	_set_param_pass(input)
+	var commit := func():
+		# Replacing the literal with a reporter retires this editor. Its focus
+		# exit must not write the old literal over the newly inserted reporter.
+		if input.is_queued_for_deletion() or _slot_mode() != "num": return
+		var text := input.text.strip_edges()
+		var before: Dictionary = data.duplicate(true)
+		if text == "":
+			data.erase(num_field)
+		elif text.is_valid_int():
+			var value := maxi(int(min_value), int(text))
+			if clamp_input: value = mini(int(max_value), value)
+			data[num_field] = value
+			if kind_field != "": data[kind_field] = "num"
+			data.erase(var_field)
+			data.erase(offset_field)
+			if expr_field != "": data.erase(expr_field)
+		input.text = str(int(data[num_field])) if data.has(num_field) else ""
+		if before != data: changed.emit()
+	input.text_submitted.connect(func(_text: String): commit.call())
+	input.focus_exited.connect(commit)
+	add_child(input)
 
 
 # ============================================
@@ -169,15 +187,19 @@ func _build_num_mode() -> void:
 
 const EXPR_OPS := ["+", "-", "*", "/", "rand"]
 
+static func make_expression(op: String) -> Dictionary:
+	return {"kind":"expr", "op":op, "rounding":"round",
+		"a":{}, "b":{}}
+
 
 func _build_expr_mode() -> void:
 	var inner := _expr_inner()
 	if not inner.has("op"):
 		inner["op"] = "+"
 	if not inner.has("a"):
-		inner["a"] = {"kind": "num", "value": 1}
+		inner["a"] = {}
 	if not inner.has("b"):
-		inner["b"] = {"kind": "num", "value": 1}
+		inner["b"] = {}
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 2)
 	var slot_a := ValueSlot.new()
@@ -185,7 +207,10 @@ func _build_expr_mode() -> void:
 	slot_a.changed.connect(func(): changed.emit())
 	row.add_child(slot_a)
 	var op_sel := OptionButton.new()
-	op_sel.add_theme_font_size_override("font_size", 12)
+	for state in ["normal", "hover", "pressed"]:
+		op_sel.add_theme_stylebox_override(state, _param_style())
+	op_sel.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+	op_sel.add_theme_font_size_override("font_size", 14)
 	op_sel.add_theme_color_override("font_color", Color.WHITE)
 	op_sel.custom_minimum_size = Vector2(34, 24)
 	for i in range(EXPR_OPS.size()):
@@ -193,6 +218,7 @@ func _build_expr_mode() -> void:
 	op_sel.selected = maxi(0, EXPR_OPS.find(str(inner.get("op", "+"))))
 	op_sel.item_selected.connect(func(_i: int):
 		inner["op"] = EXPR_OPS[op_sel.selected]
+		_rebuild()
 		changed.emit()
 	)
 	_set_param_pass(op_sel)
@@ -210,6 +236,11 @@ func _on_rounding_input(event: InputEvent, anchor: Control) -> void:
 	if _slot_mode() != "expr" or not event is InputEventMouseButton:
 		return
 	if event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		if anchor == self and has_meta("loose_reporter_key"):
+			var editor = get_meta("loose_reporter_editor").get_ref()
+			if editor != null: editor._on_loose_reporter_context(str(get_meta("loose_reporter_key")), event.global_position)
+			anchor.accept_event()
+			return
 		anchor.accept_event()
 		_open_rounding_menu(anchor)
 
@@ -243,7 +274,7 @@ func _op_label(op: String) -> String:
 		"/":
 			return "/"
 		"rand":
-			return Locale.t("skill_editor.op_random")
+			return "~"
 		_:
 			return "+"
 
@@ -261,38 +292,34 @@ func _build_var_mode() -> void:
 	# Do NOT set clip_text here: it removes the text from the button's minimum
 	# size, collapsing the chip to its padding width inside the HBox row and
 	# making the variable name invisible.
-	chip.add_theme_font_size_override("font_size", 12)
+	chip.add_theme_font_size_override("font_size", 14)
 	chip.add_theme_color_override("font_color", Color(1, 1, 1, 0.97))
-	var st := StyleBoxFlat.new()
-	st.bg_color = Color(0.28, 0.60, 0.56, 0.65)
-	st.border_color = Color(0.28, 0.60, 0.56)
-	st.set_border_width_all(1)
-	st.set_corner_radius_all(12)
-	st.content_margin_left = 8
-	st.content_margin_right = 8
-	st.content_margin_top = 1
-	st.content_margin_bottom = 1
+	var st := _variable_style()
 	chip.add_theme_stylebox_override("normal", st)
 	var hover: StyleBoxFlat = st.duplicate()
 	hover.bg_color = Color(0.28, 0.60, 0.56, 0.85)
 	chip.add_theme_stylebox_override("hover", hover)
 	chip.add_theme_stylebox_override("pressed", hover)
+	chip.add_theme_stylebox_override("focus", _focus_style())
 	chip.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
 	chip.pressed.connect(func(): _open_var_menu(chip))
 	_set_param_pass(chip)
 	row.add_child(chip)
-	if offset_field != "":
+	if offset_field != "" and int(data.get(offset_field, 0)) != 0:
 		# Scratch has no offsets; this is a game-specific tweak: the variable
 		# reporter reads the battlefield stat, then adds the given offset
 		# ("手牌数 +2"), edited inline instead of via the config form.
 		var offset := SpinBox.new()
+		preload("res://SkillSocketStyle.gd").compact_number(offset)
 		offset.add_theme_stylebox_override("normal", _param_style())
 		offset.add_theme_stylebox_override("hover", _param_style())
-		offset.add_theme_font_size_override("font_size", 12)
+		offset.add_theme_font_size_override("font_size", 14)
 		offset.custom_minimum_size = Vector2(48, 24)
 		offset.min_value = -999.0
 		offset.max_value = 999.0
 		offset.value = float(int(data.get(offset_field, 0)))
+		offset.get_line_edit().add_theme_stylebox_override("normal", _param_style())
+		offset.get_line_edit().add_theme_stylebox_override("focus", _focus_style())
 		offset.tooltip_text = Locale.t("skill_editor.value_offset")
 		offset.value_changed.connect(func(v: float):
 			data[offset_field] = int(v)
@@ -303,9 +330,13 @@ func _build_var_mode() -> void:
 	add_child(row)
 
 
-# Restore the slot to a plain fixed number. Also used when the chip/expr is
+# Clear the slot to an empty literal input. Also used when the chip/expr is
 # dragged onto the palette (drop-to-discard for variable / math reporters).
-func clear_to_number() -> void:
+func clear_to_number(notify: bool = true) -> void:
+	if has_meta("loose_reporter_key"):
+		var editor = get_meta("loose_reporter_editor").get_ref()
+		if editor != null: editor._remove_loose_reporter(str(get_meta("loose_reporter_key")), notify)
+		return
 	data.erase(var_field)
 	data.erase(offset_field)
 	if expr_field != "":
@@ -316,10 +347,9 @@ func clear_to_number() -> void:
 		data.erase("a")
 		data.erase("b")
 		data.erase("rounding")
-	if not data.has(num_field):
-		data[num_field] = 1
+	data.erase(num_field)
 	_rebuild()
-	changed.emit()
+	if notify: changed.emit()
 
 
 func _open_var_menu(anchor: Control) -> void:
@@ -362,62 +392,106 @@ func _slot_get_drag_data(_pos: Vector2):
 		var var_id: String = str(data.get(var_field, ""))
 		if var_id == "":
 			return null
-		_set_drag_preview_label(Locale.term("value_var", var_id))
+		_set_drag_preview_label(Locale.term("value_var", var_id), _pos)
 		_dragging = true
-		_animate_slot(Vector2(0.94, 0.94), Color(0.72, 0.76, 0.84, 0.48), 0.07)
-		return {"type": "var_block", "var_id": var_id, "from_slot": self}
+		_animate_slot(Vector2.ONE, Color(0.72, 0.76, 0.84, 0.48), 0.07)
+		return {"type": "var_block", "var_id": var_id, "offset": data.get(offset_field,0), "from_slot": self, "grab_offset":[_pos.x,_pos.y]}
 	if _mode == "expr":
 		var inner := _expr_inner()
 		var op: String = str(inner.get("op", "+"))
-		_set_drag_preview_label(_op_label(op))
+		_set_drag_preview_label(_op_label(op), _pos)
 		_dragging = true
-		_animate_slot(Vector2(0.94, 0.94), Color(0.72, 0.76, 0.84, 0.48), 0.07)
-		return {"type": "expr_block", "expr_kind": op, "expression": inner.duplicate(true), "from_slot": self}
+		_animate_slot(Vector2.ONE, Color(0.72, 0.76, 0.84, 0.48), 0.07)
+		return {"type": "expr_block", "expr_kind": op, "expression": inner.duplicate(true), "from_slot": self, "grab_offset":[_pos.x,_pos.y]}
 	return null
 
 
-func _set_drag_preview_label(text: String) -> void:
-	var lbl := Label.new()
-	lbl.text = text
-	lbl.add_theme_font_size_override("font_size", 13)
-	lbl.add_theme_color_override("font_color", Color(1, 1, 1, 0.95))
-	var st := StyleBoxFlat.new()
-	var tint := Color(0.48, 0.27, 0.66) if _mode == "expr" else Color(0.08, 0.48, 0.48)
-	st.bg_color = Color(tint.r, tint.g, tint.b, 0.90)
-	st.border_color = tint.lightened(0.24)
-	st.set_border_width_all(1)
-	st.set_corner_radius_all(12)
-	st.content_margin_left = 8
-	st.content_margin_right = 8
-	st.content_margin_top = 3
-	st.content_margin_bottom = 3
-	lbl.add_theme_stylebox_override("normal", st)
+func _set_drag_preview_label(_text: String, at: Vector2) -> void:
+	var preview := ValueSlot.new()
+	preview.set_meta("drag_preview", true)
+	preview.setup(data.duplicate(true), num_field, var_field, kind_field, allow_negative, max_value, expr_field, offset_field)
+	preview.scale = get_global_transform().get_scale()
+	preview.position = -at * preview.scale
+	preview.size = preview.get_combined_minimum_size()
+	preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	for child in preview.find_children("*", "Control", true, false): child.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var wrap := Control.new()
 	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	wrap.add_child(lbl)
+	wrap.add_child(preview)
 	set_drag_preview(wrap)
 
 
 func _can_drop_var(_pos: Vector2, payload) -> bool:
+	if not accept_reporters: return false
 	var ok: bool = payload is Dictionary and payload.get("type", "") in ["var_block", "expr_block"]
+	if ok:
+		var source := payload.get("from_slot") as ValueSlot
+		if is_instance_valid(source) and (source == self or source.is_ancestor_of(self) or is_ancestor_of(source)): ok = false
+		if payload.get("type") == "var_block" and str(payload.get("var_id", "")) not in SkillRegistry.VALUE_VAR_IDS: ok = false
+		var expression := _reporter_expression(payload)
+		if not expression.is_empty() and not _fits_expression(expression): ok = false
+		if ok and is_instance_valid(source):
+			var displaced := source._reporter_expression(_current_reporter())
+			if not displaced.is_empty() and not source._fits_expression(displaced): ok = false
 	_set_drop_highlight(ok)
 	return ok
 
+func _fits_expression(expression: Dictionary) -> bool:
+	var depth := _expression_depth(expression)
+	var parent := get_parent()
+	while parent != null:
+		if parent is ValueSlot: depth += 1
+		parent = parent.get_parent()
+	return str(expression.get("op", "+")) in EXPR_OPS and depth < UgcSafety.MAX_EXPRESSION_NESTING_DEPTH
+
+
+func _reporter_expression(payload: Dictionary) -> Dictionary:
+	if payload.get("type") == "expr_block":
+		return payload.get("expression", make_expression(str(payload.get("expr_kind", "+"))))
+	# Some slots store only a bare variable ID. Use ordinary arithmetic
+	# there so moving a variable with an offset preserves its result.
+	var offset := int(payload.get("offset", 0))
+	if offset_field != "" or offset == 0: return {}
+	var expression := make_expression("-" if offset < 0 else "+")
+	expression.a = {"kind":"var", "var_id":payload.get("var_id")}
+	expression.b = {"kind":"num", "value":absi(offset)}
+	return expression
+
+
+func _current_reporter() -> Dictionary:
+	match _slot_mode():
+		"var":
+			return {"type":"var_block", "var_id":str(data.get(var_field,"")), "offset":data.get(offset_field,0)}
+		"expr":
+			return {"type":"expr_block", "expression":_expr_inner().duplicate(true)}
+	return {}
+
+
+static func _expression_depth(expression: Dictionary) -> int:
+	if not expression.has("op"): return 0
+	return 1 + maxi(_expression_depth(expression.get("a", {})), _expression_depth(expression.get("b", {})))
+
 
 func _drop_var(_pos: Vector2, payload) -> void:
+	if not _can_drop_var(_pos, payload): return
 	_set_drop_highlight(false)
-	# Move semantics: if the reporter came from another slot, clear that slot
-	# (Scratch-style dragging moves the reporter, it is not copied).
+	# Filled numeric reporters trade places as one change. Copy before writing
+	# either binding: the two slots may be operands in the same expression.
 	var src: Object = payload.get("from_slot", null)
 	if src == self:
 		return
 	if src is Node and src.is_ancestor_of(self):
 		return
-	if src != null and src != self and is_instance_valid(src) and src.has_method("clear_to_number"):
-		src.call("clear_to_number")
-	var ptype: String = str(payload.get("type", ""))
-	if ptype == "expr_block":
-		_drop_expr(payload)
+	if src is ValueSlot and _slot_mode() in ["var", "expr"]:
+		src._write_reporter(_current_reporter(), false)
+	elif src != null and src != self and is_instance_valid(src) and src.has_method("clear_to_number"):
+		src.call("clear_to_number", false)
+	_write_reporter(payload)
+
+func _write_reporter(payload: Dictionary, notify := true) -> void:
+	var expression := _reporter_expression(payload)
+	if not expression.is_empty():
+		_drop_expr(expression, notify)
 		return
 	var var_id: String = str(payload.get("var_id", ""))
 	if var_id == "":
@@ -434,8 +508,9 @@ func _drop_var(_pos: Vector2, payload) -> void:
 	data.erase("a")
 	data.erase("b")
 	data.erase("rounding")
+	if offset_field != "": data[offset_field] = int(payload.get("offset", 0))
 	_rebuild()
-	changed.emit()
+	if notify: changed.emit()
 	_play_drop_pulse()
 
 
@@ -446,7 +521,7 @@ func _drop_var(_pos: Vector2, payload) -> void:
 #     lhs/rhs, or an operand inside another expression): stores the expression
 #     directly on the operand dict, so math reporters nest inside math
 #     reporters exactly like Scratch.
-func _drop_expr(payload) -> void:
+func _drop_expr(expression: Dictionary, notify := true) -> void:
 	var inner: Dictionary
 	if expr_field != "" and data.has(expr_field) and data.get(expr_field) is Dictionary:
 		inner = data.get(expr_field)
@@ -455,10 +530,6 @@ func _drop_expr(payload) -> void:
 		data[expr_field] = inner
 	else:
 		inner = data
-	var expression: Dictionary = payload.get("expression", {
-		"kind": "expr", "op": str(payload.get("expr_kind", "+")), "rounding": "round",
-		"a": {"kind": "num", "value": 1}, "b": {"kind": "num", "value": 1},
-	})
 	inner.clear()
 	inner.merge(expression.duplicate(true))
 	data.erase(num_field)
@@ -467,7 +538,7 @@ func _drop_expr(payload) -> void:
 	if kind_field != "":
 		data[kind_field] = "expr"
 	_rebuild()
-	changed.emit()
+	if notify: changed.emit()
 	_play_drop_pulse()
 
 
@@ -489,11 +560,12 @@ func _animate_slot(target_scale: Vector2, target_modulate: Color, duration: floa
 
 
 func _play_drop_pulse() -> void:
-	scale = Vector2(1.10, 1.10)
+	modulate = Color(1.10,1.10,1.10)
 	_animate_slot(Vector2.ONE, Color.WHITE, 0.16)
 
 
 func _notification(what: int) -> void:
+	if get_meta("drag_preview", false): return
 	if what == NOTIFICATION_DRAG_END:
 		_dragging = false
 		_set_drop_highlight(false)
@@ -512,11 +584,14 @@ func _param_style() -> StyleBoxFlat:
 	st.bg_color = Color(1, 1, 1, 0.22)
 	st.border_color = Color(1, 1, 1, 0.35)
 	st.set_border_width_all(1)
-	st.set_corner_radius_all(4)
+	st.set_corner_radius_all(999)
 	st.content_margin_left = 6
 	st.content_margin_right = 6
 	st.content_margin_top = 1
 	st.content_margin_bottom = 1
+	if _drop_highlight:
+		st.border_color = Color(0.50, 0.95, 0.88)
+		st.set_border_width_all(2)
 	return st
 
 
@@ -528,3 +603,18 @@ func _set_param_pass(c: Control) -> void:
 		var le: LineEdit = c.get_line_edit()
 		if le != null:
 			le.mouse_filter = Control.MOUSE_FILTER_PASS
+
+func _focus_style() -> StyleBoxFlat:
+	var st := _param_style()
+	st.bg_color = Color.TRANSPARENT
+	st.border_color = Color(1, 1, 1, 0.9)
+	st.set_border_width_all(2)
+	return st
+
+func _variable_style() -> StyleBoxFlat:
+	var st := _param_style()
+	st.bg_color = Color(0.28, 0.60, 0.56, 0.65)
+	if not _drop_highlight: st.border_color = Color(0.28, 0.60, 0.56)
+	st.content_margin_left = 8
+	st.content_margin_right = 8
+	return st

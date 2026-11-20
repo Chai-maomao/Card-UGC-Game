@@ -2,6 +2,7 @@
 
 [ext_resource type="Script" uid="uid://cnv1h02g0od5u" path="res://CardEditor.gd" id="1_ey4pb"]
 [ext_resource type="PackedScene" uid="uid://q3l6yb16sy31" path="res://CardUI.tscn" id="2_cardui"]
+[ext_resource type="Script" path="res://presentation/CardArtDropZone.gd" id="3_drop_zone"]
 
 [node name="CardEditor" type="Control" unique_id=938346573]
 layout_mode = 3
@@ -62,21 +63,20 @@ text = "Card Art:"
 
 [node name="ArtRow" type="HBoxContainer" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9400002]
 layout_mode = 2
-theme_override_constants/separation = 4
-
-[node name="ArtPathLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/ArtRow" unique_id=9400003]
-layout_mode = 2
-text = "(none)"
-size_flags_horizontal = 3
-clip_text = true
+theme_override_constants/separation = 8
 
 [node name="BrowseButton" type="Button" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/ArtRow" unique_id=9400004]
 layout_mode = 2
-text = "Browse..."
+script = ExtResource("3_drop_zone")
 
 [node name="ClearArtButton" type="Button" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/ArtRow" unique_id=9400005]
 layout_mode = 2
-text = "X"
+size_flags_vertical = 4
+text = "清除"
+
+[node name="ArtPathLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9400003]
+layout_mode = 2
+text_overrun_behavior = 3
 
 [node name="SeparatorA" type="HSeparator" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9400006]
 layout_mode = 2
@@ -88,26 +88,47 @@ text = "Name:"
 [node name="NameInput" type="LineEdit" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=1198611201]
 layout_mode = 2
 
-[node name="CostLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9360004]
+[node name="StatsGrid" type="GridContainer" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
+layout_mode = 2
+size_flags_horizontal = 3
+columns = 3
+theme_override_constants/h_separation = 16
+
+[node name="CostField" type="VBoxContainer" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/StatsGrid"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+
+[node name="CostLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/StatsGrid/CostField" unique_id=9360004]
 layout_mode = 2
 text = "Cost:"
 
-[node name="CostInput" type="SpinBox" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=340155036]
+[node name="CostInput" type="SpinBox" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/StatsGrid/CostField" unique_id=340155036]
 layout_mode = 2
 
-[node name="HpLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9360005]
+[node name="HpField" type="VBoxContainer" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/StatsGrid"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+
+[node name="HpLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/StatsGrid/HpField" unique_id=9360005]
 layout_mode = 2
 text = "HP:"
 
-[node name="HpInput" type="SpinBox" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=1052130742]
+[node name="HpInput" type="SpinBox" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/StatsGrid/HpField" unique_id=1052130742]
 layout_mode = 2
 min_value = 1.0
 
-[node name="AtkLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9360006]
+[node name="AtkField" type="VBoxContainer" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/StatsGrid"]
+layout_mode = 2
+size_flags_horizontal = 3
+theme_override_constants/separation = 8
+
+[node name="AtkLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/StatsGrid/AtkField" unique_id=9360006]
 layout_mode = 2
 text = "ATK:"
 
-[node name="AtkInput" type="SpinBox" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=597735551]
+[node name="AtkInput" type="SpinBox" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer/StatsGrid/AtkField" unique_id=597735551]
 layout_mode = 2
 
 [node name="GenderLabel" type="Label" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9500001]
@@ -138,7 +159,7 @@ layout_mode = 2
 text = "-"
 autowrap_mode = 3
 
-[node name="AnalysisActionsRow" type="HBoxContainer" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
+[node name="AnalysisActionsRow" type="HFlowContainer" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
 layout_mode = 2
 theme_override_constants/separation = 8
 

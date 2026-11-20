@@ -1,5 +1,7 @@
 extends Node
 
+const RoomPresenceStore = preload("res://RoomPresenceStore.gd")
+
 # ============================================
 # Multi-room lobby server
 # Clients connect to lobby port 4567, create/join a room code, then
@@ -150,6 +152,9 @@ func _find_free_port() -> int:
 func _free_room(code: String) -> void:
 	var room = rooms.get(code)
 	if room:
+		var presence_path := str(room.get("presence_path", ""))
+		if not presence_path.is_empty() and FileAccess.file_exists(presence_path):
+			DirAccess.remove_absolute(presence_path)
 		used_ports.erase(room["port"])
 		rooms.erase(code)
 		print("[SERVER] Room %s freed (port %d released)" % [code, room["port"]])
@@ -206,7 +211,8 @@ func _handle_lobby_request(sender_id: int, json_str: String) -> void:
 			else:
 				var p1_token := _new_reconnect_token()
 				var p2_token := _new_reconnect_token()
-				var pid := _spawn_room(code, port, p1_token, p2_token)
+				var presence_path := ProjectSettings.globalize_path("user://room_presence_%d_%s.json" % [port, _new_reconnect_token().left(16)])
+				var pid := _spawn_room(code, port, p1_token, p2_token, presence_path)
 				if pid <= 0:
 					NetworkManager.send_lobby_response(sender_id, JSON.stringify({"status": "no_ports"}))
 					print("[SERVER] Room '%s' subprocess spawn failed" % code)
@@ -218,6 +224,8 @@ func _handle_lobby_request(sender_id: int, json_str: String) -> void:
 						"created_at": Time.get_ticks_msec() / 1000.0,
 						"players": 1,
 						"p2_reserved_until": 0.0,
+						"p1_reserved_until": Time.get_ticks_msec() / 1000.0 + JOIN_RESERVATION_TTL,
+						"presence_path": presence_path,
 						"tokens": {1: p1_token, 2: p2_token},
 					}
 					NetworkManager.send_lobby_response(sender_id, JSON.stringify({
@@ -233,22 +241,37 @@ func _handle_lobby_request(sender_id: int, json_str: String) -> void:
 			print("[SERVER] Peer %d sent invalid room code (rejected)" % sender_id)
 			return
 		var room = rooms.get(code)
+		if room != null and not _refresh_room_presence(room):
+			NetworkManager.send_lobby_response(sender_id, JSON.stringify({"status": "room_starting"}))
+			return
 		if room == null:
 			NetworkManager.send_lobby_response(sender_id, JSON.stringify({"status": "not_found"}))
 			print("[SERVER] Room '%s' not found" % code)
-		elif has_active_join_reservation(room, Time.get_ticks_msec() / 1000.0):
+		elif bool(room.get("match_active", false)):
+			NetworkManager.send_lobby_response(sender_id, JSON.stringify({"status": "in_progress"}))
+		elif room.get("occupied", []).size() >= 2:
 			NetworkManager.send_lobby_response(sender_id, JSON.stringify({"status": "full"}))
-			print("[SERVER] Room '%s' has an active P2 reservation (join rejected)" % code)
+			print("[SERVER] Room '%s' has no free seat (join rejected)" % code)
 		else:
 			var now := Time.get_ticks_msec() / 1000.0
-			room["p2_reserved_until"] = now + JOIN_RESERVATION_TTL
-			var tokens: Dictionary = room.get("tokens", {})
-			NetworkManager.send_lobby_response(sender_id, JSON.stringify({
-				"status": "ok", "port": room["port"], "player": 2,
-				"reconnect_token": str(tokens.get(2, "")), "card_art": allow_card_art,
-				"protocol": AppVersion.PROTOCOL_VERSION,
-			}))
-			print("[SERVER] Peer %d reserved P2 in room '%s' on port %d for %.0fs" % [sender_id, code, room["port"], JOIN_RESERVATION_TTL])
+			var attempt_id := str(data.get("attempt_id", ""))
+			if attempt_id.length() != 32 or not attempt_id.is_valid_hex_number(false):
+				attempt_id = ""
+			var player := _reserved_player_for_attempt(room, now, attempt_id)
+			if player > 0:
+				_send_join_assignment(sender_id, room, player)
+				print("[SERVER] Room '%s' resumed the existing P%d reservation" % [code, player])
+			elif has_active_join_reservation(room, now):
+				NetworkManager.send_lobby_response(sender_id, JSON.stringify({"status": "full", "seat_reserved": true}))
+				print("[SERVER] Room '%s' has an active P2 reservation (join rejected)" % code)
+			else:
+				player = 2
+				if not room.get("occupied", []).has(1) and float(room.get("p1_reserved_until", 0.0)) <= now:
+					player = 1
+				room["p%d_reserved_until" % player] = now + JOIN_RESERVATION_TTL
+				room["p%d_join_attempt" % player] = attempt_id
+				_send_join_assignment(sender_id, room, player)
+				print("[SERVER] Peer %d reserved P%d in room '%s' on port %d for %.0fs" % [sender_id, player, code, room["port"], JOIN_RESERVATION_TTL])
 
 	elif action == "reconnect":
 		var requested_player := int(data.get("player", 0))
@@ -259,6 +282,9 @@ func _handle_lobby_request(sender_id: int, json_str: String) -> void:
 		var room = rooms.get(code)
 		if room == null:
 			NetworkManager.send_lobby_response(sender_id, JSON.stringify({"status": "not_found"}))
+			return
+		if not _refresh_room_presence(room):
+			NetworkManager.send_lobby_response(sender_id, JSON.stringify({"status": "room_starting"}))
 			return
 		if _is_port_free(int(room.get("port", 0))):
 			_free_room(code)
@@ -280,7 +306,25 @@ func _handle_lobby_request(sender_id: int, json_str: String) -> void:
 		print("[SERVER] Unknown action '%s' from peer %d (ignored)" % [action, sender_id])
 
 
-func _spawn_room(code: String, port: int, p1_token: String, p2_token: String) -> int:
+func _send_join_assignment(peer_id: int, room: Dictionary, player: int) -> void:
+	var tokens: Dictionary = room["tokens"]
+	NetworkManager.send_lobby_response(peer_id, JSON.stringify({
+		"status": "ok", "port": room["port"], "player": player,
+		"reconnect_token": str(tokens.get(player, "")), "card_art": allow_card_art,
+		"protocol": AppVersion.PROTOCOL_VERSION,
+	}))
+
+
+func _reserved_player_for_attempt(room: Dictionary, now: float, attempt_id: String) -> int:
+	if attempt_id.is_empty():
+		return 0
+	for player in [1, 2]:
+		if float(room.get("p%d_reserved_until" % player, 0.0)) > now and room.get("p%d_join_attempt" % player) == attempt_id:
+			return player
+	return 0
+
+
+func _spawn_room(code: String, port: int, p1_token: String, p2_token: String, presence_path: String = "") -> int:
 	# Launch a dedicated relay subprocess for this room.
 	var exe := OS.get_executable_path()
 	var args := PackedStringArray([
@@ -292,9 +336,30 @@ func _spawn_room(code: String, port: int, p1_token: String, p2_token: String) ->
 		"--",
 		"--room-server", "--room-port=%d" % port, "--room-code=%s" % code,
 		"--p1-token=%s" % p1_token, "--p2-token=%s" % p2_token,
+		"--presence-file=%s" % presence_path,
 	]))
 	var pid := OS.create_process(exe, args)
 	return pid
+
+
+func _refresh_room_presence(room: Dictionary) -> bool:
+	var presence := RoomPresenceStore.read(str(room.get("presence_path", "")))
+	if presence.is_empty(): return false
+	var tokens: Dictionary = room.get("tokens", {})
+	var occupied: Array = []
+	for seat in presence.occupied:
+		occupied.append(int(seat))
+	for player in [1, 2]:
+		var token := str(presence.tokens.get(str(player), ""))
+		if token.is_empty(): return false
+		if token != str(tokens.get(player, "")) or occupied.has(player):
+			room["p%d_reserved_until" % player] = 0.0
+			room.erase("p%d_join_attempt" % player)
+		tokens[player] = token
+	room["tokens"] = tokens
+	room["occupied"] = occupied
+	room["match_active"] = bool(presence.get("match_active", false))
+	return true
 
 
 func _new_reconnect_token() -> String:
