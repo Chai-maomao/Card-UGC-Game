@@ -20,3 +20,10 @@ Create a single premium fantasy card illustration bitmap asset, portrait 3:4. NO
 
 - `title-dice.png` 和 `title-wheel.png` 来自用户提供的透明底素材。
 - 道具沿标题页牌桌平面投影，转盘在纵深方向略微压缩。阴影由图片的透明轮廓在场景中生成。
+
+## 开战入口插画
+
+- `launch/quick-play-v2.webp` 为古象牙骰子和单张绿金牌背的桌面静物。用于随机对战入口及练习准备页。
+- `launch/friend-room.webp` 为桌面两侧相对摆放的绿金卡组。用于好友房间、局域网、派对和热座准备。
+- `launch/ranked-tournament.webp` 为置于桌面的黄铜赛事盾牌。用于排位入口及排位选组页。2026-11-27 通过内置图像生成制作，游戏使用 WebP 副本。
+- 两张图均于 2026-11-26 通过内置图像生成制作，保留暗色下沿供本地化标题叠放。原始 PNG 保存在本机生成图目录。游戏使用压缩后的 WebP 副本。

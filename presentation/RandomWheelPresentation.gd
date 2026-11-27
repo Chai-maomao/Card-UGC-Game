@@ -44,11 +44,13 @@ func _ready() -> void:
 	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	UITheme.apply_label(title)
+	title.add_theme_color_override("font_color", UITheme.Tokens.PAPER)
 	add_child(title)
 	detail = Label.new()
 	detail.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	detail.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	UITheme.apply_label(detail)
+	detail.add_theme_color_override("font_color", UITheme.Tokens.PAPER)
 	add_child(detail)
 	visible = false
 

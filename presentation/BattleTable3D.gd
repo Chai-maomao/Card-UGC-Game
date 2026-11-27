@@ -11,17 +11,36 @@ var elapsed := 0.0
 var trauma := 0.0
 var rng := RandomNumberGenerator.new()
 var menu_mode := false
+var show_center_seal := true
 var duration_scale := 1.0
 var shard_pool: Node3D
 var environment: Environment
 var main_light: DirectionalLight3D
+var _table_stone: ShaderMaterial
 var quality := 1
 var grain_normal: NoiseTexture2D
 var dust: GPUParticles3D
 var _pending_face_bakes: Dictionary = {}
 var _drawing_faces: Dictionary = {}
 
+func _on_appearance_changed(key: String) -> void:
+	if key == "appearance":
+		_apply_appearance()
+
+func _apply_appearance() -> void:
+	var light := UITheme.Tokens.light_mode
+	_table_stone.set_shader_parameter("stone_color", Color("827565") if light else null)
+	environment.background_color = Color("d8c6aa") if light else Color("080e13")
+	environment.ambient_light_color = Color("e3dacb") if light else Color("839aa1")
+	environment.ambient_light_energy = 0.54 if light else 0.55
+	main_light.light_color = Color("f3e8d7") if light else Color("ffdfae")
+	main_light.light_energy = 0.76 if light else 1.1
+	for socket in sockets:
+		_update_socket_ink(socket)
+
 func _ready() -> void:
+	# Update the 3D poses before the battle projects them into foreground overlays.
+	process_priority = -1
 	get_viewport().msaa_3d = Viewport.MSAA_4X
 	duration_scale = 1.0 if menu_mode else maxf(1.0,GamePreferences.battle_animation_duration_scale())
 	rng.seed = 673411
@@ -67,9 +86,11 @@ func _ready() -> void:
 	fill.light_energy = 1.2
 	fill.omni_range = 19
 	add_child(fill)
-	var stone := ShaderMaterial.new()
-	stone.shader = preload("res://presentation/stone.gdshader")
-	_box(self,Vector3(30,0.6,24),Vector3(0,-0.4,0),stone)
+	_table_stone = ShaderMaterial.new()
+	_table_stone.shader = preload("res://presentation/stone.gdshader")
+	_box(self,Vector3(30,0.6,24),Vector3(0,-0.4,0),_table_stone)
+	_apply_appearance()
+	AppPreferences.changed.connect(_on_appearance_changed)
 	var floor_body := StaticBody3D.new()
 	var collision := CollisionShape3D.new()
 	var shape := BoxShape3D.new()
@@ -84,7 +105,7 @@ func _ready() -> void:
 	var ring := TorusMesh.new()
 	ring.inner_radius = 1.5
 	ring.outer_radius = 1.53
-	seal.visible = not menu_mode
+	seal.visible = not menu_mode and show_center_seal
 	seal.mesh = ring
 	seal.material_override = brass
 	seal.position.y = -0.065
@@ -108,6 +129,7 @@ func _ready() -> void:
 			for z in [-0.94,0.94]:
 				_box(socket,Vector3(0.16,0.03,0.018),Vector3(x-signf(x)*0.07,0.04,z),edge)
 				_box(socket,Vector3(0.018,0.03,0.20),Vector3(x,0.04,z-signf(z)*0.09),edge)
+		_update_socket_ink(socket)
 
 	shard_pool = preload("res://presentation/TabletopShardPool.gd").new()
 	add_child(shard_pool)
@@ -300,7 +322,7 @@ func sync_slot(slot: Control, key: int, value: CardData, enemy: bool, update_fac
 		ink.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS_ANISOTROPIC
 		top.material_override = ink
 		root.add_child(top)
-		cards[key] = {"id":value.instance_id,"root":root,"body":body,"top":top,"viewport":viewport,"face":face,"target":center,"velocity":Vector3.ZERO,"dimensions":dimensions}
+		cards[key] = {"id":value.instance_id,"root":root,"body":body,"top":top,"viewport":viewport,"face":face,"target":center,"velocity":Vector3.ZERO,"dimensions":dimensions,"hand_card":hand_card}
 	var entry: Dictionary = cards[key]
 	entry["card_object_id"] = value.get_instance_id()
 	if hand_card:
@@ -324,6 +346,12 @@ func sync_slot(slot: Control, key: int, value: CardData, enemy: bool, update_fac
 func _sync_face(entry: Dictionary, value: CardData, enemy: bool, displayed_hp: Dictionary = {}) -> void:
 	var previous: String = entry.face.fingerprint
 	if classic_battle_ui:
+		var ink: StandardMaterial3D = entry.top.material_override
+		var faded := not bool(entry.hand_card) and value.has_untargetable()
+		var opacity := UITheme.UNTARGETABLE_CARD_OPACITY if faded else 1.0
+		if not is_equal_approx(ink.albedo_color.a, opacity):
+			ink.albedo_color.a = opacity
+			ink.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA if faded else BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR
 		entry.face.bind(value, enemy, int(displayed_hp.get("hp", -1)), int(displayed_hp.get("max_hp", -1)))
 	else:
 		entry.face.bind(value, enemy)
@@ -349,10 +377,30 @@ func set_card_outline(key: int, color: Color) -> void:
 func hover(key: int, enabled: bool) -> void:
 	if cards.has(key): cards[key]["hover"] = enabled
 	if key < sockets.size():
-		var mat: StandardMaterial3D = sockets[key].material_override
-		mat.albedo_color = Color("364b49") if enabled else Color("121c20")
-		for corner in sockets[key].get_children():
-			corner.material_override.albedo_color = Color("c6af76") if enabled else Color("746b53")
+		var socket: MeshInstance3D = sockets[key]
+		socket.set_meta("hovered", enabled)
+		_update_socket_ink(socket)
+
+func set_swap_highlight(key: int, tint: Color) -> void:
+	if key not in range(sockets.size()):
+		return
+	var socket: MeshInstance3D = sockets[key]
+	if socket.get_meta("swap_tint", Color.TRANSPARENT) == tint:
+		return
+	socket.set_meta("swap_tint", tint)
+	_update_socket_ink(socket)
+
+func _update_socket_ink(socket: MeshInstance3D) -> void:
+	var hovered: bool = socket.get_meta("hovered", false)
+	var tint: Color = socket.get_meta("swap_tint", Color.TRANSPARENT)
+	var mat: StandardMaterial3D = socket.material_override
+	if UITheme.Tokens.light_mode:
+		mat.albedo_color = Color("7e907a") if hovered or tint.a > 0.0 else Color("a6947d")
+	else:
+		mat.albedo_color = Color("364b49") if hovered or tint.a > 0.0 else Color("121c20")
+	for corner in socket.get_children():
+		var edge_color := Color("82643d") if UITheme.Tokens.light_mode else Color("746b53")
+		corner.material_override.albedo_color = tint if tint.a > 0.0 else (Color("a17a38") if hovered and UITheme.Tokens.light_mode else Color("c6af76") if hovered else edge_color)
 
 func impact(key: int, direction: Vector3 = Vector3.ZERO, strong: bool = false) -> void:
 	if not cards.has(key): return
@@ -390,7 +438,7 @@ func _debris(at: Vector3) -> void:
 	if quality == 0 or AppPreferences.get_value("reduced_motion"): return
 	shard_pool.burst(at,rng,9 if quality == 2 else 5)
 
-func _physics_process(delta: float) -> void:
+func _process(delta: float) -> void:
 	elapsed += delta
 	var reduced := bool(AppPreferences.get_value("reduced_motion"))
 	# Exact critical damping is independent of render/physics frame rate.
@@ -485,6 +533,16 @@ func _bake_face(entry: Dictionary) -> void:
 	if image == null or image.is_empty(): return
 	image.generate_mipmaps()
 	entry.top.material_override.albedo_texture = ImageTexture.create_from_image(image)
+
+
+func drag_portrait(key: int, card: CardData) -> ImageTexture:
+	var entry: Dictionary = cards.get(key, {})
+	if entry.get("card_object_id", 0) != card.get_instance_id():
+		return null
+	var viewport_id: int = entry.viewport.get_instance_id()
+	if _pending_face_bakes.has(viewport_id) or _drawing_faces.has(viewport_id) or not entry.face.prediction.is_empty():
+		return null
+	return entry.top.material_override.albedo_texture as ImageTexture
 
 
 func _make_dust() -> void:

@@ -6,6 +6,7 @@ var editor: Control
 var workspace: Control
 var toolbar: HBoxContainer
 var inspector: PanelContainer
+var inspector_divider: Control
 var inspector_body: VBoxContainer
 var settings_section: VBoxContainer
 var settings_tab: Button
@@ -23,9 +24,14 @@ var _compiled_state: Dictionary = {}
 var _compiled_name := ""
 var has_compiled := false
 var preview_feedback: Label
+var _inspector_ratio := 0.0
+var _inspector_drag_pointer := 0.0
+var _inspector_drag_width := 0.0
+var _dragging_inspector := false
 
 func install(owner_editor: Control) -> void:
 	editor = owner_editor
+	_inspector_ratio = float(AppPreferences.get_value("skill_inspector_ratio"))
 	var main: VBoxContainer = editor.get_node("Panel/Margin/HBox/MainPanel/Margin")
 	for child in main.get_children():
 		child.hide()
@@ -105,6 +111,11 @@ func _build_toolbar() -> void:
 	editor.title_label.custom_minimum_size.x = 128
 	editor.title_label.clip_text = true
 	editor.title_label.show()
+	var history_divider := VSeparator.new()
+	history_divider.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	history_divider.custom_minimum_size.y = 20
+	UITheme.apply_separator(history_divider)
+	toolbar.add_child(history_divider)
 	for button in [editor._undo_btn, editor._redo_btn, editor._template_btn]:
 		button.reparent(toolbar)
 	toolbar.add_spacer(false)
@@ -135,15 +146,27 @@ func _try_skill() -> void:
 	editor.add_child(trial)
 
 func _build_inspector() -> void:
+	var row: HBoxContainer = editor.get_node("Panel/Margin/HBox")
+	inspector_divider = Control.new()
+	inspector_divider.name = "InspectorDivider"
+	inspector_divider.custom_minimum_size.x = 12
+	inspector_divider.focus_mode = Control.FOCUS_ALL
+	inspector_divider.mouse_default_cursor_shape = Control.CURSOR_HSIZE
+	inspector_divider.tooltip_text = Locale.t("skill_editor.resize_inspector")
+	inspector_divider.draw.connect(_draw_inspector_divider)
+	inspector_divider.gui_input.connect(_resize_inspector_input)
+	inspector_divider.mouse_entered.connect(inspector_divider.queue_redraw)
+	inspector_divider.mouse_exited.connect(inspector_divider.queue_redraw)
+	inspector_divider.focus_entered.connect(inspector_divider.queue_redraw)
+	inspector_divider.focus_exited.connect(inspector_divider.queue_redraw)
+	row.add_child(inspector_divider)
 	inspector = PanelContainer.new()
 	inspector.name = "SkillInspector"
 	var surface := StyleBoxFlat.new()
 	surface.bg_color = UITheme.COLOR_PANEL
 	surface.set_content_margin_all(16)
-	surface.border_color = UITheme.Tokens.DIVIDER
-	surface.border_width_left = 1
 	inspector.add_theme_stylebox_override("panel", surface)
-	editor.get_node("Panel/Margin/HBox").add_child(inspector)
+	row.add_child(inspector)
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	inspector.add_child(scroll)
@@ -206,6 +229,52 @@ func _build_inspector() -> void:
 	preview_section.add_child(compiled_summary)
 	preview_section.hide()
 
+func _draw_inspector_divider() -> void:
+	var size := inspector_divider.size
+	var active := _dragging_inspector or inspector_divider.has_focus() or Rect2(Vector2.ZERO, size).has_point(inspector_divider.get_local_mouse_position())
+	var color := UITheme.COLOR_GOLD if active else UITheme.Tokens.DIVIDER
+	var center := Vector2(size.x * 0.5, size.y * 0.5)
+	inspector_divider.draw_line(Vector2(center.x, 0), Vector2(center.x, size.y), color)
+	for offset in [-5.0, 0.0, 5.0]:
+		inspector_divider.draw_circle(center + Vector2(0, offset), 1.4, color, true, -1.0, true)
+
+func _resize_inspector_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		_dragging_inspector = event.pressed
+		if event.pressed:
+			inspector_divider.grab_focus()
+			_inspector_drag_pointer = (inspector_divider.get_global_transform_with_canvas() * event.position).x
+			_inspector_drag_width = inspector.size.x
+		else:
+			AppPreferences.set_value("skill_inspector_ratio", _inspector_ratio)
+		inspector_divider.queue_redraw()
+	elif event is InputEventMouseMotion and _dragging_inspector:
+		var pointer: float = (inspector_divider.get_global_transform_with_canvas() * event.position).x
+		_resize_inspector_to(_inspector_drag_width + _inspector_drag_pointer - pointer)
+	elif event.is_action_pressed("ui_left") or event.is_action_pressed("ui_right"):
+		_resize_inspector_to(inspector.size.x + (24.0 if event.is_action_pressed("ui_left") else -24.0))
+		AppPreferences.set_value("skill_inspector_ratio", _inspector_ratio)
+	else:
+		return
+	inspector_divider.accept_event()
+
+func _resize_inspector_to(wanted: float) -> void:
+	var width := editor.get_viewport_rect().size.x
+	inspector.custom_minimum_size.x = clampf(wanted, _min_inspector_width(), _max_inspector_width(width))
+	_inspector_ratio = inspector.custom_minimum_size.x / width
+
+func _default_inspector_width(width: float) -> float:
+	return 252.0 if width >= 1100 else 214.0
+
+func _min_inspector_width() -> float:
+	return maxf(188.0, inspector.get_minimum_size().x)
+
+func _max_inspector_width(width: float) -> float:
+	var palette: Control = editor.get_node("Panel/Margin/HBox/PalettePanel")
+	var available := width - 40.0 - palette.custom_minimum_size.x - inspector_divider.custom_minimum_size.x
+	var canvas_minimum := minf(240.0, width * 0.20)
+	return maxf(_min_inspector_width(), minf(width * 0.62, available - canvas_minimum))
+
 func _build_category_rail() -> void:
 	var palette_body: VBoxContainer = editor.palette_vbox.get_parent().get_parent()
 	var palette_scroll: ScrollContainer = editor.palette_vbox.get_parent()
@@ -245,6 +314,7 @@ func refresh_categories() -> void:
 		return
 	for block in editor.palette_vbox.find_children("*","SkillPaletteBlock",true,false): block.set_meta("skill_workspace",workspace)
 	for child in category_rail.get_children():
+		category_rail.remove_child(child)
 		child.queue_free()
 	var group := ButtonGroup.new()
 	group.allow_unpress = true
@@ -252,24 +322,33 @@ func refresh_categories() -> void:
 		if not header is Button or not header.has_meta("section_title"):
 			continue
 		var title := str(header.get_meta("section_title"))
-		var button := _button(title, func():
-			editor.palette_search.text = ""
-			editor._filter_palette("")
-			var scroll: ScrollContainer = editor.palette_vbox.get_parent()
-			var box: Control = header.get_parent().get_child(header.get_index()+1)
-			header.set_meta("user_open", true)
-			box.show()
-			await editor.get_tree().process_frame
-			if not is_instance_valid(header): return
-			scroll.scroll_vertical = maxi(0, roundi(header.position.y))
-			_requested_scroll = scroll.scroll_vertical
-			_requested_category = title
-			_sync_category())
+		var button := _button(title, _open_category.bind(title))
 		button.toggle_mode = true
 		button.button_group = group
 		button.custom_minimum_size = Vector2(54, 42)
 		button.add_theme_font_size_override("font_size", 12)
 		category_rail.add_child(button)
+
+
+func _open_category(title: String) -> void:
+	var palette: VBoxContainer = editor.palette_vbox
+	for node in palette.get_children():
+		var header := node as Button
+		if header == null or header.get_meta("section_title", "") != title:
+			continue
+		header.set_meta("user_open", true)
+		editor.palette_search.text = ""
+		editor._filter_palette("")
+		await editor.get_tree().process_frame
+		if not is_instance_valid(header) or not header.is_inside_tree():
+			return
+		var scroll := palette.get_parent() as ScrollContainer
+		scroll.scroll_vertical = maxi(0, roundi(header.position.y))
+		_requested_scroll = scroll.scroll_vertical
+		_requested_category = title
+		_sync_category()
+		return
+
 
 func _build_zoom_controls() -> void:
 	var dock := HBoxContainer.new()
@@ -313,7 +392,8 @@ func layout() -> void:
 	if Locale.language == "en":
 		palette_width = maxf(palette_width, minf(280.0, width * 0.30))
 	palette.custom_minimum_size.x = palette_width
-	inspector.custom_minimum_size.x = 252 if width >= 1100 else 214
+	var desired := width * _inspector_ratio if _inspector_ratio > 0 else _default_inspector_width(width)
+	inspector.custom_minimum_size.x = clampf(desired, _min_inspector_width(), _max_inspector_width(width))
 	var main: Control = editor.get_node("Panel/Margin/HBox/MainPanel/Margin")
 	main.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	editor.get_node("Panel/Margin/HBox/ColumnSeparator").hide()

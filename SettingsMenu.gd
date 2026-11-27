@@ -50,9 +50,13 @@ func _ready() -> void:
 	Locale.language_changed.connect(_apply_texts)
 	AppPreferences.changed.connect(func(key):
 		if key == "title_card_ids": _refresh_title_cards_button()
-		if key in ["text_size","high_contrast"]:
-			UITheme.theme_tree(_settings_panel)
-			UITheme.apply_title(title_label,28))
+		if key in ["text_size","high_contrast","appearance"]:
+			UITheme.theme_tree(self)
+		var control := _preference_controls.get(key) as Control
+		if control is Range:
+			control.set_value_no_signal(float(AppPreferences.get_value(key)))
+		elif key == "appearance" and control is OptionButton:
+			control.select(int(AppPreferences.get_value(key))))
 	get_viewport().size_changed.connect(_apply_responsive_layout)
 
 
@@ -87,10 +91,13 @@ func _apply_texts() -> void:
 	if _support_button != null: _support_button.text = Locale.t("support.title")
 	_refresh_title_cards_button()
 	for key in _preference_labels: _preference_labels[key].text = Locale.t("preferences."+key)
-	for key in ["quality","fps","text_size","window_mode"]:
+	for key in ["appearance","quality","fps","text_size","window_mode"]:
 		if not _preference_controls.has(key): continue
 		var option: OptionButton = _preference_controls[key]
-		if key == "window_mode":
+		if key == "appearance":
+			option.set_item_text(0, Locale.t("preferences.appearance_dark"))
+			option.set_item_text(1, Locale.t("preferences.appearance_light"))
+		elif key == "window_mode":
 			for i in range(3): option.set_item_text(i,Locale.t("settings.mode_"+["fullscreen","windowed","borderless"][i]))
 		elif key in ["quality","text_size"]:
 			for i in range(3): option.set_item_text(i,Locale.t("preferences."+(["low","medium","high"][i] if key == "quality" else ["normal","large","largest"][i])))
@@ -134,11 +141,16 @@ func _apply_theme() -> void:
 	settings_surface.add_child(category_layout)
 	var category_header := MarginContainer.new()
 	category_header.add_theme_constant_override("margin_left", 16)
+	category_header.add_theme_constant_override("margin_right", 16)
 	category_header.add_theme_constant_override("margin_top", 8)
 	category_layout.add_child(category_header)
+	var category_title := VBoxContainer.new()
+	category_title.add_theme_constant_override("separation", 8)
+	category_header.add_child(category_title)
 	_category_heading = Label.new()
 	UITheme.apply_title(_category_heading, 20)
-	category_header.add_child(_category_heading)
+	category_title.add_child(_category_heading)
+	category_title.add_child(UITheme.separator())
 	_settings_scroll = ScrollContainer.new()
 	_settings_scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_settings_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -263,7 +275,7 @@ func _build_preferences() -> void:
 	UITheme.apply_button(_title_cards_button,"secondary")
 	_title_cards_button.pressed.connect(_choose_title_cards)
 	_setting_row("gameplay",title_cards_label,_title_cards_button)
-	for key in ["window_mode","high_contrast","vsync","fps","quality","master","bgm","sfx","mute","reduced_motion","camera_shake","text_size"]:
+	for key in ["appearance","window_mode","high_contrast","vsync","fps","quality","master","bgm","sfx","mute","reduced_motion","camera_shake","text_size"]:
 		if key == "window_mode" and OS.has_feature("android"): continue
 		var label := Label.new()
 		_preference_labels[key] = label
@@ -275,13 +287,14 @@ func _build_preferences() -> void:
 			slider.value = float(AppPreferences.get_value(key))
 			slider.value_changed.connect(func(value): AppPreferences.set_value(key,value))
 			control = slider
-		elif key in ["fps","quality","text_size","window_mode"]:
+		elif key in ["appearance","fps","quality","text_size","window_mode"]:
 			var option := OptionButton.new()
-			var options: Array = [0,30,60,120,144] if key == "fps" else [0,1,2]
+			var options: Array = [0,30,60,120,144] if key == "fps" else ([0,1] if key == "appearance" else [0,1,2])
 			for value in options: option.add_item(str(value))
 			option.selected = options.find(int(AppPreferences.get_value(key)))
 			option.item_selected.connect(func(index): AppPreferences.set_value(key,options[index]))
 			UITheme.apply_button(option,"secondary")
+			UITheme.apply_popup_menu(option.get_popup())
 			control = option
 		else:
 			var check := CheckButton.new()
@@ -337,8 +350,7 @@ func _build_preferences() -> void:
 		_apply_texts()
 		for key in _preference_controls:
 			var control: Control = _preference_controls[key]
-			if control is Range: control.set_value_no_signal(AppPreferences.get_value(key))
-			elif control is OptionButton: control.selected = [0,30,60,120,144].find(AppPreferences.get_value(key)) if key == "fps" else int(AppPreferences.get_value(key))
+			if control is OptionButton: control.selected = [0,30,60,120,144].find(AppPreferences.get_value(key)) if key == "fps" else int(AppPreferences.get_value(key))
 			elif control is BaseButton: control.set_pressed_no_signal(AppPreferences.get_value(key)))
 	$CenterContainer/VBoxContainer.queue_free()
 	_show_category(_active_category)
@@ -364,14 +376,11 @@ func _confirm_quit() -> void:
 		_quit_dialog.min_size.x = 360
 		add_child(_quit_dialog)
 		UITheme.apply_dialog(_quit_dialog,true)
-		UITheme.apply_button(_quit_dialog.get_ok_button(), "danger")
 		_quit_dialog.confirmed.connect(AppAudio.quit_to_desktop)
 	_quit_dialog.title = _quit_button.text
 	_quit_dialog.dialog_text = "确定退出游戏？" if Locale.language == "zh" else "Quit the game?"
-	_quit_dialog.get_ok_button().text = "退出" if Locale.language == "zh" else "Quit"
-	_quit_dialog.get_cancel_button().text = Locale.t("common.cancel")
+	UITheme.apply_destructive_confirmation(_quit_dialog, "退出" if Locale.language == "zh" else "Quit")
 	_quit_dialog.popup_centered()
-	_quit_dialog.get_cancel_button().grab_focus()
 
 func _refresh_title_cards_button() -> void:
 	if _title_cards_button == null: return

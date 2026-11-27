@@ -2,6 +2,11 @@ class_name MatchHistoryRepository
 extends RefCounted
 
 
+static func card_face(card: CardData) -> Dictionary:
+	return {"name": card.card_name, "cost": card.cost, "max_hp": card.max_hp,
+		"atk": card.atk, "card_type": card.card_type, "art_path": card.art_path}
+
+
 static func from_payload(payload: Dictionary, maximum: int) -> Array:
 	var entries = payload.get("matches", [])
 	if not (entries is Array):

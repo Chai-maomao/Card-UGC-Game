@@ -36,7 +36,6 @@ var _condition_value_spin: SpinBox
 var _condition_buff_sel: OptionButton
 var _buff_sel: OptionButton
 var _dur_spin: SpinBox
-var _dur_label: Label
 var _cost_mode_sel: OptionButton
 
 # Labels / rows
@@ -175,7 +174,7 @@ func _build_ui(existing: Dictionary) -> void:
 	# Effect probability row
 	var prob_row := _make_row(s)
 	prob_row.add_child(_make_label(Locale.t("skill_editor.effect_prob"), s))
-	_eff_prob_spin = _make_spin(1.0, 100.0, 100.0, s, 55.0)
+	_eff_prob_spin = _make_spin(0.0, 100.0, 100.0, s, 55.0)
 	prob_row.add_child(_eff_prob_spin)
 	prob_row.add_child(_make_label("%", s))
 	vb.add_child(prob_row)
@@ -234,8 +233,7 @@ func _build_ui(existing: Dictionary) -> void:
 	_buff_sel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_buff_sel.custom_minimum_size = Vector2(120 * s, 0)
 	_buff_row.add_child(_buff_sel)
-	_dur_label = _make_label(Locale.t("skill_editor.duration"), s)
-	_buff_row.add_child(_dur_label)
+	_buff_row.add_child(_make_label(Locale.t("skill_editor.duration"), s))
 	_dur_spin = _make_spin(1.0, 20.0, 2.0, s)
 	_buff_row.add_child(_dur_spin)
 	_buff_row.visible = false
@@ -440,18 +438,17 @@ func _on_buff_changed(_i: int) -> void:
 func _update_target_side() -> void:
 	var target_key: String = SkillRegistry.TARGET_IDS[_target_sel.selected]
 	var effect_key: String = SkillRegistry.EFFECT_IDS[_effect_sel.selected]
-	var forced_side := SkillRegistry.forced_target_side(effect_key)
+	var chooses_unit := SkillTargetResolver.uses_selected_unit(target_key)
+	var forced_side := "" if chooses_unit else SkillRegistry.forced_target_side(effect_key)
+	var is_hand_effect := effect_key == SkillEngine.EFFECT_ZERO_COST
+	_side_sel.get_parent().visible = not chooses_unit
+	_side_sel.disabled = (_target_sel.disabled or target_key in [SkillEngine.TARGET_SELF, SkillEngine.TARGET_SELF_SIDES]
+		or is_hand_effect or chooses_unit or forced_side != "")
 	if forced_side != "":
 		_side_sel.selected = _idx_of(forced_side, SkillRegistry.TARGET_SIDE_IDS)
-	# Zero-cost effect always targets own hand — target_side is irrelevant.
-	var is_hand_effect_ui: bool = effect_key == SkillEngine.EFFECT_ZERO_COST
-	var disabled: bool = _target_sel.disabled or target_key in [SkillEngine.TARGET_SELF, SkillEngine.TARGET_SELF_SIDES] or is_hand_effect_ui or forced_side != ""
-	_side_sel.disabled = disabled
-	if forced_side != "":
-		_side_sel.selected = _idx_of(forced_side, SkillRegistry.TARGET_SIDE_IDS)
-	elif disabled:
+	elif _side_sel.disabled:
 		_side_sel.selected = _idx_of(SkillEngine.TARGET_SIDE_ALL, SkillRegistry.TARGET_SIDE_IDS)
-	elif target_key in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES, SkillEngine.TARGET_PLAYER] and SkillRegistry.TARGET_SIDE_IDS[_side_sel.selected] == SkillEngine.TARGET_SIDE_ALL:
+	elif target_key == SkillEngine.TARGET_PLAYER and SkillRegistry.TARGET_SIDE_IDS[_side_sel.selected] == SkillEngine.TARGET_SIDE_ALL:
 		_side_sel.selected = _idx_of(SkillEngine.TARGET_SIDE_ENEMY, SkillRegistry.TARGET_SIDE_IDS)
 	_update_target_warning()
 
@@ -490,7 +487,7 @@ func _target_warning_for(trigger_key: String, target_key: String, target_disable
 func _update_pct() -> void:
 	var effect_key: String = SkillRegistry.EFFECT_IDS[_effect_sel.selected]
 	var buff_key: String = preload("res://SkillStatusPicker.gd").value(_buff_sel)
-	_pct_label.visible = (effect_key == SkillEngine.EFFECT_ADD_BUFF and buff_key in [SkillEngine.BUFF_DAMAGE_REDUCTION, SkillEngine.BUFF_MISFORTUNE])
+	_pct_label.visible = SkillRegistry.percentage_value({"effect": effect_key, "buff_id": buff_key})
 
 
 func _update_effect_labels() -> void:
@@ -508,11 +505,12 @@ func _update_effect_labels() -> void:
 		_rcount_spin.max_value = 15.0
 	_rcount_row.visible = SkillRegistry.supports_random_count(effect_key)
 	_val_spin.min_value = -500.0 if allows_negative else 0.0
-	var percentage: bool = effect_key == SkillEngine.EFFECT_ADD_BUFF and preload("res://SkillStatusPicker.gd").value(_buff_sel) in [SkillEngine.BUFF_DAMAGE_REDUCTION, SkillEngine.BUFF_MISFORTUNE]
+	var buff_key: String = preload("res://SkillStatusPicker.gd").value(_buff_sel)
+	var percentage := SkillRegistry.percentage_value({"effect": effect_key, "buff_id": buff_key})
 	for spin in [_val_spin, _min_spin, _max_spin]:
 		spin.max_value = 100.0 if percentage else 500.0
 		spin.allow_greater = not percentage
-	_val_spin.suffix = "%" if (effect_key == SkillEngine.EFFECT_ADD_BUFF and preload("res://SkillStatusPicker.gd").value(_buff_sel) in [SkillEngine.BUFF_DAMAGE_REDUCTION, SkillEngine.BUFF_MISFORTUNE]) else ""
+	_val_spin.suffix = "%" if percentage else ""
 	_min_spin.min_value = -500.0 if allows_negative else 0.0
 	if _val_spin.value < _val_spin.min_value:
 		_val_spin.value = _val_spin.min_value
@@ -529,9 +527,6 @@ func _update_value_mode(m: int) -> void:
 	_rand_row.visible = uses_value and (m == 1)
 	_var_row.visible = uses_value and (m == 2)
 	_mode_row.visible = uses_value
-	var uses_duration: bool = SkillRegistry.buff_uses_duration(preload("res://SkillStatusPicker.gd").value(_buff_sel))
-	_dur_spin.visible = uses_duration
-	_dur_label.visible = uses_duration
 
 
 func _update_condition_mode() -> void:
@@ -602,7 +597,7 @@ func _backfill(existing: Dictionary) -> void:
 	_val_spin.editable = SkillRegistry.buff_uses_value(preload("res://SkillStatusPicker.gd").value(_buff_sel))
 	_target_sel.disabled = SkillRegistry.force_self(SkillRegistry.EFFECT_IDS[_effect_sel.selected])
 	_update_target_side()
-	_dur_spin.value = int(eff.get("duration", 2))
+	_dur_spin.value = int(eff.get("duration", 1))
 	_rcount_spin.value = float(eff.get("random_count", 0))
 	_eff_prob_spin.value = float(eff.get("probability", 100))
 	_buff_row.visible = (SkillRegistry.EFFECT_IDS[_effect_sel.selected] == SkillEngine.EFFECT_ADD_BUFF)
@@ -640,8 +635,6 @@ func _backfill(existing: Dictionary) -> void:
 func _on_ok() -> void:
 	var selected_target: String = SkillRegistry.TARGET_IDS[_target_sel.selected]
 	var selected_side: String = SkillRegistry.TARGET_SIDE_IDS[_side_sel.selected]
-	if selected_target in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES] and selected_side == SkillEngine.TARGET_SIDE_ALL:
-		selected_side = SkillEngine.TARGET_SIDE_ENEMY
 	var effect_id: String = str(SkillRegistry.EFFECT_IDS[_effect_sel.selected])
 	var eff := {
 		"target": selected_target,

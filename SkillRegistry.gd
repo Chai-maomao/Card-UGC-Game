@@ -61,6 +61,7 @@ const EFFECT_VIEW_DECK          := "view_deck_select"
 const EFFECT_ZERO_COST          := "make_zero_cost"
 const EFFECT_MANA_DRAIN         := "mana_drain"
 const EFFECT_SWAP_ATTACK        := "swap_attack"
+const EFFECT_SWAP_ENEMY_SLOTS   := "swap_enemy_slots"
 const EFFECT_DISCARD_HAND       := "discard_hand"
 const EFFECT_COPY_HAND          := "copy_hand"
 const EFFECT_CLONE_ENEMY        := "clone_enemy"
@@ -79,11 +80,14 @@ const COST_REDUCTION_MODES := [COST_REDUCTION_TURN, COST_REDUCTION_PERMANENT]
 # --- Buffs -----------------------------------------------------------------
 const BUFF_SILENCE          := "silence"
 const BUFF_MISFORTUNE       := "misfortune"
+const BUFF_LUCK            := "luck"
 const BUFF_ATK_BOOST        := "atk_boost"
 const BUFF_REGEN            := "regen"
 const BUFF_MANA_REFUND      := "mana_refund"
 const BUFF_THORNS           := "thorns"
 const BUFF_DAMAGE_REDUCTION := "damage_reduction"
+const BUFF_DODGE           := "dodge"
+const BUFF_UNTARGETABLE    := "untargetable"
 const BUFF_TAUNT            := "taunt"
 const BUFF_IMMUNE_LETHAL    := "immune_lethal"
 const BUFF_POISON           := "poison"
@@ -179,6 +183,8 @@ const EFFECT_META := {
 		"handler": "_apply_mana_drain", "template": "mana_drain", "polarity": "harmful", "score_kind": "value_linear", "score_weight": 1.2, "category": "attack"},
 	EFFECT_SWAP_ATTACK:       {"requires_live_target": true,  "allows_negative": false, "force_self": false, "uses_value": false,
 		"handler": "_apply_swap_attack", "template": "swap_attack", "polarity": "harmful", "score_kind": "fixed", "score_weight": 2.0, "category": "attack"},
+	EFFECT_SWAP_ENEMY_SLOTS:  {"requires_live_target": false, "allows_negative": false, "force_self": true, "uses_value": false,
+		"handler": "_apply_swap_enemy_slots", "template": "swap_enemy_slots", "polarity": "harmful", "score_kind": "none", "score_weight": 0.0, "category": "utility"},
 	EFFECT_DISCARD_HAND:      {"requires_live_target": false, "allows_negative": false, "force_self": true,  "uses_value": true,
 		"handler": "_apply_discard_hand", "template": "discard_hand", "polarity": "harmful", "score_kind": "value_linear", "score_weight": 1.5, "category": "attack"},
 	EFFECT_COPY_HAND:         {"requires_live_target": false, "allows_negative": false, "force_self": true,  "uses_value": true,
@@ -208,7 +214,7 @@ const EFFECT_IDS := [
 	EFFECT_CLEANSE, EFFECT_DISPEL, EFFECT_GAIN_MANA, EFFECT_GAIN_ATTACK,
 	EFFECT_GAIN_MAX_HP, EFFECT_VIEW_DISCARD, EFFECT_VIEW_DECK, EFFECT_ZERO_COST,
 	EFFECT_MANA_DRAIN, EFFECT_SWAP_ATTACK, EFFECT_DISCARD_HAND, EFFECT_COPY_HAND,
-	EFFECT_CLONE_ENEMY, EFFECT_CHANGE_COST,
+	EFFECT_CLONE_ENEMY, EFFECT_CHANGE_COST, EFFECT_SWAP_ENEMY_SLOTS,
 	EFFECT_MATCH_MAX_HP, EFFECT_DAMAGE_CAP,
 ]
 
@@ -224,9 +230,12 @@ const BUFF_META := {
 	BUFF_MANA_REFUND:      {"polarity": "positive", "value_meaningful": true},
 	BUFF_THORNS:           {"polarity": "positive", "value_meaningful": true},
 	BUFF_DAMAGE_REDUCTION: {"polarity": "positive", "value_meaningful": true},
+	BUFF_DODGE:           {"polarity": "positive", "value_meaningful": true},
+	BUFF_UNTARGETABLE:    {"polarity": "positive", "value_meaningful": false},
 	BUFF_TAUNT:            {"polarity": "positive", "value_meaningful": false},
 	BUFF_SILENCE:          {"polarity": "negative", "value_meaningful": false},
 	BUFF_MISFORTUNE:       {"polarity": "negative", "value_meaningful": true},
+	BUFF_LUCK:             {"polarity": "positive", "value_meaningful": true},
 	BUFF_IMMUNE_LETHAL:    {"polarity": "positive", "value_meaningful": false},
 	BUFF_POISON:           {"polarity": "negative", "value_meaningful": true},
 	BUFF_STUN:             {"polarity": "negative", "value_meaningful": false},
@@ -235,8 +244,9 @@ const BUFF_META := {
 # Editor dropdown order for buffs.
 const BUFF_IDS := [
 	BUFF_ATK_BOOST, BUFF_REGEN, BUFF_MANA_REFUND, BUFF_THORNS,
-	BUFF_DAMAGE_REDUCTION, BUFF_TAUNT, BUFF_SILENCE, BUFF_MISFORTUNE,
+	BUFF_DAMAGE_REDUCTION, BUFF_DODGE, BUFF_UNTARGETABLE, BUFF_TAUNT, BUFF_SILENCE, BUFF_MISFORTUNE,
 	BUFF_IMMUNE_LETHAL, BUFF_POISON, BUFF_STUN,
+	BUFF_LUCK,
 ]
 
 
@@ -382,14 +392,14 @@ static func changes_enemy_hp_or_presence(effect_id: String, effect: Dictionary =
 	return false
 
 
-static func skill_changes_enemy_hp_or_presence(skill: Dictionary) -> bool:
+static func skill_changes_enemy_hp_or_presence(skill: Dictionary, selected_enemy: bool = false) -> bool:
 	var effects = skill.get("effects", [])
 	if not effects is Array or effects.is_empty() and skill.has("effect"):
 		effects = [skill]
-	return _effect_tree_changes_enemy(effects)
+	return _effect_tree_changes_enemy(effects, selected_enemy)
 
 
-static func _effect_tree_changes_enemy(effects: Array) -> bool:
+static func _effect_tree_changes_enemy(effects: Array, selected_enemy: bool) -> bool:
 	for value in effects:
 		if not value is Dictionary:
 			continue
@@ -397,12 +407,15 @@ static func _effect_tree_changes_enemy(effects: Array) -> bool:
 		var effect_id := str(effect.get("effect", ""))
 		if changes_enemy_hp_or_presence(effect_id, effect):
 			var target := str(effect.get("target", ""))
-			var side := str(effect.get("target_side", TARGET_SIDE_ALL))
-			if target == "all_enemies" or (target not in [TARGET_SELF, TARGET_SELF_SIDES, "all_allies"] and side != TARGET_SIDE_ALLY):
+			var can_hit_enemy := selected_enemy
+			if not SkillTargetResolver.uses_selected_unit(target):
+				var side := str(effect.get("target_side", TARGET_SIDE_ALL))
+				can_hit_enemy = target == "all_enemies" or (target not in [TARGET_SELF, TARGET_SELF_SIDES, "all_allies"] and side != TARGET_SIDE_ALLY)
+			if can_hit_enemy:
 				return true
 		for branch in ["then_effects", "else_effects"]:
 			var nested = effect.get(branch, [])
-			if nested is Array and _effect_tree_changes_enemy(nested):
+			if nested is Array and _effect_tree_changes_enemy(nested, selected_enemy):
 				return true
 	return false
 
@@ -434,15 +447,11 @@ static func effect_uses_value(effect: Dictionary) -> bool:
 	var id := str(effect.get("effect", ""))
 	return uses_value(id) and (id != EFFECT_ADD_BUFF or buff_uses_value(str(effect.get("buff_id", ""))))
 
-static func buff_uses_duration(buff_id: String) -> bool:
-	return buff_id != BUFF_STUN
-
 static func percentage_value(effect: Dictionary) -> bool:
-	return effect.get("effect") == EFFECT_ADD_BUFF and effect.get("buff_id") in [BUFF_DAMAGE_REDUCTION, BUFF_MISFORTUNE]
+	return effect.get("effect") == EFFECT_ADD_BUFF and effect.get("buff_id") in [BUFF_DAMAGE_REDUCTION, BUFF_MISFORTUNE, BUFF_DODGE, BUFF_LUCK]
 
 static func normalize_editor_value(effect: Dictionary) -> void:
 	if is_control_effect(str(effect.get("effect", ""))): return
-	if effect.get("effect") == EFFECT_ADD_BUFF and not buff_uses_duration(str(effect.get("buff_id", ""))): effect["duration"] = 1
 	if not effect_uses_value(effect):
 		effect.erase("value")
 		for key in ["value_var", "value_expr", "value_offset", "value_min", "value_max"]: effect.erase(key)

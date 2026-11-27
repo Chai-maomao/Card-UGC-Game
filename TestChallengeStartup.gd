@@ -39,6 +39,8 @@ func _ready() -> void:
 			controller._show()
 			_check(controller.popup_layer.find_child("NextChallengeButton", true, false) != null, "completed challenge needs a next button")
 			_check(controller.popup_layer.find_child("ChallengePickerButton", true, false) != null, "completed challenge needs a picker button")
+		if id in ["action_finish", "parasite"] and controller != null:
+			await _check_one_turn_limit(battle, controller, id == "parasite")
 		if index == 0:
 			# Reproduce a queued scene exit after the next selection is already set.
 			PlayerData.practice_challenge_id = PracticeChallenges.IDS[index + 1]
@@ -111,6 +113,36 @@ func _tree_contains_window(root: Node) -> bool:
 		if _tree_contains_window(child):
 			return true
 	return false
+
+
+func _check_one_turn_limit(battle: Node, controller: ChallengeController, by_timeout: bool) -> void:
+	battle.game.battle_config["action_time_enabled"] = true
+	battle.game.battle_config["first_action_time_seconds"] = 1
+	if by_timeout:
+		await get_tree().create_timer(1.2).timeout
+		_check(battle.game.current_player == 1 and battle.game.is_player_turn and not controller.finished,
+			"reading the challenge objective must not consume the attempt")
+	controller.popup_layer.find_child("ChallengeCloseButton", true, false).pressed.emit()
+	await get_tree().process_frame
+	if not by_timeout:
+		battle.end_turn_button.pressed.emit()
+	var deadline := Time.get_ticks_msec() + 5000
+	while not controller.finished and Time.get_ticks_msec() < deadline:
+		await get_tree().process_frame
+	_check(controller.finished and PracticeChallenges.failed(battle.game, controller.challenge_id),
+		"an unsuccessful manual end or timeout must show challenge failure")
+	_check(battle.game.current_player == 1 and battle.game.turn_number == 2,
+		"settling a challenge must not begin a normal hotseat turn")
+	if is_instance_valid(controller.popup_layer):
+		controller.popup_layer.find_child("ChallengeCloseButton", true, false).pressed.emit()
+	await get_tree().process_frame
+	_check(not battle.is_my_turn() and battle.end_turn_button.disabled and not battle._action_timer.visible,
+		"closing the result must not restore actions or the countdown")
+	controller._reset()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	_check(not controller.finished and battle.game.current_player == 1 and battle.game.is_player_turn,
+		"retry must restore the original challenge turn")
 
 
 func _check(ok: bool, message: String) -> void:

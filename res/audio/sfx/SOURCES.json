@@ -120,6 +120,13 @@
     "gain_db": -7.11
   },
   {
+    "path": "res/audio/sfx/cardex-hover.mp3",
+    "sha256": "f22b2cfd4e2a7253a784c18af0c74a839cef7d05edcafb429bc84bc33bc97dca",
+    "source_name": "cardex-hover.mp3",
+    "source_sha256": "f22b2cfd4e2a7253a784c18af0c74a839cef7d05edcafb429bc84bc33bc97dca",
+    "provenance": "user-provided button and card hover sound, supplied 2026-11-22; original MP3 bytes preserved"
+  },
+  {
     "path": "res/audio/sfx/mouse_over_object.wav",
     "sha256": "e7f6a30ad06d7b9600f78d9c6dafa166307e1e5ce4aff5c4abbccc511d2aac0a",
     "source_name": "cardex-mouse_over_object.mp3",

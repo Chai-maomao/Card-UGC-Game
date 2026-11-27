@@ -7,6 +7,19 @@ class NavigationRunner extends Node:
 
 	func run() -> void:
 		UIMotion.clear_history()
+		var args := OS.get_cmdline_user_args()
+		var test_deck_edit := args.has("--deck-edit-only")
+		if test_deck_edit or args.has("--deck-create-only"):
+			if test_deck_edit:
+				await _check_deck_edit_after_save()
+			else:
+				await _check_deck_create_menu()
+			for failure in failures:
+				push_error(failure)
+			if failures.is_empty():
+				print("TEST_DECK_EDIT_AFTER_SAVE_OK" if test_deck_edit else "TEST_DECK_CREATE_MENU_OK")
+			get_tree().quit(0 if failures.is_empty() else 1)
+			return
 		UIMotion.replace_scene("res://MainMenu.tscn", true)
 		await get_tree().scene_changed
 		await _settle()
@@ -40,16 +53,23 @@ class NavigationRunner extends Node:
 			var mode_back := _find_button(mode_layer, Locale.t("common.back"))
 			_assert(mode_back != null, "local-mode popup must provide Back")
 			if mode_back:
+				_assert(mode_layer.title_entry == local_button, "third-level menu must animate from the local battle entry")
+				if not AppPreferences.get_value("reduced_motion") and mode_layer._heading_tween.is_running():
+					await mode_layer._heading_tween.finished
 				_assert(not local_button.is_visible_in_tree()
 					and mode_layer.heading_label.global_position.y < title_position.y
 					and mode_layer.entries.global_position.distance_to(title_position) < 1.5,
 					"local mode must place its heading above the anchored options")
+				await _check_practice_submenu_motion(menu, mode_layer)
 				var escape := InputEventKey.new()
 				escape.keycode = KEY_ESCAPE
 				escape.pressed = true
 				get_viewport().push_input(escape, true)
 				escape.pressed = false
 				get_viewport().push_input(escape, true)
+				if not AppPreferences.get_value("reduced_motion"):
+					_assert(UIMotion.top_popup() == mode_layer, "third-level menu must hold input during the return")
+					await mode_layer._heading_tween.finished
 				await _settle()
 				_assert(is_instance_valid(menu.battle_hub_layer), "Back from local mode must reveal battle hub")
 				_assert(local_button.is_visible_in_tree() and local_button.has_focus(), "Escape must restore the exact parent choice")
@@ -67,7 +87,7 @@ class NavigationRunner extends Node:
 			await _check_focus_reentry(modal_back, server_button)
 			var lan_button := _find_button(online_layer, Locale.t("mp.direct"))
 			_assert(lan_button != null, "online popup must expose LAN play")
-			if lan_button: lan_button.pressed.emit()
+			await _select_match_mode(menu, "mp.direct", "mp.classic")
 			await get_tree().scene_changed
 			await _settle()
 			var lobby = get_tree().current_scene
@@ -79,7 +99,7 @@ class NavigationRunner extends Node:
 			menu = get_tree().current_scene
 			_assert(menu.scene_file_path == "res://MainMenu.tscn", "Back from LAN must return to title scene")
 			_assert(is_instance_valid(menu.battle_hub_layer) and menu.get_node_or_null("OnlineModePopup") != null, "Back from LAN must restore the online popup above the battle hub")
-			_find_button(menu.get_node("OnlineModePopup"), Locale.t("mp.direct")).pressed.emit()
+			await _select_match_mode(menu, "mp.direct", "mp.classic")
 			await get_tree().scene_changed
 			await _settle()
 			lobby = get_tree().current_scene
@@ -93,6 +113,25 @@ class NavigationRunner extends Node:
 			await get_tree().scene_changed
 			await _settle()
 			menu = get_tree().current_scene
+			for method in ["mp.direct", "mp.dedicated"]:
+				await _select_match_mode(menu, method, "team.title")
+				await get_tree().scene_changed
+				await _settle()
+				var party := get_tree().current_scene
+				_assert(party.scene_file_path == "res://TeamLobby.tscn", "Party Battle must open the multiplayer room form")
+				_assert(NetworkManager.team_room.use_dedicated_lobby == (method == "mp.dedicated"), "Party must use the selected transport")
+				if party.scene_file_path == "res://TeamLobby.tscn":
+					_find_button(party, Locale.t("common.back")).pressed.emit()
+					await get_tree().scene_changed
+					await _settle()
+					menu = get_tree().current_scene
+					var modes := menu.get_node_or_null("OnlineMatchModePopup")
+					_assert(modes != null and not NetworkManager.team_room.is_open(),
+						"leaving Party Battle restores its connection choices without keeping a room open")
+					_find_button(modes, Locale.t("common.back")).pressed.emit()
+					if is_instance_valid(modes._heading_tween) and modes._heading_tween.is_running():
+						await modes._heading_tween.finished
+					await _settle()
 			var online_back := _find_button(menu.get_node("OnlineModePopup"),Locale.t("common.back"))
 			online_back.pressed.emit()
 			await _settle()
@@ -135,7 +174,7 @@ class NavigationRunner extends Node:
 		var menu = get_tree().current_scene
 		menu._on_online_pressed()
 		await _settle()
-		_find_button(menu.get_node("OnlineModePopup"), Locale.t("mp.dedicated")).pressed.emit()
+		await _select_match_mode(menu, "mp.dedicated", "mp.classic")
 		await get_tree().scene_changed
 		await _settle()
 		var lobby = get_tree().current_scene
@@ -146,7 +185,7 @@ class NavigationRunner extends Node:
 		await get_tree().scene_changed
 		await _settle()
 		menu = get_tree().current_scene
-		_find_button(menu.get_node("OnlineModePopup"), Locale.t("mp.dedicated")).pressed.emit()
+		await _select_match_mode(menu, "mp.dedicated", "mp.classic")
 		await get_tree().scene_changed
 		await _settle()
 		lobby = get_tree().current_scene
@@ -200,7 +239,7 @@ class NavigationRunner extends Node:
 		main._show_battle_hub_popup()
 		main._on_online_pressed()
 		await _settle()
-		_find_button(main.get_node("OnlineModePopup"),Locale.t("mp.direct")).pressed.emit()
+		await _select_match_mode(main, "mp.direct", "mp.classic")
 		await get_tree().scene_changed
 		await _settle()
 		var lobby = get_tree().current_scene
@@ -298,6 +337,124 @@ class NavigationRunner extends Node:
 				await get_tree().scene_changed
 				await _settle()
 
+	func _check_deck_edit_after_save() -> void:
+		var first := PlayerData.prepare_deck_card(CardData.new("待保存的卡", 1, 4, 2))
+		var second := PlayerData.prepare_deck_card(CardData.new("另一卡组的卡", 3, 7, 5))
+		PlayerData.deck_library = [
+			{"id": "edit-first", "name": "卡组甲", "cards": [first]},
+			{"id": "edit-second", "name": "卡组乙", "cards": [second]},
+		]
+		PlayerData.rebuild_card_library_cache()
+		for hotseat in [false, true]:
+			PlayerData.return_to_deck_id = ""
+			UIMotion.replace_scene("res://MyCards.tscn", true)
+			await get_tree().scene_changed
+			var page = get_tree().current_scene
+			_find_button(page.card_grid.get_child(0), Locale.t("deck.open")).pressed.emit()
+			await get_tree().scene_changed
+			page = get_tree().current_scene
+			_find_button(page.card_grid, Locale.t("mycards.edit")).pressed.emit()
+			await get_tree().scene_changed
+			var editor = get_tree().current_scene
+			var saved_name := "热座测试后的卡" if hotseat else "直接返回的卡"
+			editor.name_input.text = saved_name
+			editor.save_button.pressed.emit()
+			var confirm := _find_button(UIMotion.top_popup(), Locale.t("editor.save_card"))
+			_assert(confirm != null, "editing the first card must open the save confirmation")
+			if confirm == null:
+				return
+			confirm.pressed.emit()
+			var saved := PlayerData.find_deck_card("edit-first", first.instance_id)
+			_assert(saved != null and saved.card_name == saved_name, "the first card must be saved")
+			await get_tree().create_timer(0.3).timeout
+			var choice := "editor.after_save_test" if hotseat else "editor.after_save_return"
+			var next := _find_button(UIMotion.top_popup(), Locale.t(choice))
+			_assert(next != null, "saving must offer the requested next action")
+			if next == null:
+				return
+			next.pressed.emit()
+			if hotseat:
+				await get_tree().scene_changed
+				var battle = get_tree().current_scene
+				await get_tree().create_timer(1.3).timeout
+				UIMotion._handle_back()
+				_find_button(UIMotion.top_popup(), Locale.t("preferences.leave")).pressed.emit()
+				await get_tree().create_timer(0.3).timeout
+				_find_button(battle, Locale.t("battle.abandon_confirm")).pressed.emit()
+			else:
+				await get_tree().create_timer(0.3).timeout
+				editor.back_button.pressed.emit()
+			await get_tree().scene_changed
+			page = get_tree().current_scene
+			_assert(page.selected_deck_id == "edit-first", "leaving the first card must return to its deck")
+			page._page_back.pressed.emit()
+			await get_tree().scene_changed
+			page = get_tree().current_scene
+			_find_button(page.card_grid.get_child(1), Locale.t("deck.open")).pressed.emit()
+			await get_tree().scene_changed
+			page = get_tree().current_scene
+			_find_button(page.card_grid, Locale.t("mycards.edit")).pressed.emit()
+			await get_tree().scene_changed
+			editor = get_tree().current_scene
+			_assert(editor.name_input.text == second.card_name and int(editor.cost_input.value) == second.cost
+				and int(editor.hp_input.value) == second.max_hp and int(editor.atk_input.value) == second.atk,
+				"second deck editor loaded %s instead of %s (hotseat: %s)" % [editor.name_input.text, second.card_name, hotseat])
+			editor._discard_card_and_leave()
+			await get_tree().scene_changed
+		await get_tree().create_timer(0.3).timeout
+
+
+	func _check_deck_create_menu() -> void:
+		var deck_id := PlayerData.current_deck_id
+		_assert(not PlayerData.get_cards_for_deck(deck_id).is_empty(), "deck picker fixture needs cards")
+		PlayerData.return_to_deck_id = deck_id
+		UIMotion.replace_scene("res://MyCards.tscn", true)
+		await get_tree().scene_changed
+		await get_tree().create_timer(0.55).timeout
+		var page = get_tree().current_scene
+		var create := _find_button(page.top_bar, Locale.t("mycards.create_new"))
+		_assert(create != null and not create is MenuButton, "new card must be a regular button")
+		if create == null:
+			return
+		create.pressed.emit()
+		await _settle()
+		var choices := UIMotion.top_popup()
+		var spell := _find_button(choices, Locale.t("editor.create_spell"))
+		_assert(page.card_grid.is_visible_in_tree() and spell != null
+			and _find_button(choices, Locale.t("editor.create_minion")) != null
+			and _find_button(choices, Locale.t("editor.create_parasite")) != null,
+			"all card types must open over the visible deck")
+		if spell == null:
+			return
+		if DisplayServer.get_name() != "headless":
+			await get_tree().create_timer(0.2).timeout
+			await RenderingServer.frame_post_draw
+			get_viewport().get_texture().get_image().save_png("res://artifacts/deck-create-card-menu.png")
+		UIMotion.close_top_popup()
+		await _settle()
+		_assert(UIMotion.top_popup() == null and create.has_focus(), "closing the picker must restore focus to New Card")
+		create.pressed.emit()
+		_find_button(UIMotion.top_popup(), Locale.t("editor.create_spell")).pressed.emit()
+		await get_tree().scene_changed
+		await _settle()
+		var editor = get_tree().current_scene
+		_assert(PlayerData.card_draft.card_type == "spell", "the spell choice must open a spell draft")
+		_assert(PlayerData.return_to_deck_id == deck_id, "the draft must preserve its destination deck")
+		editor.template_button.show_popup()
+		await get_tree().create_timer(0.25).timeout
+		_assert(editor.template_button.get_popup().visible and editor.name_input.is_visible_in_tree(),
+			"card templates must open in place over the editor")
+		if DisplayServer.get_name() != "headless":
+			await RenderingServer.frame_post_draw
+			get_viewport().get_texture().get_image().save_png("res://artifacts/card-template-menu.png")
+		editor.template_button.get_popup().hide()
+		editor.back_button.pressed.emit()
+		await get_tree().scene_changed
+		await _settle()
+		page = get_tree().current_scene
+		_assert(page.selected_deck_id == deck_id and page.card_grid.is_visible_in_tree(),
+			"returning must restore the original deck instead of opening a blank page")
+
 	func _check_lan_room_selection(lobby: Control) -> void:
 		NetworkManager.stop_lan_room_discovery()
 		var room_a := {"address": "192.0.2.1", "port": 32121, "name": "LAN A"}
@@ -380,6 +537,57 @@ class NavigationRunner extends Node:
 	func _settle() -> void:
 		await get_tree().process_frame
 		await get_tree().process_frame
+
+	func _select_match_mode(menu: Node, method: String, mode: String) -> void:
+		var page := menu.get_node_or_null("OnlineMatchModePopup")
+		if page == null:
+			_find_button(menu.get_node("OnlineModePopup"), Locale.t(method)).pressed.emit()
+			await _settle()
+			page = menu.get_node("OnlineMatchModePopup")
+		_assert(page.heading == Locale.t(method), "Mode choices must be scoped to the selected connection method")
+		_find_button(page, Locale.t(mode)).pressed.emit()
+
+	func _check_practice_submenu_motion(menu: Node, parent: CanvasLayer) -> void:
+		var practice := _find_button(parent, Locale.t("menu.practice"))
+		_assert(practice != null, "local battle must expose practice")
+		if practice == null:
+			return
+		practice.pressed.emit()
+		await _settle()
+		var difficulty := menu.get_node_or_null("PracticeDifficulty")
+		_assert(difficulty != null and difficulty.title_entry == practice, "difficulty must animate from the practice entry")
+		if difficulty == null:
+			return
+		if not AppPreferences.get_value("reduced_motion"):
+			var movement: Tween = difficulty._heading_tween
+			_assert(movement != null and movement.is_valid(), "difficulty must run a heading transition")
+			if movement != null and movement.is_running():
+				movement.pause()
+				var start: Vector2 = difficulty.heading_label.position
+				movement.custom_step(0.045)
+				_assert(difficulty.heading_label.position.y < start.y, "practice heading must move upward during entry")
+				if DisplayServer.get_name() != "headless":
+					await RenderingServer.frame_post_draw
+					get_viewport().get_texture().get_image().save_png("res://artifacts/practice-menu-heading-in.png")
+				movement.play()
+				await movement.finished
+		_assert(difficulty.heading_label.text == Locale.t("menu.practice_difficulty"), "difficulty must keep its own title")
+		var back := _find_button(difficulty, Locale.t("common.back"))
+		if back != null:
+			back.pressed.emit()
+			if not AppPreferences.get_value("reduced_motion"):
+				var movement: Tween = difficulty._heading_tween
+				movement.pause()
+				var start: Vector2 = difficulty.heading_label.position
+				movement.custom_step(0.065)
+				_assert(difficulty.heading_label.position.y > start.y, "difficulty heading must move back down toward practice")
+				if DisplayServer.get_name() != "headless":
+					await RenderingServer.frame_post_draw
+					get_viewport().get_texture().get_image().save_png("res://artifacts/practice-menu-heading-back.png")
+				movement.play()
+				await movement.finished
+			await _settle()
+			_assert(practice.is_visible_in_tree() and practice.has_focus(), "Back must restore focus to Practice")
 
 
 	func _check_focus_reentry(last: Button, first: Button) -> void:

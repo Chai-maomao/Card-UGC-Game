@@ -24,7 +24,7 @@ func _ready() -> void:
 	_test_second_player_enemy_spell_is_blocked_on_turn_one()
 	_test_ally_spell_is_allowed_on_turn_one()
 	_test_nested_enemy_spell_is_blocked_on_turn_one()
-	_test_drop_target_side_validation()
+	_test_enemy_heal_uses_the_selected_unit()
 	_test_drop_target_player_selects_exact_field()
 	if failures.is_empty():
 		print("TEST_SPELL_CAST_OK")
@@ -77,13 +77,20 @@ func _test_spell_card_type_flag() -> void:
 		_fail("spell card_type value is wrong")
 
 
-func _test_drop_target_side_validation() -> void:
-	var ally_skill := {"effects": [{"target": SkillEngine.TARGET_SINGLE, "target_side": SkillEngine.TARGET_SIDE_ALLY, "effect": SkillEngine.EFFECT_HEAL, "value": 1}]}
-	var enemy_skill := {"effects": [{"target": SkillEngine.TARGET_SINGLE, "target_side": SkillEngine.TARGET_SIDE_ENEMY, "effect": SkillEngine.EFFECT_DAMAGE, "value": 1}]}
-	if not SpellRules.target_player_matches_drop(ally_skill, 1, 1) or SpellRules.target_player_matches_drop(ally_skill, 1, 2):
-		_fail("ally spell drop validation accepted the wrong field")
-	if not SpellRules.target_player_matches_drop(enemy_skill, 1, 2) or SpellRules.target_player_matches_drop(enemy_skill, 1, 1):
-		_fail("enemy spell drop validation accepted the wrong field")
+func _test_enemy_heal_uses_the_selected_unit() -> void:
+	var game = _new_game()
+	var ally := _card("Same slot ally")
+	var enemy := _card("Wounded enemy")
+	ally.hp = 2
+	enemy.hp = 2
+	game.player_field.slots[0] = ally
+	game.player2_field.slots[0] = enemy
+	game.player_hand.append(_spell("Legacy ally heal", 0, [{
+		"target": SkillEngine.TARGET_SINGLE, "target_side": SkillEngine.TARGET_SIDE_ALLY,
+		"effect": SkillEngine.EFFECT_HEAL, "value": 2,
+	}]))
+	if not game.cast_spell(0, SpellRules.CAST_SKILL_INDEX, 0, 2) or enemy.hp != 4 or ally.hp != 2:
+		_fail("An existing single-target heal must follow the selected enemy unit")
 
 
 func _test_drop_target_player_selects_exact_field() -> void:
@@ -107,7 +114,8 @@ func _test_spell_cast_moves_to_discard() -> void:
 	])
 	game.player_hand.append(spell)
 	game.player_field.current_mana = 5
-	var ok := game.cast_spell(game.player_hand.find(spell), SpellRules.CAST_SKILL_INDEX, -1)
+	game.player2_field.slots[0] = _card("Fireball target")
+	var ok := game.cast_spell(game.player_hand.find(spell), SpellRules.CAST_SKILL_INDEX, 0)
 	if not ok:
 		_fail("cast_spell returned false for a valid spell")
 	if game.player_hand.has(spell):
@@ -314,8 +322,8 @@ func _test_ally_spell_is_allowed_on_turn_one() -> void:
 	game.player_field.slots[0] = ally
 	game.player_hand.append(spell)
 	game.player_field.current_mana = 5
-	if not game.cast_spell(0, SpellRules.CAST_SKILL_INDEX, 0):
-		_fail("ally-only spell should be allowed on turn one")
+	if not game.cast_spell(0, SpellRules.CAST_SKILL_INDEX, 0, 1) or ally.hp != 4:
+		_fail("A directed spell on a friendly unit should be allowed on turn one")
 
 
 func _test_nested_enemy_spell_is_blocked_on_turn_one() -> void:

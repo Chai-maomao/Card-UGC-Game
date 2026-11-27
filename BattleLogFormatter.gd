@@ -3,6 +3,8 @@ extends RefCounted
 
 
 static func format_event(event: Dictionary, view_player: int) -> String:
+	if event.has("dodged_card"):
+		return Locale.t("battle.log.action_dodged", [event.dodged_card])
 	var intro := _action_intro(event, view_player)
 	if intro.is_empty():
 		return ""
@@ -30,6 +32,8 @@ static func _action_intro(event: Dictionary, view_player: int) -> String:
 			return Locale.t("battle.log.action_cast", [_side(player, view_player), source])
 		"parasite":
 			return Locale.t("battle.log.action_parasite", [_side(player, view_player), source, target])
+		"enemy_swap":
+			return Locale.t("battle.log.action_swap_slots", event.get("slots", [0, 0]))
 	return ""
 
 

@@ -125,7 +125,7 @@ func _apply_style(bg: Color, radius: int = 6) -> void:
 
 func _make_block_style(bg: Color) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
-	style.bg_color = UITheme.COLOR_PANEL_SOFT.lerp(bg, 0.78)
+	style.bg_color = UITheme.BLOCK_FACE_BASE.lerp(bg, 0.78)
 	# Stacked blocks sit almost flush. An outward StyleBox shadow from the
 	# lower sibling is drawn over the block above it, producing a dark centre
 	# with an unnaturally bright rim. Keep script blocks shadow-free and use a
@@ -464,17 +464,15 @@ func _build_sentence_row(eff: Dictionary) -> HBoxContainer:
 				tgt_slot.setup(eff, "target")
 				tgt_slot.changed.connect(_on_param_changed)
 				row.add_child(tgt_slot)
-				# The side chip only appears for targets that actually split by
-				# faction (单体/目标+相邻/全部/性别); self / self+adjacent targets
-				# have no faction dimension, and an unset target shows just the
-				# empty target socket.
 				var _sync_side := func():
 					var tgt: String = str(eff.get("target", ""))
-					var needs_side: bool = tgt in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES,
-							SkillEngine.TARGET_ALL, SkillEngine.TARGET_PLAYER, SkillEngine.TARGET_MALE,
-							SkillEngine.TARGET_FEMALE, SkillEngine.TARGET_NONHUMAN]
+					var needs_side := tgt in [SkillEngine.TARGET_ALL, SkillEngine.TARGET_PLAYER,
+						SkillEngine.TARGET_MALE, SkillEngine.TARGET_FEMALE, SkillEngine.TARGET_NONHUMAN]
 					side_slot.visible = needs_side
-					if tgt in [SkillEngine.TARGET_SELF, SkillEngine.TARGET_SELF_SIDES] and eff.get("target_side") != SkillEngine.TARGET_SIDE_ALL:
+					if SkillTargetResolver.uses_selected_unit(tgt):
+						eff.erase("target_side")
+						side_slot._rebuild()
+					elif tgt in [SkillEngine.TARGET_SELF, SkillEngine.TARGET_SELF_SIDES] and eff.get("target_side") != SkillEngine.TARGET_SIDE_ALL:
 						eff["target_side"] = SkillEngine.TARGET_SIDE_ALL
 						side_slot._rebuild()
 				_sync_side.call()
@@ -597,7 +595,7 @@ func _make_number_spin(eff: Dictionary, kind: String) -> SpinBox:
 		"duration":
 			spin.min_value = 1.0
 			spin.max_value = 99.0
-			spin.value = float(int(eff.get("duration", 0)))
+			spin.value = float(int(eff.get("duration", 1)))
 		"repeat":
 			spin.min_value = 0.0
 			spin.max_value = 20.0
@@ -853,9 +851,8 @@ func _build_boolean_tree(cond: Dictionary, path: Array = []) -> Control:
 # remove the condition (drop on the palette) or move it to another socket.
 # The origin lets the editor put a displaced reporter back into this socket.
 func _attach_cond_drag(root: Control, cond: Dictionary, path: Array = []) -> void:
-	var payload := {"type": "boolean_block", "boolean": condition_at_path(cond, []).duplicate(true), "from_cond_slot": self, "from_condition_path": path.duplicate()}
 	if root is _CondReporter:
-		(root as _CondReporter).setup(self, cond, payload)
+		(root as _CondReporter).setup(self, cond, path)
 
 
 # Renders a boolean / legacy condition reporter inside the if gap.
@@ -1065,15 +1062,12 @@ func _get_drag_data(_at_position: Vector2):
 	if not draggable or is_hat or _effect.is_empty():
 		return null
 	_at_position = _workspace_pointer(_at_position, true)
-	var drag_control := Control.new()
-	drag_control.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var stack := VBoxContainer.new()
 	stack.name = "DraggedStack"
 	stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	stack.scale = get_parent().get_global_transform().get_scale()
 	stack.position = -_at_position * stack.scale
 	stack.add_theme_constant_override("separation",get_parent().get_theme_constant("separation"))
-	drag_control.add_child(stack)
 	var following := false
 	for sibling in get_parent().get_children():
 		if sibling == self: following = true
@@ -1082,7 +1076,7 @@ func _get_drag_data(_at_position: Vector2):
 		preview.custom_minimum_size = sibling.size
 		stack.add_child(preview)
 	stack.size = stack.get_combined_minimum_size()
-	set_drag_preview(drag_control)
+	preload("res://SkillDragPreview.gd").show(self, stack)
 	_set_press_shadow(false,true)
 	_dragging = true
 	if has_meta("skill_workspace"):

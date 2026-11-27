@@ -64,6 +64,8 @@ const HEARTBEAT_INTERVAL := 2.0  # seconds between heartbeat sends
 const HEARTBEAT_TIMEOUT := 7.0  # seconds without receiving heartbeat before declaring disconnect
 const LAN_GAME_PORT := 4568
 const LAN_DISCOVERY_PORT := 4569
+const PARTY_DISCOVERY_PORT := 4570
+const DEFAULT_LOBBY_ADDRESS := "103.236.54.24"
 const LAN_DISCOVERY_INTERVAL := 1.0
 const LAN_ROOM_TTL := 3.5
 const LAN_DISCOVERY_MAGIC := "CARD_UGC_LAN_V1"
@@ -184,12 +186,18 @@ var _last_disconnect_reason: String = ""
 var _lan_discovery_responder: PacketPeerUDP
 var _lan_discovery_scanner: PacketPeerUDP
 var _lan_discovery_next_query: float = 0.0
+var _lan_discovery_scan_port := LAN_DISCOVERY_PORT
+var _party_discovery_game_port := 0
 var _lan_discovered_rooms: Dictionary = {}
+var team_room: Node
 
 
 func _ready() -> void:
 	# A local card test may pause its scene while the room transport stays alive.
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	team_room = load("res://TeamRoom.gd").new()
+	team_room.name = "TeamRoom"
+	add_child(team_room)
 	_load_room_session()
 
 
@@ -771,7 +779,7 @@ func _create_lan_client(address: String, port: int) -> int:
 	return OK
 
 
-func start_lan_room_discovery() -> int:
+func start_lan_room_discovery(party: bool = false) -> int:
 	stop_lan_room_discovery()
 	_lan_discovery_scanner = PacketPeerUDP.new()
 	var err := _lan_discovery_scanner.bind(0, "*")
@@ -779,6 +787,7 @@ func start_lan_room_discovery() -> int:
 		_lan_discovery_scanner = null
 		return err
 	_lan_discovery_scanner.set_broadcast_enabled(true)
+	_lan_discovery_scan_port = PARTY_DISCOVERY_PORT if party else LAN_DISCOVERY_PORT
 	_lan_discovery_next_query = 0.0
 	_lan_discovered_rooms.clear()
 	lan_rooms_updated.emit([])
@@ -796,10 +805,11 @@ func refresh_lan_room_discovery() -> void:
 	_lan_discovery_next_query = 0.0
 
 
-func _start_lan_discovery_responder() -> void:
+func _start_lan_discovery_responder(party_game_port: int = 0) -> void:
 	_stop_lan_discovery_responder()
 	_lan_discovery_responder = PacketPeerUDP.new()
-	var err := _lan_discovery_responder.bind(LAN_DISCOVERY_PORT, "*")
+	_party_discovery_game_port = party_game_port
+	var err := _lan_discovery_responder.bind(PARTY_DISCOVERY_PORT if party_game_port > 0 else LAN_DISCOVERY_PORT, "*")
 	if err != OK:
 		_network_diag("lan_discovery_bind_failed", {"error": err})
 		_lan_discovery_responder = null
@@ -809,6 +819,7 @@ func _stop_lan_discovery_responder() -> void:
 	if _lan_discovery_responder:
 		_lan_discovery_responder.close()
 	_lan_discovery_responder = null
+	_party_discovery_game_port = 0
 
 
 func _process_lan_discovery() -> void:
@@ -817,8 +828,11 @@ func _process_lan_discovery() -> void:
 			var request := _decode_lan_discovery_packet(_lan_discovery_responder.get_packet())
 			var source_ip := _lan_discovery_responder.get_packet_ip()
 			var source_port := _lan_discovery_responder.get_packet_port()
-			if str(request.get("kind", "")) == "query" and int(request.get("protocol", -1)) == AppVersion.PROTOCOL_VERSION and not room_match_started and opponent_peer_id == 0:
-				var response := _encode_lan_discovery_packet({"kind": "room", "name": OS.get_environment("COMPUTERNAME"), "port": room_server_port, "protocol": AppVersion.PROTOCOL_VERSION})
+			var party := _party_discovery_game_port > 0
+			var available: bool = (team_room.is_host() and not team_room.started and team_room.occupied.size() < team_room.seat_count) if party else (not room_match_started and opponent_peer_id == 0)
+			if str(request.get("kind", "")) == "query" and int(request.get("protocol", -1)) == AppVersion.PROTOCOL_VERSION and available:
+				var port := _party_discovery_game_port if party else room_server_port
+				var response := _encode_lan_discovery_packet({"kind": "room", "name": OS.get_environment("COMPUTERNAME"), "port": port, "protocol": AppVersion.PROTOCOL_VERSION})
 				_lan_discovery_responder.set_dest_address(source_ip, source_port)
 				_lan_discovery_responder.put_packet(response)
 	if not _lan_discovery_scanner:
@@ -827,11 +841,11 @@ func _process_lan_discovery() -> void:
 	if now >= _lan_discovery_next_query:
 		_lan_discovery_next_query = now + LAN_DISCOVERY_INTERVAL
 		var query := _encode_lan_discovery_packet({"kind": "query", "protocol": AppVersion.PROTOCOL_VERSION})
-		_lan_discovery_scanner.set_dest_address("255.255.255.255", LAN_DISCOVERY_PORT)
+		_lan_discovery_scanner.set_dest_address("255.255.255.255", _lan_discovery_scan_port)
 		_lan_discovery_scanner.put_packet(query)
 		# Also probe loopback so two local instances (and automated tests) work
 		# even when the OS suppresses broadcast loopback.
-		_lan_discovery_scanner.set_dest_address("127.0.0.1", LAN_DISCOVERY_PORT)
+		_lan_discovery_scanner.set_dest_address("127.0.0.1", _lan_discovery_scan_port)
 		_lan_discovery_scanner.put_packet(query)
 	var changed := false
 	while _lan_discovery_scanner.get_available_packet_count() > 0:
@@ -940,6 +954,15 @@ func reconnect_room(code: String, assigned_player: int, token: String) -> void:
 func request_lobby_status(callback: Callable) -> void:
 	_lobby_status_callback = callback
 	_lobby_request({"action": "status"})
+
+
+func request_party_room(code: String, seats: int, create: bool) -> void:
+	_lobby_request({"action": "party_create" if create else "party_join", "code": code, "seats": seats})
+
+
+func request_matchmaking(action: String, mode: String, proof: Dictionary = {}) -> void:
+	_lobby_request({"action": "matchmaking_" + action, "mode": mode, "proof": proof,
+		"pack_protocol": preload("res://MatchmakingQueue.gd").PACK_PROTOCOL})
 
 
 func _lobby_request(data: Dictionary) -> void:

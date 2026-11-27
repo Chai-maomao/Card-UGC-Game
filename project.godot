@@ -34,6 +34,7 @@ DevConsole="*res://DevConsole.gd"
 [debug]
 
 file_logging/enable_file_logging=true
+file_logging/enable_file_logging.cardex_windows_export=false
 gameplay_verbose_logging=false
 
 [display]

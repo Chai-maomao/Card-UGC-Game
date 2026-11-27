@@ -2,6 +2,7 @@ extends Control
 
 const BASE_VIEWPORT_SIZE := Vector2(1152, 648)
 const UITheme = preload("res://UITheme.gd")
+const LaunchFrame = preload("res://presentation/BattleLaunchFrame.gd")
 
 static var _entry_draft: Dictionary = {}
 
@@ -18,16 +19,16 @@ var lobby_port: int = NetworkManager.LOBBY_PORT
 @onready var title_label = $Panel/VBoxContainer/TitleLabel
 @onready var server_label = $Panel/VBoxContainer/ServerLabel
 @onready var room_label = $Panel/VBoxContainer/RoomLabel
-@onready var default_server_address: String = server_input.text.strip_edges()
+@onready var default_server_address: String = NetworkManager.DEFAULT_LOBBY_ADDRESS
 @onready var _cancel_handoff_timer: Timer = $CancelHandoffTimer
 @onready var _start_confirmation_timer: Timer = $StartConfirmationTimer
 
 
 func _apply_texts() -> void:
-	title_label.text = Locale.t("lobby.title")
+	title_label.text = Locale.t("launch.friend_room")
 	server_label.text = Locale.t("lobby.server")
-	room_label.text = Locale.t("lobby.room_code")
-	room_input.placeholder_text = Locale.t("lobby.room_placeholder")
+	room_label.text = Locale.t("lobby.room_code").trim_suffix(":")
+	room_input.placeholder_text = Locale.t("launch.room_code_hint")
 	create_btn.text = Locale.t("lobby.create")
 	join_btn.text = Locale.t("lobby.join")
 	check_server_btn.text = Locale.t("lobby.check_server")
@@ -64,11 +65,10 @@ var _reservation_request_pending := false
 var _cancelling_connection := false
 var cancelling_preparation := false
 var _focus_ready_on_recovery := false
+var _launch: Control
 
 
 func _apply_theme() -> void:
-	# Full-screen dark backdrop, matching every other scene (the lobby's
-	# content panel is centered and fixed-size, so it can't double as the bg).
 	var bg := Panel.new()
 	bg.name = "ThemeBackground"
 	bg.anchor_right = 1.0
@@ -77,9 +77,20 @@ func _apply_theme() -> void:
 	UITheme.apply_app_background(bg)
 	add_child(bg)
 	move_child(bg, 0)
-	UITheme.apply_panel(lobby_panel, "dark")
-	UITheme.apply_title(title_label, max(18, int(24 * _ui_scale())))
-	title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	lobby_panel.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
+	_launch = LaunchFrame.new()
+	add_child(_launch)
+	move_child(_launch, 1)
+	_launch.setup(Locale.t("lobby.title"), Locale.t("launch.friend_room_intro"), "room")
+	_launch.bind_form(lobby_panel)
+	var form := $Panel/VBoxContainer
+	form.move_child(join_btn, room_input.get_index() + 1)
+	var action_divider := UITheme.separator()
+	form.add_child(action_divider)
+	form.move_child(action_divider, create_btn.get_index())
+	form.move_child(_server_settings, create_btn.get_index() + 1)
+	UITheme.apply_room_entry_title(title_label, _ui_scale())
+	UITheme.apply_separator($Panel/VBoxContainer/Separator)
 	status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	status_label.get_parent().move_child(status_label, -1)
 	for label in [status_label, server_label, room_label]:
@@ -87,14 +98,14 @@ func _apply_theme() -> void:
 	for input in [server_input, room_input]:
 		UITheme.apply_input(input)
 	_style_room_entry_actions()
-	UITheme.apply_button(check_server_btn, "secondary")
+	UITheme.apply_button(check_server_btn, "outlined")
 	UITheme.place_page_back(self, back_btn)
 
 
 func _style_room_entry_actions() -> void:
 	var entering_code: bool = not room_input.text.strip_edges().is_empty()
-	UITheme.apply_button(create_btn, "secondary" if entering_code else "primary", false)
-	UITheme.apply_button(join_btn, "primary" if entering_code else "secondary", false)
+	UITheme.apply_button(create_btn, "outlined" if entering_code else "primary", false)
+	UITheme.apply_button(join_btn, "primary" if entering_code else "outlined", false)
 
 
 func _theme_waiting_label(label: Label, title: bool = false) -> void:
@@ -118,10 +129,10 @@ func _apply_responsive_layout() -> void:
 
 	for child in vbox.get_children():
 		if child is Label:
-			child.add_theme_font_size_override("font_size", max(10, int(14 * s)))
+			child.add_theme_font_size_override("font_size", maxi(14, roundi(15 * s)))
 			UITheme.apply_label(child, child.name == "StatusLabel")
 			if child.name == "TitleLabel":
-				UITheme.apply_title(child, max(14, int(24 * s)))
+				UITheme.apply_room_entry_title(child, s)
 			elif child.name == "StatusLabel":
 				# Long error messages must wrap instead of stretching the panel wide.
 				child.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -130,7 +141,7 @@ func _apply_responsive_layout() -> void:
 		elif child is Button:
 			child.add_theme_font_size_override("font_size", max(14, int(16 * s)))
 			if child != create_btn and child != join_btn:
-				UITheme.apply_button(child, "utility" if child == _server_settings else "secondary")
+				UITheme.apply_button(child, "utility" if child == _server_settings else "outlined")
 		elif child is LineEdit:
 			child.custom_minimum_size = Vector2(200 * s, 0)
 			UITheme.apply_input(child)
@@ -144,19 +155,11 @@ func _apply_responsive_layout() -> void:
 
 func _resize_panel_to_content(s: float) -> void:
 	var vbox := $Panel/VBoxContainer
-	var content: Vector2 = vbox.get_combined_minimum_size()
-	var pad := maxf(16.0, 24.0 * s)
-	# Panel does not inset its children using StyleBox content margins.
-	vbox.offset_left = pad
-	vbox.offset_right = -pad
-	vbox.offset_top = pad
-	vbox.offset_bottom = -pad
-	var half_w: float = max(200.0 * s, content.x * 0.5 + pad)
-	var half_h: float = max(150.0 * s, content.y * 0.5 + pad)
-	lobby_panel.offset_left = -half_w
-	lobby_panel.offset_top = -half_h
-	lobby_panel.offset_right = half_w
-	lobby_panel.offset_bottom = half_h
+	_launch.place_form(lobby_panel)
+	vbox.offset_left = 0
+	vbox.offset_right = 0
+	vbox.offset_top = maxf(12.0, 30.0 * s)
+	vbox.offset_bottom = 0
 
 
 func _scale_waiting_room(s: float) -> void:
@@ -776,7 +779,6 @@ func _apply_pending_opponent_arts() -> void:
 
 func _on_card_art_manifest(total: int):
 	_opponent_arts_total = total
-	_update_art_progress_label()
 	if _opponent_arts_total >= 0 and _opponent_arts_received >= _opponent_arts_total:
 		_art_wait_deadline = 0.0
 		_check_both_ready()
@@ -790,7 +792,6 @@ func _on_card_art_received(card_index: int, ext: String, bytes: PackedByteArray,
 		PlayerData.apply_received_art(PlayerData.opponent_battle_deck,card_index,saved_path)
 		NetworkManager.send_card_art_ack(card_index, total)
 	_opponent_arts_received += 1
-	_update_art_progress_label()
 	if _art_transfer_complete():
 		_art_wait_deadline = 0.0
 		_check_both_ready()
@@ -801,24 +802,9 @@ func _on_card_art_ack(card_index: int, total: int) -> void:
 	if card_index >= 0 and not _acked_my_art_indices.has(card_index):
 		_acked_my_art_indices[card_index] = true
 		_my_arts_acked += 1
-	_update_art_progress_label()
 	if _art_transfer_complete():
 		_art_wait_deadline = 0.0
 		_check_both_ready()
-
-
-func _update_art_progress_label() -> void:
-	if not waiting_ui or not (i_am_ready and opponent_ready):
-		return
-	var wait_label = waiting_ui.get_node_or_null("WaitLabel")
-	if not wait_label:
-		return
-	if _opponent_arts_total > 0 or _my_arts_total > 0:
-		wait_label.text = Locale.t("wait.transfer_arts", [_opponent_arts_received, max(_opponent_arts_total, 0), _my_arts_acked, max(_my_arts_total, 0)])
-	elif _opponent_arts_total == 0 and _my_arts_total == 0:
-		wait_label.text = Locale.t("wait.no_arts")
-	else:
-		wait_label.text = Locale.t("wait.waiting_ready")
 
 
 func _art_transfer_complete() -> bool:
@@ -837,7 +823,6 @@ func _check_both_ready():
 		if _art_wait_deadline <= 0.0:
 			_art_wait_deadline = (Time.get_ticks_msec() / 1000.0) + ART_WAIT_TIMEOUT
 			set_process(true)
-		_update_art_progress_label()
 		return
 	_begin_start()
 

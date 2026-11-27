@@ -32,14 +32,14 @@ static func generate_legal_actions(game: RefCounted) -> Array:
 	var taunt_slots: Array[int] = []
 	for slot in range(enemy.slots.size()):
 		var target: CardData = enemy.slots[slot]
-		if target != null and target.is_alive() and target.has_taunt():
+		if target != null and target.is_selectable() and target.has_taunt():
 			taunt_slots.append(slot)
 	for source_slot in range(field.slots.size()):
 		var source: CardData = field.slots[source_slot]
 		if source == null or not source.is_alive() or not game.can_pay_action():
 			continue
 		if not source.has_acted and game.turn_number > 1 and not source.has_stun():
-			var targets := taunt_slots if not taunt_slots.is_empty() else _live_slots(enemy)
+			var targets := taunt_slots if not taunt_slots.is_empty() else _selectable_slots(enemy)
 			for target_slot in targets:
 				actions.append({"type": "attack", "source_slot": source_slot, "target_slot": target_slot})
 		if not source.has_attacked and not source.skills_disabled():
@@ -166,21 +166,12 @@ static func _append_skill_actions(actions: Array, game: RefCounted, source_slot:
 
 
 static func _append_target_variants(actions: Array, game: RefCounted, base: Dictionary, skill: Dictionary) -> void:
-	var side := _skill_target_side(skill)
-	var players: Array = []
-	if side in [SkillEngine.TARGET_SIDE_ALLY, SkillEngine.TARGET_SIDE_ALL]:
-		players.append(game.current_player)
-	if side in [SkillEngine.TARGET_SIDE_ENEMY, SkillEngine.TARGET_SIDE_ALL]:
-		players.append(3 - game.current_player)
-	for player in players:
+	var source: CardData = game.active_field().slots[int(base.slot)] if base.has("slot") else null
+	for player in [game.current_player, 3 - game.current_player]:
 		var field: BattleField = game.player_field if player == 1 else game.player2_field
-		for slot in _live_slots(field):
-			# Directed enemy skills obey the same taunt gate as manual targeting.
-			# Area effects remain unaffected because they never enter this path.
-			if player == 3 - game.current_player and field.has_any_taunt():
-				var target: CardData = field.slots[slot]
-				if target == null or not target.has_taunt():
-					continue
+		for slot in _selectable_slots(field):
+			if not SpellRules.can_select_unit(skill, source, field, slot, player != game.current_player, game.turn_number):
+				continue
 			var action := base.duplicate(true)
 			action["target_slot"] = slot
 			action["target_player"] = player
@@ -188,17 +179,7 @@ static func _append_target_variants(actions: Array, game: RefCounted, base: Dict
 
 
 static func _skill_needs_target(skill: Dictionary) -> bool:
-	for effect in SkillEngine.legacy_skill_effects(skill):
-		if str(effect.get("target", "")) in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES]:
-			return true
-	return false
-
-
-static func _skill_target_side(skill: Dictionary) -> String:
-	for effect in SkillEngine.legacy_skill_effects(skill):
-		if str(effect.get("target", "")) in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES]:
-			return str(effect.get("target_side", SkillEngine.TARGET_SIDE_ENEMY))
-	return SkillEngine.TARGET_SIDE_ENEMY
+	return SpellRules.needs_target(skill)
 
 
 # Exact immediate recovery for a single constant effect. Mixed, conditional,
@@ -206,7 +187,7 @@ static func _skill_target_side(skill: Dictionary) -> String:
 # their consequences here would duplicate the authoritative skill engine.
 static func _bounded_recovery_value(skill: Dictionary, game: RefCounted, action: Dictionary) -> Dictionary:
 	var effects := SkillEngine.legacy_skill_effects(skill)
-	if effects.size() != 1 or int(skill.get("probability", 100)) < 100:
+	if effects.size() != 1:
 		return {}
 	var effect: Dictionary = effects[0]
 	var effect_id := str(effect.get("effect", ""))
@@ -219,7 +200,7 @@ static func _bounded_recovery_value(skill: Dictionary, game: RefCounted, action:
 		return {}
 	var field: BattleField = game.active_field()
 	var source: CardData = game.active_hand()[int(action.hand_index)] if str(action.type) == "cast" else field.slots[int(action.get("slot", -1))]
-	if source == null or source.get_misfortune() > 0:
+	if source == null or source.skill_activation_probability(int(skill.get("probability", 100))) < 100:
 		return {}
 	var value := int(effect.get("value", 1))
 	if value < 0:
@@ -303,10 +284,10 @@ static func _action_skill(game: RefCounted, action: Dictionary) -> Dictionary:
 	return source.skills[index] if source != null and index >= 0 and index < source.skills.size() else {}
 
 
-static func _live_slots(field: BattleField) -> Array[int]:
+static func _selectable_slots(field: BattleField) -> Array[int]:
 	var slots: Array[int] = []
 	for index in range(field.slots.size()):
-		if field.slots[index] != null and field.slots[index].is_alive():
+		if field.slots[index] != null and field.slots[index].is_selectable():
 			slots.append(index)
 	return slots
 

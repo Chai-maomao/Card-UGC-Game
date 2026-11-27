@@ -390,10 +390,10 @@ static func _validate_history(value: Variant, errors: Array) -> void:
 		if not _expect_dictionary(matches[i], ["matches", i], errors):
 			continue
 		var entry: Dictionary = matches[i]
-		for key in ["id", "mode", "outcome", "result", "deck_name", "app_version"]:
+		for key in ["id", "mode", "outcome", "result", "deck_name", "app_version", "ranked_match_id"]:
 			if entry.has(key):
 				_validate_string(entry[key], ["matches", i, key], 0, 160, errors)
-		for key in ["timestamp", "turns", "player_hp", "opponent_hp", "duration"]:
+		for key in ["timestamp", "turns", "player_hp", "opponent_hp", "player_max_hp", "opponent_max_hp", "duration"]:
 			if entry.has(key):
 				_validate_integer(entry[key], ["matches", i, key], errors)
 
@@ -419,12 +419,23 @@ static func _validate_snapshot(value: Variant, errors: Array) -> void:
 		# JSON replay records represent integer-valued numbers as floats.
 		if not (starting is int or starting is float) or (starting != 1 and starting != 2):
 			errors.append(_issue("player", ["state", "starting_player"], {}))
+	for key in ["effective_actions_this_turn", "_action_clock_ms"]:
+		if not state.has(key): continue
+		var timer_value: Variant = state[key]
+		_validate_integer(timer_value, ["state", key], errors)
+		if (timer_value is int or timer_value is float) and (timer_value < 0 or timer_value > 300000):
+			errors.append(_issue("action_range", ["state", key], {}))
 	var cost_choices: Variant = state.get("pending_cost_choices", [])
 	if not cost_choices is Array or cost_choices.size() > UgcSafety.MAX_EXECUTED_EFFECT_NODES:
 		errors.append(_issue("selection", ["state", "pending_cost_choices"], {}))
 	else:
 		for choice in cost_choices:
-			if not choice is Dictionary or choice.get("player") not in [1, 2] or not choice.get("cost_mode") is String or not choice.get("target") is String:
+			if not choice is Dictionary or choice.get("player") not in [1, 2]:
+				errors.append(_issue("selection", ["state", "pending_cost_choices"], {}))
+				break
+			if choice.get("kind") == "enemy_swap":
+				continue
+			if not choice.get("cost_mode") is String or not choice.get("target") is String:
 				errors.append(_issue("selection", ["state", "pending_cost_choices"], {}))
 				break
 			var reduction: Variant = choice.get("reduction")

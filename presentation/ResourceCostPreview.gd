@@ -13,6 +13,7 @@ static func update(bar: ProgressBar, cost: int, available: int, insufficient: bo
 		overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		overlay.z_index = 5
 		bar.add_child(overlay)
+		overlay.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
 		var tint := ColorRect.new()
 		tint.name = "TintFill"
 		tint.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -22,16 +23,20 @@ static func update(bar: ProgressBar, cost: int, available: int, insufficient: bo
 		overlay.add_child(tint)
 	var end := _fill_end(bar,float(cost) if insufficient else bar.value)
 	var begin := 0.0 if insufficient else _fill_end(bar,maxf(0,bar.value-cost))
-	overlay.set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
-	overlay.position = Vector2(begin,0)
-	overlay.size = Vector2(maxf(0,end-begin),bar.size.y)
-	var tint := overlay.get_node("TintFill") as ColorRect
-	tint.size = overlay.size
-	var material := tint.material as ShaderMaterial
-	material.set_shader_parameter("rect_size",tint.size)
-	material.set_shader_parameter("forecast_color",color)
+	var bounds := Rect2(begin, 0.0, maxf(0, end - begin), bar.size.y)
 	var style := bar.get_theme_stylebox("fill") as StyleBoxFlat
-	material.set_shader_parameter("radius",float(style.corner_radius_top_right))
+	var radius := float(style.corner_radius_top_right)
+	var appearance := [bounds, color, radius]
+	if overlay.get_meta("appearance", []) != appearance:
+		overlay.set_meta("appearance", appearance)
+		overlay.position = bounds.position
+		overlay.size = bounds.size
+		var tint := overlay.get_node("TintFill") as ColorRect
+		tint.size = bounds.size
+		var material := tint.material as ShaderMaterial
+		material.set_shader_parameter("rect_size", bounds.size)
+		material.set_shader_parameter("forecast_color", color)
+		material.set_shader_parameter("radius", radius)
 	overlay.set_meta("cost",cost)
 	overlay.set_meta("after",available-cost)
 	overlay.show()

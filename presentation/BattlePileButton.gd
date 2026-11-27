@@ -86,11 +86,18 @@ func _ready() -> void:
 	numerals.base_font = UITheme.medium_font()
 	numerals.opentype_features = {"tnum": 1}
 	count_label.add_theme_font_override("font", numerals)
-	count_label.add_theme_color_override("font_color", Color.WHITE if AppPreferences.get_value("high_contrast") else UITheme.COLOR_TEXT)
+	count_label.add_theme_color_override("font_color", UITheme.Tokens.CONTRAST_INK if AppPreferences.get_value("high_contrast") else UITheme.COLOR_TEXT)
 	_counter.add_child(count_label)
+	AppPreferences.changed.connect(_on_preferences_changed)
 	apply_ui_scale(_ui_scale)
 	set_count(_count)
 	set_process(false)
+
+
+func _on_preferences_changed(key: String) -> void:
+	if key in ["appearance", "high_contrast"]:
+		_caption.add_theme_color_override("font_color", UITheme.Tokens.CONTRAST_INK if AppPreferences.get_value("high_contrast") else UITheme.COLOR_TEXT_MUTED)
+		count_label.add_theme_color_override("font_color", UITheme.Tokens.CONTRAST_INK if AppPreferences.get_value("high_contrast") else UITheme.COLOR_TEXT)
 
 func apply_ui_scale(value: float) -> void:
 	_ui_scale = value

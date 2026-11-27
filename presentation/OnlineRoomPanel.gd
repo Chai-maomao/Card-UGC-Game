@@ -1,5 +1,9 @@
 extends Control
 
+const LaunchFrame = preload("res://presentation/BattleLaunchFrame.gd")
+const LOADING_DOT_COUNT := 6
+const LOADING_DOT_INTERVAL := 0.2
+
 var lobby: Control
 var room_code := ""
 var start_button: Button
@@ -27,6 +31,9 @@ var _card_scale := 0.85
 var _rules_sent := ""
 var _rule_summary: Label
 var _rules_button: Button
+var _art_progress: ProgressBar
+var _art_loading_label: Label
+var _art_loading_elapsed := 0.0
 var _awaiting_host_rules := false
 var _rules_view: AcceptDialog
 var _rules_editor: CanvasLayer
@@ -41,14 +48,19 @@ var _share_button: Button
 var _share_button_text := ""
 var _share_feedback: Timer
 var _invite_dialog: ConfirmationDialog
+var _party_room: Node
+var _party_seats: Array[Array] = []
+var party_start_button: Button
+var _party_deck: Array = []
 
 func _t(zh: String, en: String) -> String:
 	return zh if Locale.language=="zh" else en
 
-func setup(owner_lobby: Control, code: String, initial_message: String) -> void:
+func setup(owner_lobby: Control, code: String, initial_message: String, party_room: Node = null) -> void:
 	lobby=owner_lobby
 	room_code=code
-	_awaiting_host_rules = (NetworkManager.session_mode == NetworkManager.SESSION_MODE_ROOM
+	_party_room = party_room
+	_awaiting_host_rules = (_party_room == null and NetworkManager.session_mode == NetworkManager.SESSION_MODE_ROOM
 		and not NetworkManager.is_authority()
 		and NetworkManager.room_wait_reason in ["returning", "syncing_preparation", "editing"])
 	name="OnlineRoom"
@@ -65,8 +77,10 @@ func setup(owner_lobby: Control, code: String, initial_message: String) -> void:
 	box.add_theme_constant_override("separation",18)
 	margin.add_child(box)
 	var header := HBoxContainer.new()
+	header.custom_minimum_size.y = 52
 	header.add_theme_constant_override("separation",16)
 	box.add_child(header)
+	LaunchFrame.add_header_art(self, header, "room")
 	var exit := _button(Locale.t("wait.leave_room"),header)
 	exit.name="ExitButton"
 	exit.pressed.connect(request_leave)
@@ -82,7 +96,11 @@ func setup(owner_lobby: Control, code: String, initial_message: String) -> void:
 		var mode := _label(_t("局域网","Local Network"),header)
 		mode.autowrap_mode=TextServer.AUTOWRAP_OFF
 		mode.vertical_alignment=VERTICAL_ALIGNMENT_CENTER
-		if NetworkManager.session_mode == NetworkManager.SESSION_MODE_LAN_HOST:
+		if _party_room != null:
+			var copy := _button(Locale.t("team.copy_address"), header)
+			_setup_share_feedback(copy)
+			copy.pressed.connect(func(): _copy_invite_value(lobby.party_join_address()))
+		elif NetworkManager.session_mode == NetworkManager.SESSION_MODE_LAN_HOST:
 			var copy := MenuButton.new()
 			copy.name = "CopyLanAddressButton"
 			copy.text = Locale.t("wait.copy_lan_address")
@@ -96,7 +114,7 @@ func setup(owner_lobby: Control, code: String, initial_message: String) -> void:
 			UITheme.apply_popup_menu(popup)
 			copy.about_to_popup.connect(_populate_lan_address_menu.bind(popup))
 			popup.id_pressed.connect(func(id: int): _copy_invite_value(str(popup.get_item_metadata(popup.get_item_index(id)))))
-	box.add_child(HSeparator.new())
+	box.add_child(UITheme.separator())
 	content=HBoxContainer.new()
 	content.add_theme_constant_override("separation",24)
 	content.size_flags_vertical=Control.SIZE_EXPAND_FILL
@@ -110,13 +128,16 @@ func setup(owner_lobby: Control, code: String, initial_message: String) -> void:
 	deck_box.add_child(deck_header)
 	deck_choice=OptionButton.new()
 	deck_choice.name="RoomDeckChoice"
+	deck_choice.fit_to_longest_item = false
+	deck_choice.clip_text = true
 	deck_choice.size_flags_horizontal=Control.SIZE_EXPAND_FILL
 	UITheme.apply_button(deck_choice,"secondary",false)
 	deck_header.add_child(deck_choice)
 	_populate_deck_choices()
-	create_button=_button(Locale.t("wait.create_card"),deck_header)
-	create_button.name="CreateCardButton"
-	create_button.pressed.connect(lobby._on_create_card_pressed)
+	if _party_room == null:
+		create_button=_button(Locale.t("wait.create_card"),deck_header)
+		create_button.name="CreateCardButton"
+		create_button.pressed.connect(lobby._on_create_card_pressed)
 	deck_scroll=ScrollContainer.new()
 	deck_scroll.name="RoomDeckScroll"
 	deck_scroll.size_flags_vertical=Control.SIZE_EXPAND_FILL
@@ -137,40 +158,81 @@ func setup(owner_lobby: Control, code: String, initial_message: String) -> void:
 	UITheme.pad_scroll_content(sidebar_scroll,6)
 	content.add_child(sidebar_scroll)
 	sidebar_scroll.add_child(sidebar)
-	var you := _seat(_t("你","You"))
-	local_state=you[0]
-	local_deck=you[1]
-	local_title=you[2]
-	local_host_badge=you[3]
-	var opponent := _seat(_t("对手","Opponent"))
-	remote_state=opponent[0]
-	remote_deck=opponent[1]
-	remote_title=opponent[2]
-	remote_host_badge=opponent[3]
-	var view := _button(_t("查看对手卡组","View opponent deck"),sidebar)
-	view.name="ViewOpponentDeck"
-	view.pressed.connect(_show_opponent_deck)
+	var rules := PlayerData.battle_config
+	if _party_room != null:
+		for seat in range(1, _party_room.seat_count + 1):
+			var seat_card := _seat(Locale.t("team.seat", [seat]))
+			seat_card[1].hide()
+			_party_seats.append(seat_card)
+		rules = _party_room.battle_rules
+	else:
+		var you := _seat(_t("你","You"))
+		local_state=you[0]
+		local_deck=you[1]
+		local_title=you[2]
+		local_host_badge=you[3]
+		var opponent := _seat(_t("对手","Opponent"))
+		remote_state=opponent[0]
+		remote_deck=opponent[1]
+		remote_title=opponent[2]
+		remote_host_badge=opponent[3]
+		var view := _button(_t("查看对手卡组","View opponent deck"),sidebar)
+		view.name="ViewOpponentDeck"
+		view.pressed.connect(_show_opponent_deck)
 	sidebar.add_child(HSeparator.new())
 	_label(_t("本局规则","Match Rules"),sidebar,true)
-	_rule_summary = _label(BattleRulesHelp.room_summary(PlayerData.battle_config),sidebar)
+	_rule_summary = _label(BattleRulesHelp.room_summary(rules),sidebar)
 	box.add_child(HSeparator.new())
 	footer=HBoxContainer.new()
 	footer.add_theme_constant_override("separation",16)
 	box.add_child(footer)
-	status=_label("",footer)
+	var status_area := HBoxContainer.new()
+	status_area.add_theme_constant_override("separation", 12)
+	status_area.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	footer.add_child(status_area)
+	status=_label("",status_area)
 	status.name="RoomStatus"
 	status.set_meta("keyword_literal", true)
 	status.size_flags_horizontal=Control.SIZE_EXPAND_FILL
+	_art_progress = ProgressBar.new()
+	_art_progress.name = "CardArtProgress"
+	_art_progress.show_percentage = false
+	_art_progress.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+	_art_progress.tooltip_text = Locale.t("wait.transfer_arts")
+	var track := UITheme.panel_style(UITheme.COLOR_PANEL_SOFT, UITheme.Tokens.BORDER, 1, 4)
+	var fill := UITheme.panel_style(UITheme.COLOR_GOLD, Color.TRANSPARENT, 0, 4)
+	track.set_content_margin_all(0)
+	fill.set_content_margin_all(0)
+	_art_progress.add_theme_stylebox_override("background", track)
+	_art_progress.add_theme_stylebox_override("fill", fill)
+	_art_progress.hide()
+	status_area.add_child(_art_progress)
+	_art_loading_label = _label(Locale.t("wait.art_loading") + ".".repeat(LOADING_DOT_COUNT), status_area)
+	_art_loading_label.name = "CardArtLoading"
+	_art_loading_label.autowrap_mode = TextServer.AUTOWRAP_OFF
+	_art_loading_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_art_loading_label.visible_characters_behavior = TextServer.VC_CHARS_AFTER_SHAPING
+	_art_loading_label.hide()
 	_rules_button = _button(Locale.t("wait.view_rules"), footer)
 	_rules_button.name="RoomRulesButton"
-	_rules_button.pressed.connect(_show_rules)
+	_rules_button.pressed.connect(lobby._open_battle_settings if _party_room != null else _show_rules)
 	start_button=_button(_t("准备","Ready"),footer,"primary")
 	start_button.name="StartButton"
 	start_button.custom_minimum_size.x=160
-	start_button.pressed.connect(lobby._on_start_pressed)
+	if _party_room != null:
+		start_button.pressed.connect(_submit_party_deck)
+		party_start_button = _button(Locale.t("team.start"), footer, "primary")
+		party_start_button.name = "PartyStartButton"
+		party_start_button.pressed.connect(_party_room.start)
+	else:
+		start_button.pressed.connect(lobby._on_start_pressed)
 	get_viewport().size_changed.connect(apply_scale.bind(1.0))
 	_rebuild_cards()
 	apply_scale(1.0)
+	if _party_room != null:
+		_party_room.changed.connect(_update_state)
+		_update_state()
+		return
 	NetworkManager.match_offer_received.connect(_receive_room_rules)
 	NetworkManager.connected.connect(_on_opponent_available)
 	lobby.match_agreement.confirmation_blocked = _blocks_match_confirmation
@@ -272,8 +334,8 @@ func _populate_lan_address_menu(popup: PopupMenu) -> void:
 func _populate_deck_choices() -> void:
 	var selected := -1
 	var preferred := -1
-	var room_deck_id := PlayerData.online_room_deck_id
-	var has_custom_deck := room_deck_id.is_empty() and not PlayerData.battle_deck.is_empty()
+	var room_deck_id := PlayerData.online_room_deck_id if _party_room == null else ""
+	var has_custom_deck := _party_room == null and room_deck_id.is_empty() and not PlayerData.battle_deck.is_empty()
 	for deck in PlayerData.deck_library:
 		var deck_id := str(deck.id)
 		var cards := PlayerData.get_cards_for_deck(deck_id)
@@ -330,11 +392,17 @@ func _apply_deck_choice(index: int) -> void:
 	_selected_deck_index = index
 	if index < 0:
 		deck_choice.text = Locale.t("wait.no_playable_deck")
+		if _party_room != null:
+			_party_deck.clear()
+			return
 		PlayerData.online_room_deck_id = ""
 		PlayerData.battle_deck = []
 		return
 	deck_choice.select(index)
 	var source: Variant = deck_choice.get_item_metadata(index)
+	if _party_room != null:
+		_party_deck = PlayerData.get_cards_for_deck(source)
+		return
 	PlayerData.online_room_deck_id = source if source is String else ""
 	var cards: Array = PlayerData.get_cards_for_deck(source) if source is String else source
 	PlayerData.battle_deck = cards.duplicate()
@@ -384,7 +452,7 @@ func _make_host_badge(parent: Control) -> PanelContainer:
 	badge.name = "HostBadge"
 	badge.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var style := UITheme.panel_style(Color("2c2c24"), Color("786747"), 1, 7)
+	var style := UITheme.panel_style(UITheme.Tokens.PANEL_SOFT if UITheme.Tokens.light_mode else Color("2c2c24"), UITheme.Tokens.BORDER if UITheme.Tokens.light_mode else Color("786747"), 1, 7)
 	style.content_margin_left = 8
 	style.content_margin_right = 8
 	style.content_margin_top = 3
@@ -400,7 +468,7 @@ func _make_host_badge(parent: Control) -> PanelContainer:
 	crown.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	crown.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_child(crown)
-	var brass := Color("d6b67c")
+	var brass := UITheme.Tokens.BRASS if UITheme.Tokens.light_mode else Color("d6b67c")
 	crown.draw.connect(func():
 		crown.draw_colored_polygon(PackedVector2Array([Vector2(1, 4), Vector2(5, 7), Vector2(8, 2),
 			Vector2(11, 7), Vector2(15, 4), Vector2(13, 11), Vector2(3, 11)]), brass)
@@ -439,6 +507,7 @@ func apply_scale(_value: float) -> void:
 	var s := clampf(minf(get_viewport_rect().size.x/1280.0,get_viewport_rect().size.y/720.0),0.75,1.5)
 	for edge in ["left","right","top","bottom"]: margin.add_theme_constant_override("margin_"+edge,roundi(24*s))
 	sidebar_scroll.custom_minimum_size.x=280*s
+	_art_progress.custom_minimum_size = Vector2(300, 7) * s
 	_card_scale=0.85*s
 	for node in find_children("*","Control",true,false):
 		if node.has_meta("room_font_size"): node.add_theme_font_size_override("font_size",roundi(float(node.get_meta("room_font_size"))*s))
@@ -455,7 +524,7 @@ func _reflow() -> void:
 func _rebuild_cards() -> void:
 	for child in grid.get_children(): child.free()
 	deck_scroll.scroll_vertical = 0
-	for card in PlayerData.battle_deck:
+	for card in (_party_deck if _party_room != null else PlayerData.battle_deck):
 		var center := CenterContainer.new()
 		center.size_flags_horizontal=Control.SIZE_EXPAND_FILL
 		grid.add_child(center)
@@ -515,6 +584,10 @@ func _on_preparation_reset() -> void:
 
 
 func _process(delta: float) -> void:
+	if _art_loading_label.visible:
+		_art_loading_elapsed = fmod(_art_loading_elapsed + delta, (LOADING_DOT_COUNT + 1) * LOADING_DOT_INTERVAL)
+		var dots := LOADING_DOT_COUNT if AppPreferences.get_value("reduced_motion") else floori(_art_loading_elapsed / LOADING_DOT_INTERVAL)
+		_art_loading_label.visible_characters = _art_loading_label.text.length() - LOADING_DOT_COUNT + dots
 	_clock+=delta
 	if _clock<0.1: return
 	_clock=0
@@ -522,6 +595,9 @@ func _process(delta: float) -> void:
 
 func _update_state() -> void:
 	if _leaving:
+		return
+	if _party_room != null:
+		_update_party_state()
 		return
 	var server_room := NetworkManager.session_mode == NetworkManager.SESSION_MODE_ROOM
 	var connected: bool = (NetworkManager.room_preparation_available and NetworkManager.is_game_rpc_ready()) if server_room else lobby._can_submit_ready()
@@ -574,6 +650,7 @@ func _update_state() -> void:
 		start_button.text = Locale.t("wait.back_to_preparation")
 	elif lobby.match_agreement.completed:
 		start_button.text = Locale.t("wait.rules_confirmed")
+	var syncing_art := false
 	if link_waiting:
 		remote_state.text = Locale.t("wait.opponent_status_unavailable")
 		remote_state.modulate = Color.WHITE
@@ -620,6 +697,9 @@ func _update_state() -> void:
 	elif lobby._battle_starting or lobby.match_agreement.completed: status.text=Locale.t("wait.starting_match")
 	elif lobby.match_agreement.local_accepted: status.text=Locale.t("wait.opponent_confirming")
 	elif lobby.match_agreement.pending: status.text=Locale.t("wait.confirming_rules")
+	elif (lobby.i_am_ready and lobby._my_arts_acked < lobby._my_arts_total) \
+			or (lobby.opponent_ready and lobby._opponent_arts_received < lobby._opponent_arts_total):
+		syncing_art = true
 	elif lobby.i_am_ready and lobby.opponent_ready: status.text=get_node("WaitLabel").text
 	elif connected and rules_pending: status.text = Locale.t("wait.syncing_room_rules")
 	elif not _rules_notice.is_empty(): status.text = _rules_notice
@@ -628,9 +708,58 @@ func _update_state() -> void:
 	elif connected: status.text=_t("等待对手准备","Waiting for opponent to ready") if lobby.i_am_ready else _t("选择卡组后点击准备","Choose your deck, then Ready")
 	elif NetworkManager.is_online: status.text=_t("等待对手加入房间","Waiting for an opponent") if local_connected else _t("正在连接房间…","Connecting to room…")
 	else: status.text=_t("房间连接已断开","Room disconnected")
+	if syncing_art:
+		if not _art_progress.visible:
+			_art_loading_elapsed = 0.0
+			_art_loading_label.visible_characters = _art_loading_label.text.length() - LOADING_DOT_COUNT
+		var upload_total := maxi(0, lobby._my_arts_total) if lobby.i_am_ready else 0
+		var receive_total := maxi(0, lobby._opponent_arts_total) if lobby.opponent_ready else 0
+		_art_progress.max_value = upload_total + receive_total
+		_art_progress.value = clampi(lobby._my_arts_acked, 0, upload_total) \
+			+ clampi(lobby._opponent_arts_received, 0, receive_total)
+	_art_progress.visible = syncing_art
+	_art_loading_label.visible = syncing_art
+	status.visible = not syncing_art
 
 func _can_change_deck() -> bool:
+	if _party_room != null:
+		return not _leaving and _party_room.can_change_ready() and not _party_room.ready_seats.has(_party_room.local_seat)
 	return not _leaving and not lobby.i_am_ready and not lobby._battle_starting
+
+
+func _submit_party_deck() -> void:
+	var error: String = _party_room.submit_deck(_party_deck)
+	_deck_submission_error = Locale.t(error) if not error.is_empty() else ""
+	_update_party_state()
+
+
+func _update_party_state() -> void:
+	var ready: bool = _party_room.ready_seats.has(_party_room.local_seat)
+	for i in _party_seats.size():
+		var seat := i + 1
+		var row := _party_seats[i]
+		var is_local: bool = seat == _party_room.local_seat
+		var title := Locale.t("team.seat", [seat])
+		row[2].text = Locale.t("team.your_seat", [title]) if is_local else title
+		row[3].visible = seat == 1 and _party_room.occupied.has(seat)
+		var seat_state := "team.empty"
+		if _party_room.occupied.has(seat):
+			seat_state = "team.seat_ready" if _party_room.ready_seats.has(seat) else "team.selecting"
+		row[0].text = Locale.t(seat_state)
+		row[0].modulate = UITheme.COLOR_ACCENT if seat_state == "team.seat_ready" else Color.WHITE
+	var summary := BattleRulesHelp.room_summary(_party_room.battle_rules)
+	if _rule_summary.text != summary:
+		_rule_summary.text = summary
+	_rules_button.text = Locale.t("prep.advanced" if _party_room.is_host() else "wait.view_rules")
+	_rules_button.disabled = _party_room.started
+	deck_choice.disabled = not _can_change_deck()
+	start_button.text = Locale.t("team.cancel_ready" if ready else "team.ready")
+	start_button.disabled = not _party_room.can_change_ready() or (not ready and _party_deck.is_empty())
+	party_start_button.visible = _party_room.is_host()
+	party_start_button.disabled = not _party_room.can_start()
+	status.text = _deck_submission_error
+	if status.text.is_empty():
+		status.text = Locale.t("team.room_format", [floori(_party_seats.size() / 2.0), ceili(_party_seats.size() / 2.0)])
 
 
 func _can_edit_rules() -> bool:
@@ -689,13 +818,13 @@ func _render_rules_view(scroll: ScrollContainer) -> void:
 func request_leave() -> void:
 	if _leaving or is_instance_valid(_leave_dialog):
 		return
-	if NetworkManager.opponent_peer_id <= 0 and not lobby.opponent_ready and NetworkManager.room_wait_reason != "editing":
+	if _party_room == null and NetworkManager.opponent_peer_id <= 0 and not lobby.opponent_ready and NetworkManager.room_wait_reason != "editing":
 		_leave()
 		return
 	_leave_dialog = ConfirmationDialog.new()
 	_leave_dialog.name = "LeaveRoomConfirmation"
 	_leave_dialog.title = Locale.t("wait.leave_room")
-	var transferring_host := NetworkManager.is_dedicated_server and NetworkManager.is_authority()
+	var transferring_host := _party_room == null and NetworkManager.is_dedicated_server and NetworkManager.is_authority()
 	_leave_dialog.dialog_text = Locale.t("wait.leave_host_body" if transferring_host else "wait.leave_room_body")
 	_leave_dialog.confirmed.connect(func():
 		_close_leave_dialog()
@@ -703,11 +832,8 @@ func request_leave() -> void:
 	_leave_dialog.canceled.connect(_on_leave_cancelled)
 	add_child(_leave_dialog)
 	UITheme.apply_dialog(_leave_dialog)
-	_leave_dialog.get_ok_button().text = Locale.t("wait.leave_room")
-	_leave_dialog.get_cancel_button().text = Locale.t("common.cancel")
-	UITheme.apply_button(_leave_dialog.get_ok_button(), "danger")
+	UITheme.apply_destructive_confirmation(_leave_dialog, Locale.t("wait.leave_room"))
 	_leave_dialog.popup_centered()
-	_leave_dialog.get_cancel_button().grab_focus.call_deferred()
 
 
 func _close_leave_dialog() -> void:
@@ -719,6 +845,8 @@ func _close_leave_dialog() -> void:
 
 func _on_leave_cancelled() -> void:
 	_close_leave_dialog()
+	if _party_room != null:
+		return
 	lobby.match_agreement.resume_deferred_confirmation()
 	if NetworkManager.room_wait_reason == "cancelled" and not lobby.match_agreement.pending:
 		_update_state()
@@ -736,5 +864,8 @@ func _leave() -> void:
 	_leaving = true
 	for button in find_children("*", "BaseButton", true, false):
 		button.disabled = true
+	_art_progress.hide()
+	_art_loading_label.hide()
+	status.show()
 	status.text = Locale.t("wait.leaving_room")
 	lobby._exit_waiting_room()

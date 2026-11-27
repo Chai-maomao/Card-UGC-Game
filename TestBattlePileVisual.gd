@@ -46,8 +46,9 @@ func _ready() -> void:
 	await capture("match-cards.png")
 	var inspect = grid.get_child(0).find_child("InspectMatchCard",true,false)
 	await click(inspect.get_global_rect().get_center())
-	_check(info.has_node("TabletopCardInspector"),"match cards open the read-only inspector")
-	if info.has_node("TabletopCardInspector"): info.get_node("TabletopCardInspector").queue_free()
+	var inspector: Control = info.find_child("TabletopCardInspector", true, false)
+	_check(inspector != null,"match cards open the read-only inspector")
+	if inspector != null: inspector.get_parent().queue_free()
 	stage.size=Vector2i(960,540)
 	await get_tree().create_timer(0.3).timeout
 	await capture("match-cards-960.png")
@@ -137,6 +138,7 @@ func _ready() -> void:
 	battle.update_entire_screen()
 	await settle()
 	var original: Array=battle.game.shared_deck.duplicate()
+	await _check_collection_inspector(battle, original)
 	var rng_before: int=battle.game.game_rng.state
 	await click(battle.draw_pile_btn.get_global_rect().get_center())
 	dialog=viewer(battle)
@@ -203,6 +205,30 @@ func _ready() -> void:
 	else:
 		for message in failures:push_error("TEST_BATTLE_PILE_VISUAL_FAILED: "+message)
 		get_tree().quit(1)
+func _check_collection_inspector(battle: Node, cards: Array) -> void:
+	var dialog = preload("res://CardCollectionDialog.gd").show_cards(battle, cards.slice(0, 5), "选择一张卡牌", 1)
+	await get_tree().create_timer(0.3).timeout
+	var overlay: Button = dialog.selection_overlays[4]
+	await click(overlay.get_global_rect().get_center())
+	var inspector: Control = dialog.find_child("TabletopCardInspector", true, false)
+	_check(inspector != null and dialog.selected.has(4), "selecting a card opens its inspector and retains its selection")
+	if inspector != null:
+		var details := inspector.get_parent() as CanvasLayer
+		_check(details != null and details != dialog and details.layer > dialog.layer,
+			"the inspector has its own canvas above the selected card and its checkmark")
+		_check(inspector.get_global_rect().intersects(overlay.get_global_rect()),
+			"the selected card overlaps the inspector in the regression fixture")
+		await capture("collection-inspector-layer.png")
+		var escape := InputEventKey.new()
+		escape.keycode = KEY_ESCAPE
+		escape.pressed = true
+		get_viewport().push_input(escape, true)
+		await settle()
+		_check(not is_instance_valid(inspector) and dialog.selected.has(4),
+			"Escape closes only the inspector and keeps the selected card")
+	dialog.queue_free()
+	await settle()
+
 func viewer(battle: Node):
 	for child in battle.get_children():
 		if child.get_script()==preload("res://CardCollectionDialog.gd"):return child

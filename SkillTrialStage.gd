@@ -37,7 +37,7 @@ func _ready() -> void:
 		role.text = ("己方单位" if i == 0 else "敌方单位") if Locale.language == "zh" else ("Your unit" if i == 0 else "Enemy unit")
 		role.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		role.size = Vector2(176,20)
-		role.add_theme_color_override("font_color", Color("88c6be") if i == 0 else Color("ed7772"))
+		role.add_theme_color_override("font_color", (UITheme.Tokens.TEAL if i == 0 else UITheme.Tokens.ENEMY) if UITheme.Tokens.light_mode else (Color("88c6be") if i == 0 else Color("ed7772")))
 		actor.add_child(role)
 		var card = preload("res://CardUI.tscn").instantiate()
 		card.set_meta("suppress_hover_hint",true)
@@ -78,12 +78,14 @@ func _ready() -> void:
 		hp.position = Vector2(0,230)
 		hp.size = Vector2(176,20)
 		hp.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		UITheme.apply_label(hp)
 		actor.add_child(hp)
 		health.append(hp)
 		var details := RichTextLabel.new()
 		details.position = Vector2(0,254)
 		details.size = Vector2(176,36)
 		details.bbcode_enabled = true
+		details.add_theme_color_override("default_color", UITheme.COLOR_TEXT)
 		details.scroll_active = false
 		details.add_theme_font_size_override("normal_font_size",12)
 		details.meta_clicked.connect(func(_meta):
@@ -96,11 +98,12 @@ func _ready() -> void:
 	action_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	action_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	action_label.add_theme_font_size_override("font_size",15)
+	UITheme.apply_label(action_label)
 	add_child(action_label)
 	progress = Label.new()
 	progress.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	progress.add_theme_font_size_override("font_size",13)
-	progress.add_theme_color_override("font_color",Color("afbaaf"))
+	progress.add_theme_color_override("font_color", UITheme.COLOR_TEXT_MUTED if UITheme.Tokens.light_mode else Color("afbaaf"))
 	add_child(progress)
 	resized.connect(_layout)
 	_layout()

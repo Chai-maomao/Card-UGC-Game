@@ -90,7 +90,7 @@ func _build_console() -> void:
 	title.add_theme_color_override("font_color", ACCENT_COLOR)
 	header.add_child(title)
 	var shortcuts := Label.new()
-	shortcuts.text = "TAB Complete   ↑↓ History   F11 Expand   ESC Close"
+	shortcuts.text = "TAB Complete   ↑↓ History   F11 Expand   ALT+~ or ESC Close"
 	shortcuts.set_meta("keyword_literal", true)
 	shortcuts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	shortcuts.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
@@ -118,7 +118,6 @@ func _build_console() -> void:
 	_line = LineEdit.new()
 	_line.name = "CommandLine"
 	_line.placeholder_text = "Type help"
-	_line.context_menu_enabled = false
 	_line.keep_editing_on_text_submit = true
 	_line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_line.max_length = 256
@@ -163,7 +162,7 @@ func _input(event: InputEvent) -> void:
 	var key := event as InputEventKey
 	if key == null:
 		return
-	var toggle := not (key.ctrl_pressed or key.alt_pressed or key.meta_pressed) and (
+	var toggle := key.alt_pressed and not (key.ctrl_pressed or key.meta_pressed) and (
 		key.physical_keycode == KEY_QUOTELEFT or key.keycode == KEY_QUOTELEFT
 		or key.keycode == KEY_ASCIITILDE or key.unicode in [0x60, 0x7e, 0xb7, 0xff5e]
 	)
@@ -347,7 +346,7 @@ func _give_card(card_name: String) -> void:
 	if template == null:
 		_print_line(Locale.t("battle.debug_card_not_found", [card_name]), ERROR_COLOR)
 		return
-	var card := PlayerData.prepare_deck_card(template)
+	var card: CardData = PlayerData.prepare_deck_card(template)
 	card.reset_to_base()
 	var destination: String = game.resolve_hand_entry_for_player(card, "generated", {}, battle._view_player())
 	battle._refresh_hand_ui()

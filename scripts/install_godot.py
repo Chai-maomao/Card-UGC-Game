@@ -8,7 +8,7 @@ import urllib.request
 import zipfile
 
 VERSION = "4.6.3"
-BASE = f"https://github.com/godotengine/godot/releases/download/{VERSION}-stable/"
+WINDOWS_RELEASE_VERSION = "4.7.2"
 
 
 def digest(path):
@@ -19,11 +19,11 @@ def digest(path):
     return result.hexdigest()
 
 
-def download(name, cache, checksums):
+def download(name, cache, checksums, base):
     destination = cache / name
     expected = checksums[name]
     if not destination.exists() or digest(destination) != expected:
-        urllib.request.urlretrieve(BASE + name, destination)
+        urllib.request.urlretrieve(base + name, destination)
     if digest(destination) != expected:
         raise RuntimeError("Official checksum mismatch: " + name)
     return destination
@@ -47,25 +47,27 @@ def main():
     parser.add_argument("--directory", default=".godot/ci-engine")
     parser.add_argument("--windows-templates", action="store_true")
     args = parser.parse_args()
+    windows = platform.system() == "Windows"
+    version = WINDOWS_RELEASE_VERSION if windows else VERSION
+    base = f"https://github.com/godotengine/godot-builds/releases/download/{version}-stable/"
     directory = Path(args.directory).resolve()
     cache = directory / "downloads"
     cache.mkdir(parents=True, exist_ok=True)
-    sums = urllib.request.urlopen(BASE + "SHA512-SUMS.txt", timeout=60).read().decode()
+    sums = urllib.request.urlopen(base + "SHA512-SUMS.txt", timeout=60).read().decode()
     checksums = {}
     for line in sums.splitlines():
         fields = line.split()
         if len(fields) >= 2:
             checksums[fields[-1].lstrip("*")] = fields[0]
-    windows = platform.system() == "Windows"
-    stem = f"Godot_v{VERSION}-stable_" + ("win64.exe" if windows else "linux.x86_64")
-    archive = download(stem + ".zip", cache, checksums)
+    stem = f"Godot_v{version}-stable_" + ("win64.exe" if windows else "linux.x86_64")
+    archive = download(stem + ".zip", cache, checksums, base)
     extract_checked(archive, directory / "bin")
     binary = directory / "bin" / stem
     if not windows:
         binary.chmod(0o755)
     if args.windows_templates:
-        template = download(f"Godot_v{VERSION}-stable_export_templates.tpz", cache, checksums)
-        target = Path(os.environ["APPDATA"]) / "Godot" / "export_templates" / f"{VERSION}.stable"
+        template = download(f"Godot_v{version}-stable_export_templates.tpz", cache, checksums, base)
+        target = Path(os.environ["APPDATA"]) / "Godot" / "export_templates" / f"{version}.stable"
         target.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(template) as bundle:
             for name in ["windows_release_x86_64.exe", "windows_debug_x86_64.exe", "version.txt"]:

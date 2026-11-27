@@ -139,7 +139,8 @@ func _refresh() -> void:
 	var quote := ActionEconomyAnalyzer.quote(int(action_input.value), int(points_input.value), int(mana_input.value), config)
 	quote_label.text = Locale.t("economy.quote", [quote.cost, quote.points, quote.mana])
 	status_label.text = Locale.t("economy.affordable" if quote.ok else "economy.unaffordable")
-	status_label.add_theme_color_override("font_color", Color(0.45, 0.92, 0.62) if quote.ok else Color(0.95, 0.78, 0.42))
+	var status_color := UITheme.Tokens.SUCCESS if quote.ok else UITheme.Tokens.WARNING
+	status_label.add_theme_color_override("font_color", status_color)
 
 
 func _resize() -> void:

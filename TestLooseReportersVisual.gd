@@ -70,9 +70,34 @@ func _ready() -> void:
 	await _settle()
 	# Move the free condition into the real if socket, then undo both ends.
 	view = _reporter_view(boolean_key)
-	await _move_with_preview(view.get_global_transform()*Vector2(3,view.size.y/2),_socket(1,[]).get_global_rect().get_center(),"loose-condition-preview")
+	var operands := view.find_children("*", "ValueSlot", true, false)
+	await _palette_drop("var_id", SkillEngine.VAR_HAND_COUNT, operands[0])
+	var right_input: LineEdit = operands[1].find_children("*", "LineEdit", true, false)[0]
+	await _click(right_input.get_global_rect().get_center())
+	for key in [KEY_4, KEY_ENTER]:
+		var event := InputEventKey.new()
+		event.keycode = key
+		event.unicode = KEY_4 if key == KEY_4 else 0
+		event.pressed = true
+		get_viewport().push_input(event, true)
 	await _settle()
-	assert(not editor.loose_reporters.has(boolean_key) and editor.effect_data[1].condition.has("op"))
+	var compare_op: OptionButton = view.find_children("*", "OptionButton", true, false)[0]
+	compare_op.selected = SkillRegistry.CONDITION_OP_IDS.find(SkillEngine.CONDITION_OP_LTE)
+	compare_op.item_selected.emit(compare_op.selected)
+	var comparison: Dictionary = editor.loose_reporters[boolean_key].value.condition.duplicate(true)
+	assert(comparison.lhs.get("var_id") == SkillEngine.VAR_HAND_COUNT and comparison.rhs.get("value") == 4
+		and comparison.op == SkillEngine.CONDITION_OP_LTE, "the loose comparison must contain the newly edited operands and operator")
+	before = editor._editor_state().duplicate(true)
+	var condition_socket := _socket(1, [])
+	var socket_bounds := condition_socket.get_global_rect()
+	var outside := Vector2(socket_bounds.position.x - 10.0, socket_bounds.get_center().y)
+	assert(not socket_bounds.has_point(outside))
+	await _move_with_preview(view.get_global_transform()*Vector2(3,view.size.y/2),outside,"loose-condition-preview",condition_socket)
+	await _settle()
+	assert(not editor.loose_reporters.has(boolean_key) and editor.effect_data[1].condition.has("op"),
+		"the dragged condition must attach when its face overlaps the socket and the pointer remains outside")
+	assert(editor.effect_data[1].condition == comparison,
+		"moving a loose comparison must keep both edited operands and the chosen operator")
 	inserted = editor._editor_state().duplicate(true)
 	editor._undo()
 	await _settle()
@@ -84,7 +109,14 @@ func _ready() -> void:
 	await _settle()
 	# Discard a standalone condition through the real library drop zone.
 	view = _reporter_view(boolean_key)
-	await _drag(view.get_global_transform()*Vector2(3,view.size.y/2),editor.palette_title.get_global_rect().get_center(),MOUSE_BUTTON_LEFT)
+	var discard_at: Vector2 = editor.palette_title.get_global_rect().get_center() + Vector2(0, 60)
+	await _drag(view.get_global_transform()*Vector2(3,view.size.y/2),discard_at,MOUSE_BUTTON_LEFT,false)
+	await _settle()
+	var preview := preload("res://SkillDragPreview.gd").face_in(get_viewport())
+	assert(is_instance_valid(preview) and editor._palette_discard_highlight,
+		"the preview must remain visible while the library is highlighted for discard")
+	await _capture("loose-condition-discard")
+	await _mouse(discard_at, MOUSE_BUTTON_LEFT, false)
 	await _settle()
 	assert(not editor.loose_reporters.has(boolean_key) and editor.loose_reporters.size() == 1)
 	editor._undo()
@@ -268,7 +300,7 @@ func _target_hover_drop(start: Vector2, slot: TargetSlot, screenshot: String) ->
 	await _capture(screenshot)
 	await _mouse(end,MOUSE_BUTTON_LEFT,false)
 
-func _move_with_preview(start: Vector2, end: Vector2, screenshot: String) -> void:
+func _move_with_preview(start: Vector2, end: Vector2, screenshot: String, socket: Control = null) -> void:
 	var motion := InputEventMouseMotion.new()
 	motion.position = start
 	get_viewport().push_input(motion,true)
@@ -285,5 +317,8 @@ func _move_with_preview(start: Vector2, end: Vector2, screenshot: String) -> voi
 	for node in get_tree().root.find_children("*","Control",true,false):
 		if node.get_meta("drag_preview",false): preview = node
 	assert(preview != null and preview.find_children("*","ValueSlot",true,false).size() >= 2, "reporter preview must keep its operands rather than collapse to a label")
+	if socket != null:
+		assert(socket.highlighted and preview.get_global_rect().intersects(socket.get_global_rect()),
+			"the condition socket must highlight where the preview overlaps before release")
 	await _capture(screenshot)
 	await _mouse(end,MOUSE_BUTTON_LEFT,false)

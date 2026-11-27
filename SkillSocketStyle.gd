@@ -1,6 +1,8 @@
 extends StyleBox
 
 const JOIN_OVERLAP := 5 # Four-pixel tab plus the shared one-pixel outline.
+const CORNER_TRIM := 5.0
+const TYPED_CORNER_TRIM := 2.5
 @export var shape := "boolean"
 @export var fill := Color("173d3e")
 @export var edge := Color("448783")
@@ -46,9 +48,9 @@ func _draw(canvas: RID, rect: Rect2) -> void:
 	if w <= 0 or h <= 0: return
 	var points: PackedVector2Array
 	if shape == "hat" and w >= 70 and h >= 24:
-		points = PackedVector2Array([Vector2(x,y+12),Vector2(x+6,y+6),Vector2(x+18,y+1),Vector2(x+38,y),Vector2(x+56,y+5),Vector2(x+66,y+12),Vector2(x+w-3,y+12),Vector2(x+w,y+15),Vector2(x+w,y+h-4),Vector2(x+40,y+h-4),Vector2(x+36,y+h),Vector2(x+20,y+h),Vector2(x+16,y+h-4),Vector2(x,y+h-4)])
+		points = PackedVector2Array([Vector2(x,y+12),Vector2(x+6,y+6),Vector2(x+18,y+1),Vector2(x+38,y),Vector2(x+56,y+5),Vector2(x+66,y+12),Vector2(x+w,y+12),Vector2(x+w,y+h-4),Vector2(x+40,y+h-4),Vector2(x+36,y+h),Vector2(x+20,y+h),Vector2(x+16,y+h-4),Vector2(x,y+h-4)])
 	elif shape == "terminal" and w >= 44 and h >= 12:
-		points = PackedVector2Array([Vector2(x,y),Vector2(x+16,y),Vector2(x+20,y+4),Vector2(x+36,y+4),Vector2(x+40,y),Vector2(x+w-2,y),Vector2(x+w,y+2),Vector2(x+w,y+h-2),Vector2(x+w-2,y+h),Vector2(x+2,y+h),Vector2(x,y+h-2)])
+		points = PackedVector2Array([Vector2(x,y),Vector2(x+16,y),Vector2(x+20,y+4),Vector2(x+36,y+4),Vector2(x+40,y),Vector2(x+w,y),Vector2(x+w,y+h),Vector2(x,y+h)])
 	elif shape in ["stack", "control"] and w >= 44 and h >= 12:
 		points = PackedVector2Array([Vector2(x,y),Vector2(x+16,y),Vector2(x+20,y+4),Vector2(x+36,y+4),Vector2(x+40,y),Vector2(x+w,y)])
 		var previous_end := y + 6
@@ -79,6 +81,24 @@ func _draw(canvas: RID, rect: Rect2) -> void:
 		flat.set_corner_radius_all(4)
 		flat.draw(canvas, rect)
 		return
+	points = _round_corners(points, TYPED_CORNER_TRIM if shape in ["boolean", "side"] else CORNER_TRIM)
 	RenderingServer.canvas_item_add_polygon(canvas, points, PackedColorArray([fill]))
 	points.append(points[0])
 	RenderingServer.canvas_item_add_polyline(canvas, points, PackedColorArray([edge]), width, true)
+
+
+static func _round_corners(outline: PackedVector2Array, trim: float) -> PackedVector2Array:
+	var rounded := PackedVector2Array()
+	for i in range(outline.size()):
+		var corner := outline[i]
+		var previous := outline[posmod(i - 1, outline.size())]
+		var next := outline[(i + 1) % outline.size()]
+		# Limit each curve to its own half of an edge so the short tabs and
+		# narrow branch walls keep their shape at every block size.
+		var before := corner.move_toward(previous, minf(trim, corner.distance_to(previous) * 0.48))
+		var after := corner.move_toward(next, minf(trim, corner.distance_to(next) * 0.48))
+		rounded.append(before)
+		for step in range(1, 5):
+			var weight := step / 4.0
+			rounded.append(before.lerp(corner, weight).lerp(corner.lerp(after, weight), weight))
+	return rounded

@@ -16,16 +16,16 @@ extends HBoxContainer
 # ============================================
 
 var block: Node           # owning SkillBlock (for _drop_condition)
-var payload: Dictionary = {}   # boolean_block / logic_block payload
-var preview_text: String = ""
+var _condition: Dictionary
+var _condition_path: Array
 var _drag_parent: WeakRef
 
 
-func setup(p_block: Node, p_cond: Dictionary, p_payload: Dictionary) -> void:
+func setup(p_block: Node, p_cond: Dictionary, p_path: Array) -> void:
 	tooltip_text = SkillHelp.description("logic", str(p_cond.get("logic"))) if p_cond.has("logic") else SkillHelp.description("boolean", "has_buff" if p_cond.get("op", "") == "has" else "compare")
 	block = p_block
-	payload = p_payload
-	preview_text = Locale.t("skill_editor.logic_and") if p_cond.has("logic") else Locale.t("skill_editor.boolean_compare")
+	_condition = p_cond
+	_condition_path = p_path
 	# STOP so this reporter (not the if block) is the drag source. The GUI
 	# pipeline calls Control.get_drag_data, which invokes the forwarding
 	# callbacks below (a bare GDVIRTUAL _get_drag_data is not consulted), so
@@ -39,24 +39,26 @@ func setup(p_block: Node, p_cond: Dictionary, p_payload: Dictionary) -> void:
 
 
 func _slot_get_drag_data(_pos: Vector2):
-	if payload.is_empty():
+	var condition := SkillBlock.condition_at_path(_condition, []).duplicate(true)
+	if condition.is_empty():
 		return null
 	var socket: Control = get_parent()
 	_drag_parent = weakref(socket)
 	socket.modulate.a = 0.48
 	var point := get_global_transform() * _pos
 	var grab := socket.get_global_transform().affine_inverse() * point
-	var preview := SkillBlock.make_condition_preview(payload.get("boolean", payload.get("condition", {})))
+	var preview := SkillBlock.make_condition_preview(condition)
 	preview.scale = socket.get_global_transform().get_scale()
 	preview.position = -grab * preview.scale
 	preview.size = preview.get_combined_minimum_size()
-	var wrap := Control.new()
-	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	wrap.add_child(preview)
-	set_drag_preview(wrap)
-	var result := payload.duplicate()
-	result["grab_offset"] = [grab.x,grab.y]
-	return result
+	preload("res://SkillDragPreview.gd").show(self, preview)
+	return {
+		"type": "boolean_block",
+		"boolean": condition,
+		"from_cond_slot": block,
+		"from_condition_path": _condition_path.duplicate(),
+		"grab_offset": [grab.x, grab.y],
+	}
 
 func _notification(what: int) -> void:
 	if what == NOTIFICATION_DRAG_END and _drag_parent != null:

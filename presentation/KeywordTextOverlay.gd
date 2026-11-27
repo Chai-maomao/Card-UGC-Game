@@ -1,4 +1,4 @@
-extends RichTextLabel
+extends "res://presentation/KeywordInlineLabel.gd"
 
 # Keep the original control and its plain text API, input and layout ownership.
 # Only the displayed text is enriched. No gameplay or saved text is rewritten.
@@ -61,7 +61,8 @@ func _ready() -> void:
 	bbcode_enabled=true
 	fit_content=false
 	scroll_active=false
-	mouse_filter=Control.MOUSE_FILTER_IGNORE
+	mouse_filter=Control.MOUSE_FILTER_PASS
+	mouse_behavior_recursive=Control.MOUSE_BEHAVIOR_ENABLED
 	focus_mode=Control.FOCUS_NONE
 	set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
 
@@ -129,7 +130,8 @@ func _sync(source: Control) -> void:
 	add_theme_constant_override("outline_size",outline_size)
 	if is_label: add_theme_stylebox_override("normal",source.get_theme_stylebox("normal"))
 	autowrap_mode=wrap
-	text=_aligned(Words.colored(source.text,pixels,is_label),alignment)
+	var dark_surface := ink.get_luminance() > 0.42
+	text=_aligned(Words.colored(source.text,pixels,is_label,dark_surface),alignment)
 	var content := Rect2(Vector2.ZERO,source.size)
 	if not is_label:
 		var style: StyleBox=source.get_theme_stylebox("normal")
@@ -143,10 +145,10 @@ func _sync(source: Control) -> void:
 		var high: int=source.text.length()
 		while low<high:
 			var middle: int=(low+high+1)/2
-			text=_aligned(Words.colored(source.text.left(middle)+"…",pixels,is_label),alignment)
+			text=_aligned(Words.colored(source.text.left(middle)+"…",pixels,is_label,dark_surface),alignment)
 			if get_content_width()<=content.size.x: low=middle
 			else: high=middle-1
-		text=_aligned(Words.colored(source.text.left(low)+"…",pixels,is_label),alignment)
+		text=_aligned(Words.colored(source.text.left(low)+"…",pixels,is_label,dark_surface),alignment)
 	# RichTextLabel's line height includes the icon; centre it on the source face.
 	if wrap==TextServer.AUTOWRAP_OFF:
 		var block_height: float=get_content_height()

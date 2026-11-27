@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400">
+  <defs>
+    <radialGradient id="glow"><stop stop-color="#fff" stop-opacity=".07"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+  </defs>
+  <circle cx="201" cy="200" r="193" fill="url(#glow)"/>
+  <g fill="none" stroke="#fff" stroke-width="1.35">
+    <path d="M57 151V97l28-28h230l28 28v54m0 104v54l-28 28H85l-28-28v-54" opacity=".12"/>
+    <path d="M75 133v-27l18-18h214l18 18v27m0 140v27l-18 18H93l-18-18v-27" opacity=".08"/>
+    <g opacity=".18" transform="rotate(-14 147 201)">
+      <rect x="97" y="129" width="100" height="144" rx="8"/>
+      <path d="M111 152q16-2 17-12h38q2 11 17 12v98q-16 2-17 12h-38q-1-10-17-12z"/>
+    </g>
+    <g opacity=".18" transform="rotate(14 253 201)">
+      <rect x="203" y="129" width="100" height="144" rx="8"/>
+      <path d="M217 152q16-2 17-12h38q2 11 17 12v98q-16 2-17 12h-38q-1-10-17-12z"/>
+    </g>
+  </g>
+</svg>

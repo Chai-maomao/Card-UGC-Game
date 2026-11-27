@@ -167,10 +167,13 @@ func _test_clone_and_lethal_preview(battle) -> void:
 	var clone: CardData = battle.game.player_hand[0]
 	_assert(clone != enemy and clone.instance_id != enemy.instance_id, "clone must have independent object/runtime identity")
 	_assert(clone.card_name == enemy.card_name and clone.hp == enemy.hp and clone.temp_hp == enemy.temp_hp and clone.effective_atk() == enemy.effective_atk() and clone.skills == enemy.skills, "clone must preserve the enemy card's complete current state")
-	var wrong_side := CardData.new("己方不能克隆", 1, 2, 1)
-	battle.game.player_field.slots[1] = wrong_side
-	SkillEffectApplier._apply_clone_enemy(wrong_side, 0, clone_effect, battle.game.make_skill_context(0, 1, 1))
-	_assert(battle.game.player_hand.size() == 1, "clone must reject a friendly battlefield target")
+	var ally := CardData.new("己方克隆目标", 1, 2, 1)
+	battle.game.player_field.slots[1] = ally
+	# Directed effects now use the selected unit; legacy side metadata does not filter it.
+	var directed_effect := SkillTargetResolver.normalize_effect_target(clone_effect)
+	SkillEffectApplier._apply_clone_enemy(ally, 0, directed_effect, battle.game.make_skill_context(0, 1, 1))
+	_assert(battle.game.player_hand.size() == 2 and battle.game.player_hand.back() != ally
+		and battle.game.player_hand.back().card_name == ally.card_name, "a directed clone must copy the selected friendly unit")
 
 	battle.game.player_hand.clear()
 	battle.game.player_field.slots[1] = null
@@ -193,6 +196,10 @@ func _test_clone_and_lethal_preview(battle) -> void:
 	battle.activate_targeting = true
 	battle.activate_source_slot = 0
 	battle.activate_skill_idx = 0
+	battle.game.turn_number = 1
+	battle._update_slot_highlights()
+	_assert(not enemy_slot._lethal_hint, "a hostile damage skill must not show a lethal hint on the blocked first round")
+	battle.game.turn_number = 2
 	battle._update_slot_highlights()
 	_assert(enemy_slot._lethal_hint, "a guaranteed lethal targeted damage skill must receive the red lethal hint")
 	source.skills[0].probability = 50

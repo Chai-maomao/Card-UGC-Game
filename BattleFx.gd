@@ -11,7 +11,6 @@ const RING_SCALE := 2.2
 const GLOW_DOT_SIZE := 22.0
 const CARD_BACK_SIZE := Vector2(52, 72)
 const COMBAT_TEXT_RISE_TIME := 0.82
-const PROJECTILE_TIME := 0.35
 const CARD_DRAW_STAGGER := 0.065
 const CARD_DRAW_TRAVEL_TIME := 0.40
 
@@ -556,37 +555,26 @@ func overflow_card_control(layer: CanvasLayer, ghost: Control, start: Vector2, h
 	tween.tween_callback(ghost.queue_free)
 
 
-func spell_cast_projectile(layer: CanvasLayer, start: Vector2, end: Vector2, ui_scale: float = 1.0) -> void:
-	if layer == null:
+func directed_trail(layer: Node, start: Vector2, finish: Vector2, tint: Color, ui_scale: float, ai_attack := false) -> void:
+	if DisplayServer.get_name() == "headless" or AppPreferences.get_value("reduced_motion"):
 		return
-	_ensure_textures()
-	var dot := _acquire_control("projectile", func() -> Control:
-		var d := TextureRect.new()
-		d.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		d.texture = _glow_dot
-		return d)
-	dot.texture = _glow_dot
-	dot.modulate = Color(0.55, 0.8, 1.0, 0.95)
-	var dot_size := Vector2(GLOW_DOT_SIZE, GLOW_DOT_SIZE) * ui_scale
-	dot.size = dot_size
-	dot.pivot_offset = dot_size / 2
-	dot.position = start - dot_size / 2
-	layer.add_child(dot)
-	layer.move_child(dot, layer.get_child_count() - 1)
-	var mid: Vector2 = (start + end) / 2 + Vector2(0, -40) * ui_scale
-	var twn := create_tween()
-	twn.tween_method(func(t: float):
-		if not is_instance_valid(dot):
-			return
-		var a := start.lerp(mid, t)
-		var b := mid.lerp(end, t)
-		dot.global_position = a.lerp(b, t) - dot.size / 2
-	, 0.0, 1.0, PROJECTILE_TIME).set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
-	twn.tween_callback(func():
-		if is_instance_valid(dot):
-			impact_ring(layer, dot.global_position + dot.size / 2, false, Color(0.45, 0.7, 1.0, 0.5), ui_scale)
-			_release("projectile", dot)
-	)
+	var trail := Line2D.new()
+	trail.name = "AiStrikeTrail" if ai_attack else "DirectedActionTrail"
+	trail.set_meta("battle_fx_kind", "ai_strike" if ai_attack else "directed_action")
+	trail.width = 2.5 * ui_scale
+	trail.default_color = tint
+	trail.antialiased = true
+	trail.begin_cap_mode = Line2D.LINE_CAP_ROUND
+	trail.end_cap_mode = Line2D.LINE_CAP_ROUND
+	trail.z_index = 35
+	layer.add_child(trail)
+	var duration := 0.22 * GamePreferences.battle_animation_duration_scale()
+	var tween := trail.create_tween()
+	tween.tween_method(func(progress: float):
+		trail.points = PackedVector2Array([start.lerp(finish, maxf(0, progress - 0.18)), start.lerp(finish, progress)]),
+		0.0, 1.0, duration).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	await tween.finished
+	trail.queue_free()
 
 
 func shake_layer(layer: CanvasLayer, strength: float = 2.5) -> void:

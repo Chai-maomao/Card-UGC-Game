@@ -3,6 +3,8 @@ extends Control
 const BASE_VIEWPORT_SIZE := Vector2(1152, 648)
 const UITheme = preload("res://UITheme.gd")
 const DeckTile = preload("res://BattleDeckTile.gd")
+const PackRating = preload("res://MatchPackRating.gd")
+const LaunchFrame = preload("res://presentation/BattleLaunchFrame.gd")
 var card_ui_scene = preload("res://CardUI.tscn")
 
 @onready var back_button: Button = $Panel/VBoxContainer/TopBar/BackButton
@@ -24,7 +26,7 @@ var card_ui_scene = preload("res://CardUI.tscn")
 @onready var view_button: Button = footer.get_node("ViewButton")
 
 var selected_deck_id := ""
-var deck_tiles: Array[Button] = []
+var deck_tiles: Array[BattleDeckTile] = []
 var basic_controls: Dictionary = {}
 var advanced_button: Button
 var advanced_layer: CanvasLayer
@@ -32,15 +34,28 @@ var details_layer: CanvasLayer
 var details_grid: GridContainer
 var details_scroll: ScrollContainer
 var _deck_review: VBoxContainer
-var _deck_cover: TextureRect
+var _deck_preview: PanelContainer
+var _preview_cards: HBoxContainer
 var _deck_name: Label
+var room_mode := ""
+var room_rating := 0
+var room_confirm: Callable
+var room_back: Callable
+var _room_status: Label
+var _room_coefficient: Label
+var _room_busy := false
 
 func _ready() -> void:
 	get_viewport().size_changed.connect(_apply_responsive_layout)
 	UITheme.apply_app_background(self)
 	panel.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
+	if not room_mode.is_empty():
+		panel.grow_vertical = Control.GROW_DIRECTION_END
+		root_box.grow_vertical = Control.GROW_DIRECTION_END
 	UITheme.apply_panel(settings_panel, "dark")
 	UITheme.apply_title(title_label, 26)
+	top_bar.custom_minimum_size.y = 52
+	LaunchFrame.add_header_art(panel, top_bar, PlayerData.battle_select_mode if room_mode.is_empty() else room_mode)
 	UITheme.apply_label(selection_label, true)
 	UITheme.place_page_back(self, back_button)
 	UITheme.apply_button(confirm_button, "primary", false)
@@ -50,6 +65,9 @@ func _ready() -> void:
 	view_button.text = Locale.t("prep.view_cards")
 	view_button.pressed.connect(func(): _show_deck_details(selected_deck_id))
 	_build_deck_review()
+	_build_deck_preview()
+	if not room_mode.is_empty():
+		_build_room_details()
 	_build_settings()
 	_setup_deck_select()
 	_apply_texts()
@@ -60,9 +78,13 @@ func _ui_scale() -> float:
 	return minf(dimensions.x / BASE_VIEWPORT_SIZE.x, dimensions.y / BASE_VIEWPORT_SIZE.y) if dimensions.x > 0 and dimensions.y > 0 else 1.0
 
 func _rules_locked() -> bool:
-	return PlayerData.battle_select_mode == "hotseat_p2"
+	return not room_mode.is_empty() or PlayerData.battle_select_mode == "hotseat_p2"
 
 func _apply_texts() -> void:
+	if not room_mode.is_empty():
+		title_label.text = Locale.t("matchmaking.room_title", [Locale.t("matchmaking." + room_mode)])
+		confirm_button.text = Locale.t("team.ready")
+		return
 	match PlayerData.battle_select_mode:
 		"hotseat_p2":
 			title_label.text = Locale.t("select.player2_title")
@@ -90,7 +112,9 @@ func _setup_deck_select() -> void:
 		_update_selection()
 		back_button.grab_focus()
 		return
-	var preferred := PlayerData.current_deck_id
+	var preferred := PlayerData.current_deck_id if room_mode.is_empty() else PlayerData.matchmaking_deck_id
+	if PlayerData.get_deck(preferred).is_empty():
+		preferred = PlayerData.current_deck_id
 	_select_deck(preferred if not PlayerData.get_deck(preferred).is_empty() else deck_tiles[0].deck_id)
 	for tile in deck_tiles:
 		if tile.chosen:
@@ -112,8 +136,83 @@ func _update_selection() -> void:
 	confirm_button.disabled = count == 0
 	view_button.disabled = deck.is_empty()
 	_deck_name.text = PlayerData.deck_display_name(deck) if not deck.is_empty() else Locale.t("prep.selected_deck")
-	_deck_cover.texture = CardArtwork.deck_cover(deck.get("cards", []))
+	_refresh_deck_preview(deck.get("cards", []))
 	selection_label.visible = count == 0
+	if not room_mode.is_empty():
+		_update_room_deck(count)
+	_apply_responsive_layout()
+
+func _build_deck_preview() -> void:
+	_deck_preview = PanelContainer.new()
+	UITheme.apply_panel(_deck_preview, "dark")
+	deck_column.add_child(_deck_preview)
+	var inset := MarginContainer.new()
+	inset.add_theme_constant_override("margin_left", 12)
+	inset.add_theme_constant_override("margin_right", 12)
+	inset.add_theme_constant_override("margin_top", 12)
+	inset.add_theme_constant_override("margin_bottom", 16)
+	_deck_preview.add_child(inset)
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 12)
+	inset.add_child(box)
+	var heading := Label.new()
+	heading.text = Locale.t("launch.deck_preview")
+	UITheme.apply_title(heading, 18)
+	box.add_child(heading)
+	_preview_cards = HBoxContainer.new()
+	_preview_cards.add_theme_constant_override("separation", 12)
+	box.add_child(_preview_cards)
+
+func _refresh_deck_preview(cards: Array) -> void:
+	for child in _preview_cards.get_children():
+		child.free()
+	_deck_preview.visible = not cards.is_empty()
+	for card: CardData in cards.slice(0, 4):
+		var preview: Control = card_ui_scene.instantiate()
+		_preview_cards.add_child(preview)
+		preview.set_card(card)
+		preview.set_battle_layout_preview(true)
+		preview.set_meta("suppress_hover_hint", true)
+		preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		for part in preview.find_children("*", "Control", true, false):
+			part.mouse_filter = Control.MOUSE_FILTER_IGNORE
+
+func _build_room_details() -> void:
+	_room_status = Label.new()
+	_room_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UITheme.apply_label(_room_status, true)
+	_deck_review.add_child(_room_status)
+	_deck_review.move_child(_room_status, footer.get_index() + 1)
+	_room_coefficient = Label.new()
+	_room_coefficient.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_room_coefficient.mouse_filter = Control.MOUSE_FILTER_PASS
+	_room_coefficient.tooltip_text = Locale.t("matchmaking.pack_explanation")
+	UITheme.apply_label(_room_coefficient)
+	_deck_review.add_child(_room_coefficient)
+	_deck_review.move_child(_room_coefficient, footer.get_index())
+
+func _update_room_deck(count: int) -> void:
+	var minimum := PackRating.min_cards()
+	var eligible := count >= minimum
+	_room_coefficient.visible = eligible and room_mode == "ranked"
+	if _room_coefficient.visible:
+		var cards := _selected_cards().map(PackRating.prepare_card)
+		var stats := PackRating.evaluate(cards, room_rating)
+		_room_coefficient.text = Locale.t("matchmaking.room_multiplier", [stats.multiplier])
+	selection_label.visible = not eligible
+	if not eligible:
+		selection_label.text = Locale.t("matchmaking.deck_too_small", [minimum])
+	confirm_button.disabled = _room_busy or not eligible
+
+func update_room_status(message: String, committed: bool, busy: bool = false) -> void:
+	_room_status.text = message
+	_room_status.visible = not message.is_empty()
+	_room_busy = busy
+	confirm_button.text = Locale.t("team.cancel_ready" if committed else "team.ready")
+	UITheme.apply_button(confirm_button, "outlined" if committed else "primary", false)
+	for tile in deck_tiles:
+		tile.set_locked(committed or busy)
+	_update_room_deck(PlayerData.get_cards_for_deck(selected_deck_id).size())
 	_apply_responsive_layout()
 
 func _build_deck_review() -> void:
@@ -121,11 +220,6 @@ func _build_deck_review() -> void:
 	_deck_review.add_theme_constant_override("separation", UITheme.Tokens.SPACING[1])
 	settings_layout.add_child(_deck_review)
 	settings_layout.move_child(_deck_review, 0)
-	_deck_cover = TextureRect.new()
-	_deck_cover.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
-	_deck_cover.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	_deck_cover.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	_deck_review.add_child(_deck_cover)
 	_deck_name = Label.new()
 	_deck_name.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	UITheme.apply_title(_deck_name, 20)
@@ -139,6 +233,26 @@ func _build_settings() -> void:
 	heading.text = Locale.t("prep.battlefield")
 	UITheme.apply_title(heading, 20)
 	settings_box.add_child(heading)
+	if not room_mode.is_empty():
+		settings_box.reparent(settings_layout, false)
+		settings_layout.move_child(settings_box, settings_scroll.get_index())
+		settings_scroll.hide()
+		for key in ["starting_hp", "mana_per_turn", "draw_per_turn"]:
+			var rule := HBoxContainer.new()
+			rule.add_theme_constant_override("separation", 12)
+			settings_box.add_child(rule)
+			var label := Label.new()
+			label.set_meta("keyword_literal", true)
+			label.text = Locale.t("prep." + key)
+			label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+			UITheme.apply_label(label, true)
+			rule.add_child(label)
+			var value := Label.new()
+			value.text = str(_display_rules()[key])
+			UITheme.apply_label(value)
+			rule.add_child(value)
+		_build_rules_link()
+		return
 	if PlayerData.battle_select_mode == "practice":
 		var difficulty := Label.new()
 		difficulty.text = Locale.t("prep.difficulty", [Locale.t("prep.difficulty_" + PlayerData.practice_ai_difficulty)])
@@ -151,14 +265,14 @@ func _build_settings() -> void:
 		settings_box.add_child(box)
 		var label := Label.new()
 		label.set_meta("keyword_literal",true)
-		label.text = Locale.t("battle_config.mana_initial" if key == "mana_per_turn" and PlayerData.battle_config.has("mana_increment") else "prep." + key)
+		label.text = Locale.t("battle_config.mana_initial" if key == "mana_per_turn" and _display_rules().has("mana_increment") else "prep." + key)
 		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		UITheme.apply_label(label)
 		box.add_child(label)
 		var spin := SpinBox.new()
 		spin.min_value = spec[1]
 		spin.max_value = spec[2]
-		spin.value = PlayerData.battle_config.get(key, PlayerData.DEFAULT_BATTLE_CONFIG[key])
+		spin.value = _display_rules().get(key, PlayerData.DEFAULT_BATTLE_CONFIG[key])
 		spin.editable = not _rules_locked()
 		spin.custom_minimum_size = Vector2(76, 32)
 		UITheme.apply_input(spin)
@@ -167,24 +281,29 @@ func _build_settings() -> void:
 			if not _rules_locked(): PlayerData.battle_config[setting] = int(value)
 		)
 		basic_controls[key] = spin
-	advanced_button = Button.new()
-	advanced_button.name = "AdvancedSettingsButton"
-	advanced_button.text = Locale.t("prep.rules_link")
-	UITheme.apply_selection_entry(advanced_button)
-	advanced_button.pressed.connect(_show_battle_config_popup)
-	settings_layout.add_child(advanced_button)
+	_build_rules_link()
 	var notice := Label.new()
-	notice.text = Locale.t("prep.rules_locked") if _rules_locked() else (Locale.t("prep.online_rules") if PlayerData.battle_select_mode == "online" else Locale.t("prep.rules_hint"))
+	notice.text = Locale.t("prep.rules_locked")
 	notice.visible = _rules_locked()
 	notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	UITheme.apply_label(notice, true)
 	settings_box.add_child(notice)
 
+func _build_rules_link() -> void:
+	advanced_button = Button.new()
+	advanced_button.name = "AdvancedSettingsButton"
+	advanced_button.text = Locale.t("prep.rules_link")
+	UITheme.apply_selection_entry(advanced_button)
+	advanced_button.size_flags_horizontal = Control.SIZE_SHRINK_END
+	advanced_button.pressed.connect(_show_battle_config_popup)
+	settings_layout.add_child(advanced_button)
+
 func _sync_basic_controls() -> void:
 	for key in basic_controls:
 		basic_controls[key].set_value_no_signal(PlayerData.battle_config.get(key, PlayerData.DEFAULT_BATTLE_CONFIG[key]))
-	var mana_label: Label = basic_controls["mana_per_turn"].get_parent().get_child(0)
-	mana_label.text = Locale.t("battle_config.mana_initial" if PlayerData.battle_config.has("mana_increment") else "prep.mana_per_turn")
+	if basic_controls.has("mana_per_turn"):
+		var mana_label: Label = basic_controls["mana_per_turn"].get_parent().get_child(0)
+		mana_label.text = Locale.t("battle_config.mana_initial" if PlayerData.battle_config.has("mana_increment") else "prep.mana_per_turn")
 
 func _apply_responsive_layout() -> void:
 	var s := _ui_scale()
@@ -208,8 +327,11 @@ func _apply_responsive_layout() -> void:
 	title_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	title_label.add_theme_font_size_override("font_size", maxi(20, int(26 * s)))
 	settings_panel.custom_minimum_size.x = maxf(292, 322 * s)
-	_deck_cover.custom_minimum_size.y = roundf(78 * s)
-	_deck_cover.visible = not compact and _deck_cover.texture != null
+	var preview_width := get_viewport_rect().size.x - 2 * (edge + inset) - settings_panel.custom_minimum_size.x \
+		- content.get_theme_constant("separation") - 98
+	var preview_scale := clampf(preview_width / 480.0, 0.42, 1.18)
+	for preview in _preview_cards.get_children():
+		preview.apply_ui_scale(preview_scale)
 	var settings_margin := $Panel/VBoxContainer/Content/SettingsPanel/Margin
 	for side in ["left", "right", "top", "bottom"]:
 		settings_margin.add_theme_constant_override("margin_" + side, 8)
@@ -220,9 +342,11 @@ func _apply_responsive_layout() -> void:
 	for button in [confirm_button, view_button, advanced_button]:
 		button.custom_minimum_size = Vector2(0, maxf(34, roundf(42 * s)))
 		button.add_theme_font_size_override("font_size", maxi(13, int(16 * s)))
-	var available_height := height - panel.offset_top - bottom - inset * 2 - title_label.get_combined_minimum_size().y - root_box.get_theme_constant("separation")
+	var available_height := height - panel.offset_top - bottom - inset * 2 - top_bar.get_combined_minimum_size().y - root_box.get_theme_constant("separation")
 	var selection_height := selection_label.get_combined_minimum_size().y + deck_column.get_theme_constant("separation") if selection_label.visible else 0.0
-	scroll_container.custom_minimum_size.y = ceilf(minf(deck_grid.get_combined_minimum_size().y, maxf(48, available_height - selection_height)))
+	var preview_height := _deck_preview.get_combined_minimum_size().y + deck_column.get_theme_constant("separation") if _deck_preview.visible else 0.0
+	scroll_container.custom_minimum_size.y = ceilf(minf(deck_grid.get_combined_minimum_size().y,
+		maxf(48, available_height - selection_height - preview_height)))
 	var frame_insets := settings_panel.get_theme_stylebox("panel").get_minimum_size().y + 16
 	var fixed_height := _deck_review.get_combined_minimum_size().y + advanced_button.custom_minimum_size.y + 2 * settings_layout.get_theme_constant("separation") + frame_insets
 	settings_scroll.custom_minimum_size.y = ceilf(minf(settings_box.get_combined_minimum_size().y, maxf(56, available_height - fixed_height)))
@@ -236,10 +360,10 @@ func _apply_responsive_layout() -> void:
 			frame.offset_top = -half.y
 			frame.offset_bottom = half.y
 	if is_instance_valid(details_grid):
-		var preview_scale := maxf(1.5, s * 1.45)
-		details_grid.columns = maxi(1, int((get_viewport_rect().size.x * 0.88 - 52) / (120 * preview_scale + 40)))
+		var detail_scale := maxf(1.5, s * 1.45)
+		details_grid.columns = maxi(1, int((get_viewport_rect().size.x * 0.88 - 52) / (120 * detail_scale + 40)))
 		for holder in details_grid.get_children():
-			holder.get_child(0).get_child(0).apply_ui_scale(preview_scale)
+			holder.get_child(0).get_child(0).apply_ui_scale(detail_scale)
 
 func _selected_cards() -> Array:
 	var result: Array = []
@@ -251,7 +375,10 @@ func _on_confirm_pressed() -> void:
 	if cards.is_empty():
 		_show_message(Locale.t("select.need_deck"))
 		return
-	_start_battle_with_cards(cards)
+	if room_confirm.is_valid():
+		room_confirm.call(selected_deck_id, cards)
+	else:
+		_start_battle_with_cards(cards)
 
 func _show_deck_details(deck_id: String) -> void:
 	if is_instance_valid(details_layer) or PlayerData.get_deck(deck_id).is_empty(): return
@@ -333,12 +460,15 @@ func _start_battle_with_cards(cards: Array) -> void:
 			for card in CardDatabase.starter_library():
 				opponent_cards.append(card.duplicate_card())
 			PlayerData.configure_practice_battle(cards, opponent_cards, PlayerData.practice_ai_difficulty)
+			PlayerData.battle_history_deck_name = PlayerData.deck_display_name(PlayerData.get_deck(selected_deck_id))
 			UIMotion.change_scene("res://Main.tscn")
 		"hotseat_p1":
 			PlayerData.begin_hotseat_battle_selection(cards)
+			PlayerData.pending_hotseat_history_deck_name = PlayerData.deck_display_name(PlayerData.get_deck(selected_deck_id))
 			UIMotion.replace_scene(scene_file_path)
 		"hotseat_p2":
 			PlayerData.configure_hotseat_battle(PlayerData.pending_hotseat_p1_deck, cards)
+			PlayerData.battle_history_deck_name = PlayerData.pending_hotseat_history_deck_name
 			PlayerData.hotseat_opening_player = NetworkManager.roll_opening_player()
 			UIMotion.change_scene("res://Main.tscn")
 		"online":
@@ -347,6 +477,9 @@ func _start_battle_with_cards(cards: Array) -> void:
 
 
 func _on_back_pressed() -> void:
+	if room_back.is_valid():
+		room_back.call()
+		return
 	if PlayerData.battle_select_mode == "online":
 		UIMotion.go_back("res://MultiplayerMenu.tscn")
 	else:
@@ -355,9 +488,12 @@ func _on_back_pressed() -> void:
 
 func _show_battle_config_popup(_cards: Array = []) -> void:
 	if is_instance_valid(advanced_layer): return
-	advanced_layer = preload("res://presentation/BattleRulesEditor.gd").open(self,PlayerData.battle_config.duplicate(true),_rules_locked,func(config):
+	advanced_layer = preload("res://presentation/BattleRulesEditor.gd").open(self,_display_rules().duplicate(true),_rules_locked,func(config):
 		PlayerData.battle_config = config
 		_sync_basic_controls(),_close_advanced)
+
+func _display_rules() -> Dictionary:
+	return PlayerData.battle_config if room_mode.is_empty() else PlayerData.DEFAULT_BATTLE_CONFIG
 
 
 func _show_message(text: String) -> void:

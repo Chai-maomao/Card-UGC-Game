@@ -121,10 +121,7 @@ func _get_drag_data(_at_position: Vector2):
 			for state in ["normal","hover","pressed","hover_pressed"]: preview.add_theme_stylebox_override(state,lifted)
 		preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		for child in preview.find_children("*", "Control", true, false): child.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var drag_control := Control.new()
-		drag_control.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		drag_control.add_child(preview)
-		set_drag_preview(drag_control)
+		preload("res://SkillDragPreview.gd").show(self, preview)
 		_dragging = true
 		_animate_to(Vector2.ONE, Color(0.90, 0.92, 0.94, 0.55), 0.08)
 	if var_id != "":

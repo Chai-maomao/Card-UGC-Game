@@ -26,6 +26,13 @@ func _ready() -> void:
 	var canvas: Control = workbench.workspace
 	assert(not workbench.preview_section.visible)
 	await _capture("workspace-empty")
+	await _click(editor._template_btn.get_global_rect().get_center())
+	await _settle()
+	var templates := editor.get_node_or_null("SkillTemplatesPopup")
+	assert(templates != null and canvas.is_visible_in_tree(), "template selection must retain the workspace")
+	await _capture("workspace-templates")
+	templates.dismiss()
+	await _settle()
 	# View the discard decoration without the live drag cleanup clearing it.
 	editor.set_process(false)
 	editor._set_palette_discard_highlight(true)
@@ -48,17 +55,22 @@ func _ready() -> void:
 	await _click(workbench.zoom_label.get_global_rect().get_center())
 
 	# Drag a palette block onto blank canvas at reduced zoom.
+	# A trigger change can rebuild both the palette and category rail in one frame.
+	editor._build_palette()
 	editor.palette_search.text = Locale.term("effect", SkillEngine.EFFECT_DAMAGE)
 	editor._filter_palette(editor.palette_search.text)
 	await _settle()
 	var defense: Button
 	for button in workbench.category_rail.get_children():
-		if button.text == Locale.t("skill_editor.palette_defense"): defense = button
+		if button.text == Locale.t("skill_editor.palette_defense"):
+			defense = button
+			break
 	assert(defense != null)
 	await _click(defense.get_global_rect().get_center())
 	await _settle()
 	await _capture("workspace-category-click")
 	assert(editor.palette_search.text.is_empty(), "category navigation must leave filtered search")
+	assert(defense.button_pressed, "category navigation after rebuild must select the visible category")
 	editor.palette_search.text = Locale.term("effect", SkillEngine.EFFECT_DAMAGE)
 	editor.palette_search.text_changed.emit(editor.palette_search.text)
 	await _settle()
@@ -80,9 +92,31 @@ func _ready() -> void:
 	# Grab the sentence text, not a narrow exposed border, and snap into the event.
 	var source: Vector2 = loose.get_global_transform() * Vector2(14, 14)
 	var hat: SkillBlock = editor.effects_list.get_child(0)
-	await _drag(source, hat.body_container.get_global_rect().get_center(), MOUSE_BUTTON_LEFT)
+	canvas.set_zoom(1.21, hat.global_position - canvas.global_position)
+	await _settle()
+	source = loose.get_global_transform() * Vector2(14, 14)
+	var marker := canvas.world.get_node("SnapMarker") as Line2D
+	var body: Vector2 = hat.body_container.get_global_rect().position
+	var grab: Vector2 = source - loose.global_position
+	var outside := body + grab + Vector2(12, -38)
+	var inside := body + grab + Vector2(12, -19)
+	await _drag(source, outside, MOUSE_BUTTON_LEFT, false)
+	assert(not marker.visible, "outside the capture range should not show a connector")
+	var approach := InputEventMouseMotion.new()
+	approach.position = inside
+	approach.global_position = inside
+	approach.relative = inside - outside
+	approach.button_mask = MOUSE_BUTTON_MASK_LEFT
+	get_viewport().push_input(approach, true)
+	await _settle()
+	assert(marker.visible, "the connector must render at the edge of the snap range at 121 percent")
+	await _capture("workspace-snap-range")
+	await _mouse(inside, MOUSE_BUTTON_LEFT, false)
 	await _settle()
 	assert(editor.effect_data.size() == 1 and editor.loose_groups.is_empty(), "free block must reconnect from its title face")
+	assert(not marker.visible, "the snap connector must clear after release")
+	canvas.set_zoom(0.65)
+	await _settle()
 	editor.effect_data[0].merge({"target":SkillEngine.TARGET_SINGLE,"target_side":SkillEngine.TARGET_SIDE_ENEMY},true)
 	editor._on_block_changed([0])
 	editor._refresh_script()
@@ -132,6 +166,7 @@ func _ready() -> void:
 	assert(workbench.card_preview.current_card_data.skills.size() == 1)
 	assert(PlayerData.card_draft == original, "preview must not save or mutate the draft")
 	await _capture("workspace-compiled")
+	await _verify_preview_width(workbench)
 	# The whole event stack can be moved by its header, even when the release
 	# stays over the original stack, without panning the entire workspace.
 	hat = editor.effects_list.get_child(0)
@@ -188,6 +223,17 @@ func _ready() -> void:
 	await _settle()
 	assert(editor.loose_groups.size()==1)
 	assert(workbench.compile_preview(),"unfinished disconnected blocks must not enter compilation")
+	hat = editor.effects_list.get_child(0)
+	connected = hat.body_container.get_child(1)
+	loose = canvas.loose_views[0].get_child(0)
+	await _drag(connected.get_global_transform() * Vector2(14, 14), loose.get_global_transform() * Vector2(14, 14), MOUSE_BUTTON_LEFT)
+	await _settle()
+	key = editor.loose_groups.keys()[0]
+	assert(editor.effect_data.size() == 1 and editor.loose_groups.size() == 1 and editor.loose_groups[key].effects.size() == 2,
+		"a connected block must snap into a loose stack")
+	editor._undo()
+	await _settle()
+	assert(workbench.compile_preview())
 	editor._move_effect([1], [], 0)
 	assert(not workbench.preview_section.visible)
 	assert(workbench.compile_preview())
@@ -278,6 +324,30 @@ func _capture(name: String) -> void:
 	await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png("res://artifacts/ui-refinement-20261113/%s.png" % name)
 
+func _verify_preview_width(workbench: RefCounted) -> void:
+	var summary: Label = workbench.compiled_summary
+	var original := summary.text
+	summary.text = "友方目标获得再生，每逢我方回合开始回复 1 点生命，持续 2 回合。为同一目标提高生命上限，持续到离场。"
+	await _settle()
+	var original_ratio: float = AppPreferences.get_value("skill_inspector_ratio")
+	var narrow_width: float = workbench.inspector.size.x
+	var narrow_lines := summary.get_line_count()
+	var divider: Control = workbench.inspector_divider
+	var center := divider.get_global_rect().get_center()
+	await _drag(center, center - Vector2(170, 0), MOUSE_BUTTON_LEFT)
+	await _settle()
+	assert(workbench.inspector.size.x > narrow_width and summary.get_line_count() < narrow_lines,
+		"widening the inspector must reduce the number of wrapped lines")
+	await _capture("workspace-preview-expanded")
+	center = divider.get_global_rect().get_center()
+	await _drag(center, center + Vector2(170, 0), MOUSE_BUTTON_LEFT)
+	await _settle()
+	assert(is_equal_approx(workbench.inspector.size.x, narrow_width) and summary.get_line_count() == narrow_lines,
+		"narrowing the inspector must wrap the same description back onto more lines")
+	await _capture("workspace-preview-narrow")
+	AppPreferences.set_value("skill_inspector_ratio", original_ratio)
+	summary.text = original
+
 func _mouse(point: Vector2, button: int, pressed: bool) -> void:
 	var event := InputEventMouseButton.new()
 	event.position = point
@@ -288,7 +358,7 @@ func _mouse(point: Vector2, button: int, pressed: bool) -> void:
 	get_viewport().push_input(event,true)
 	await get_tree().process_frame
 
-func _drag(start: Vector2, end: Vector2, button: int) -> void:
+func _drag(start: Vector2, end: Vector2, button: int, release := true) -> void:
 	var motion := InputEventMouseMotion.new()
 	motion.position = start
 	get_viewport().push_input(motion,true)
@@ -304,7 +374,8 @@ func _drag(start: Vector2, end: Vector2, button: int) -> void:
 		get_viewport().push_input(motion,true)
 		previous = point
 		await get_tree().process_frame
-	await _mouse(end, button, false)
+	if release:
+		await _mouse(end, button, false)
 
 func _click(point: Vector2) -> void:
 	var motion := InputEventMouseMotion.new()

@@ -485,7 +485,10 @@ func _check_remote_targeting_expiry(battle: Node) -> void:
 
 
 func _check_manual_forfeit_survives_recovery(battle: Node) -> void:
-	battle.abandon_battle_button.pressed.emit()
+	var pause_menu := preload("res://presentation/BattlePause.gd").new()
+	pause_menu.battle = battle
+	battle.add_child(pause_menu)
+	pause_menu._confirm_leave()
 	var prompt := battle.get_node_or_null("AbandonBattleConfirmation") as CanvasLayer
 	_assert(prompt != null and prompt.visible, "manual forfeit must show its confirmation")
 	NetworkManager._room_link_waiting = true
@@ -497,6 +500,7 @@ func _check_manual_forfeit_survives_recovery(battle: Node) -> void:
 		"recovering the link must preserve a manual forfeit decision")
 	if is_instance_valid(prompt):
 		prompt.queue_free()
+	pause_menu.queue_free()
 	await get_tree().process_frame
 
 

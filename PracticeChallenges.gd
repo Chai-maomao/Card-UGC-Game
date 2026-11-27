@@ -76,6 +76,7 @@ static func configure(game: RefCounted, id: String) -> void:
 	game.current_player = 1
 	game.is_player_turn = true
 	game.turn_number = 2
+	game.effective_actions_this_turn = 0
 	game.first_switch = false
 	game.state_revision = 0
 	game.stats = {1: game._new_stats(), 2: game._new_stats()}

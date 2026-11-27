@@ -35,6 +35,7 @@ func _reset() -> void:
 	battle._pending_hand_entry_ids.clear()
 	battle._pending_feedback_events.clear()
 	battle.reset_hand_ui_from_game_state()
+	battle._action_clock = preload("res://BattleActionClock.gd").new()
 	battle.battle_finished = false
 	finished = false
 	elapsed = 0.0
@@ -159,7 +160,7 @@ func _return_to_picker() -> void:
 	_close_popup()
 	NetworkManager.close_connection()
 	PlayerData.practice_challenge_id = ""
-	UIMotion.replace_scene("res://MainMenu.tscn", true, "challenge_picker:" + challenge_id)
+	UIMotion.replace_scene("res://presentation/ChallengeLaunch.tscn", true, "challenge:" + challenge_id)
 
 
 func _close_popup() -> void:
@@ -172,15 +173,27 @@ func _close_popup() -> void:
 func _process(delta: float) -> void:
 	if battle == null or finished:
 		return
-	if battle._turn_ending or battle._resolution_running or battle._resolution_pending_steps > 0:
+	if battle._turn_ending or battle.is_resolution_locked() or battle._deployment_feedback_delay() > 0 \
+		or not battle._hp_feedback_batches.is_empty():
 		return
 	elapsed += delta
 	if elapsed < 0.25:
 		return
 	elapsed = 0
-	if PracticeChallenges.succeeded(battle.game, challenge_id) or PracticeChallenges.failed(battle.game, challenge_id):
-		finished = true
-		_show()
+	finish_if_decided()
+
+
+func finish_if_decided() -> bool:
+	if finished:
+		return true
+	if not PracticeChallenges.succeeded(battle.game, challenge_id) and not PracticeChallenges.failed(battle.game, challenge_id):
+		return false
+	finished = true
+	battle.get_viewport().gui_cancel_drag()
+	battle.cancel_attack()
+	battle.update_entire_screen()
+	_show()
+	return true
 
 
 func _exit_tree() -> void:

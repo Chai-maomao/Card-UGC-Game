@@ -72,25 +72,36 @@ var _draft_save_at: float = 0.0
 # ============================================
 # Battle configuration (战斗前自定义参数)
 # ============================================
+const DEFAULT_FACE_DAMAGE_COMPENSATION_MANA := 1
+const MAX_FACE_DAMAGE_COMPENSATION_MANA := 10
 const DEFAULT_BATTLE_CONFIG := {
+	"action_time_enabled": true,
+	"action_time_seconds": preload("res://BattleActionClock.gd").DEFAULT_SECONDS,
+	"first_action_time_seconds": preload("res://BattleActionClock.gd").DEFAULT_FIRST_SECONDS,
 	"draw_pile_visible": false,
 	"draw_pile_ordered": false,
-	"mana_per_turn": 2,       # 每回合回费数量
+	"mana_per_turn": 3,       # 每回合回复的圣水
 	"draw_per_turn": 2,        # 每回合抽牌数量
 	"starting_hp": 30,         # 玩家初始血量
 	"second_extra_cards": 0,   # 后手第一回合补偿卡牌数
 	"second_extra_mana": 2,    # 后手第一回合补偿圣水（2000局校准：先手胜率49.95%）
 	"death_compensation": true,        # 战败补偿：卡牌被击杀时抽1张牌
-	"face_damage_compensation": false,  # 本体伤害补偿：每张攻击牌给1点临时圣水
+	"face_damage_compensation": false,  # 本体伤害补偿：按参战单位数发放临时圣水
 	"action_base": 3,
 	"action_empty_slot_factor": 1.0,
 	"action_empty_hand_factor": 0.5,
 	"action_mana_factor": 1.0,
 }
 var battle_config: Dictionary = DEFAULT_BATTLE_CONFIG.duplicate(true)
+var matchmaking_mode := ""
+var matchmaking_endpoint := ""
+var matchmaking_deck_id := ""
+var battle_history_deck_name := ""
+var pending_hotseat_history_deck_name := ""
 
 
 func _apply_battle_preparation(state: Dictionary) -> void:
+	battle_history_deck_name = ""
 	battle_mode = str(state.get("mode", "hotseat"))
 	hotseat_opening_player = int(state.get("hotseat_opening_player", 0))
 	practice_ai_difficulty = str(state.get("difficulty", "normal"))
@@ -111,6 +122,7 @@ func configure_practice_battle(player_cards: Array, opponent_cards: Array, diffi
 
 func begin_hotseat_battle_selection(player_one_cards: Array = []) -> void:
 	_apply_battle_preparation(BattlePrep.hotseat_pending(player_one_cards))
+	pending_hotseat_history_deck_name = ""
 	card_playtest_context = {}
 
 
@@ -484,7 +496,10 @@ func serialize_library() -> String:
 	_normalize_library()
 	var decks_array: Array = []
 	for deck in deck_library:
-		decks_array.append(serialize_deck(deck, true))
+		var data := serialize_deck(deck, true)
+		if deck.has("cover_instance_id"):
+			data["cover_instance_id"] = deck["cover_instance_id"]
+		decks_array.append(data)
 	var root := {"decks": decks_array, "version": 3}
 	return JSON.stringify(root, "\t")
 
@@ -521,6 +536,7 @@ func deserialize_library(json_string: String) -> Array:
 			"id": deck_data.get("id", make_id("deck")),
 			"name": deck_data.get("name", Locale.t("deck.default_name") if Engine.has_singleton("Locale") else "默认卡组"),
 			"cards": deck_cards,
+			"cover_instance_id": deck_data.get("cover_instance_id", ""),
 			"provenance": SharePackage.metadata(deck_data.get("provenance", {})),
 		})
 	if deck_library.is_empty() and not old_cards_by_id.is_empty():
@@ -555,12 +571,16 @@ func _normalize_library() -> void:
 				var old_card := _find_card_in_array(original_cards, card_id)
 				if old_card != null:
 					cards.append(prepare_deck_card(old_card, false))
-		normalized_decks.append({
+		var normalized := {
 			"id": deck.get("id", make_id("deck")),
 			"name": deck.get("name", Locale.t("deck.default_name") if Engine.has_singleton("Locale") else "默认卡组"),
 			"cards": cards,
 			"provenance": SharePackage.metadata(deck.get("provenance", {})),
-		})
+		}
+		var cover_id: Variant = deck.get("cover_instance_id", "")
+		if cover_id is String and not cover_id.is_empty() and LibraryRepo.find_instance_index(normalized, cover_id) >= 0:
+			normalized["cover_instance_id"] = cover_id
+		normalized_decks.append(normalized)
 		for card in cards:
 			card_library.append(card)
 	deck_library = normalized_decks
@@ -598,6 +618,21 @@ func card_content_fingerprint(card: CardData) -> String:
 	data.erase("parasite_cards")
 	data.erase("status_effects")
 	return JSON.stringify(data)
+
+
+func cards_have_same_content(first: CardData, second: CardData) -> bool:
+	return card_content_fingerprint(first) == card_content_fingerprint(second) \
+		and same_card_art(first.art_path, second.art_path) \
+		and (first.is_spell() or same_card_art(first.damaged_art_path, second.damaged_art_path))
+
+
+static func same_card_art(first: String, second: String) -> bool:
+	if first == second:
+		return true
+	if first.is_empty() or second.is_empty():
+		return false
+	var hash := FileAccess.get_sha256(first)
+	return not hash.is_empty() and hash == FileAccess.get_sha256(second)
 
 
 func _find_card_in_array(cards: Array, card_id: String) -> CardData:
@@ -653,6 +688,23 @@ func find_deck_card(deck_id: String, instance_id: String) -> CardData:
 func find_deck_card_index(deck_id: String, instance_id: String) -> int:
 	return LibraryRepo.find_instance_index(get_deck(deck_id), instance_id)
 
+func set_deck_cover(deck_id: String, instance_id: String) -> bool:
+	var deck := get_deck(deck_id)
+	if deck.is_empty() or (not instance_id.is_empty() and LibraryRepo.find_instance_index(deck, instance_id) < 0):
+		return false
+	var previous: String = deck.get("cover_instance_id", "")
+	if previous == instance_id:
+		return true
+	deck["cover_instance_id"] = instance_id
+	if save_library():
+		return true
+	var restored := get_deck(deck_id)
+	if previous.is_empty():
+		restored.erase("cover_instance_id")
+	else:
+		restored["cover_instance_id"] = previous
+	return false
+
 
 func create_deck(deck_name: String, cards: Array = []) -> Dictionary:
 	var deck_cards: Array = []
@@ -702,13 +754,13 @@ func sync_beginner_default_deck(deck_name: String = BEGINNER_DEFAULT_DECK_NAME) 
 
 
 func find_deck_conflict(deck_id: String, card: CardData, ignore_instance_id: String = "") -> Dictionary:
-	for local in get_cards_for_deck(deck_id):
-		if local.instance_id == ignore_instance_id:
-			continue
-		if local.card_name == card.card_name:
-			if card_content_fingerprint(local) == card_content_fingerprint(card):
-				return {"kind": "same", "card": local}
-			return {"kind": "conflict", "card": local}
+	return find_card_conflict(get_cards_for_deck(deck_id), card, ignore_instance_id)
+
+
+func find_card_conflict(cards: Array, card: CardData, ignore_instance_id: String = "") -> Dictionary:
+	for local: CardData in cards:
+		if local.instance_id != ignore_instance_id and local.card_name == card.card_name:
+			return {"kind": "same" if cards_have_same_content(local, card) else "conflict", "card": local}
 	return {"kind": "none"}
 
 
@@ -805,23 +857,34 @@ func remove_deck_cards(deck_id: String, instance_ids: Array) -> int:
 	return removed
 
 
-func copy_cards_between_decks(source_deck_id: String, instance_ids: Array, target_deck_ids: Array) -> Dictionary:
+func prepare_card_copies(source_deck_id: String, instance_ids: Array, target_deck_ids: Array) -> Dictionary:
 	var added: int = 0
 	var skipped: int = 0
 	var conflicts: Array = []
-	for target_deck_id in target_deck_ids:
-		for instance_id in instance_ids:
-			var card := find_deck_card(source_deck_id, instance_id)
-			if card == null:
-				continue
-			var result := add_card_copy_to_deck(target_deck_id, card, true)
-			match result.get("kind", ""):
-				"added": added += 1
+	var card_lists := {}
+	var selected: Array[CardData] = []
+	for card: CardData in get_cards_for_deck(source_deck_id):
+		if card.instance_id in instance_ids:
+			selected.append(card)
+	for deck_id: String in target_deck_ids:
+		var deck := get_deck(deck_id)
+		if deck.is_empty() or deck_id == source_deck_id or card_lists.has(deck_id):
+			continue
+		var cards: Array = deck.cards.duplicate()
+		var unresolved_names := {}
+		for card in selected:
+			var kind := "conflict" if unresolved_names.has(card.card_name) else str(find_card_conflict(cards, card).kind)
+			match kind:
+				"none":
+					cards.append(prepare_deck_card(card))
+					added += 1
 				"same": skipped += 1
-				"conflict": conflicts.append({"target_deck_id": target_deck_id, "local": result.get("card"), "incoming": card.duplicate_card()})
-	rebuild_card_library_cache()
-	save_library()
-	return {"added": added, "skipped": skipped, "conflicts": conflicts}
+				"conflict":
+					unresolved_names[card.card_name] = true
+					conflicts.append({"target_deck_id": deck_id, "incoming": card})
+		if cards.size() != deck.cards.size() or not unresolved_names.is_empty():
+			card_lists[deck_id] = cards
+	return {"added": added, "skipped": skipped, "overwritten": 0, "conflicts": conflicts, "card_lists": card_lists}
 
 
 func rebuild_card_library_cache() -> void:
@@ -1495,6 +1558,22 @@ func _load_match_history() -> void:
 	match_history = HistoryRepo.from_payload(payload, MAX_MATCH_HISTORY)
 
 
+func snapshot_history_cards(cards: Array) -> Array[Dictionary]:
+	var faces: Array[Dictionary] = []
+	var persistent_art := {}
+	for card in cards:
+		if not card is CardData:
+			continue
+		var face := HistoryRepo.card_face(card)
+		var path: String = face.art_path
+		if path.begins_with(NET_ARTS_DIR + "/"):
+			if not persistent_art.has(path):
+				persistent_art[path] = save_imported_art(read_art_bytes(path), path.get_extension())
+			face.art_path = persistent_art[path]
+		faces.append(face)
+	return faces
+
+
 func add_match_history(entry: Dictionary) -> bool:
 	if entry.is_empty():
 		return false
@@ -1503,6 +1582,43 @@ func add_match_history(entry: Dictionary) -> bool:
 	stored["timestamp"] = int(stored.get("timestamp", Time.get_unix_time_from_system()))
 	match_history = HistoryRepo.add(match_history, stored, MAX_MATCH_HISTORY)
 	return _write_json_atomic(MATCH_HISTORY_PATH, HistoryRepo.payload(match_history), Schema.KIND_MATCH_HISTORY)
+
+
+func pending_ranked_history_ids() -> Array[String]:
+	var ids: Array[String] = []
+	for entry: Dictionary in match_history:
+		var id := str(entry.get("ranked_match_id", ""))
+		if not id.is_empty() and not entry.has("ranked_settlement"):
+			ids.append(id)
+	return ids
+
+
+func apply_ranked_history_settlements(settlements: Dictionary) -> void:
+	if settlements.is_empty():
+		return
+	var updated := match_history.duplicate()
+	var changed := false
+	for index in updated.size():
+		var entry: Dictionary = updated[index]
+		var receipt: Variant = settlements.get(entry.get("ranked_match_id", ""))
+		if entry.get("mode") != "ranked" or entry.has("ranked_settlement") or not valid_ranked_history_settlement(receipt):
+			continue
+		entry = entry.duplicate()
+		entry["ranked_settlement"] = receipt.duplicate()
+		updated[index] = entry
+		changed = true
+	if changed and _write_json_atomic(MATCH_HISTORY_PATH, HistoryRepo.payload(updated), Schema.KIND_MATCH_HISTORY):
+		match_history = updated
+
+
+static func valid_ranked_history_settlement(receipt: Variant) -> bool:
+	if not receipt is Dictionary or not receipt.has_all(["before", "after"]):
+		return false
+	for key in ["before", "after"]:
+		var score: Variant = receipt[key]
+		if not (score is int or score is float) or not is_finite(float(score)) or float(score) < 0 or float(score) != floorf(float(score)):
+			return false
+	return true
 
 
 func clear_match_history() -> bool:

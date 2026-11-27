@@ -64,10 +64,10 @@ var _toast_feed: ToastFeed
 var _command_result_prompt: WeakRef
 var _command_send_failure_prompt: WeakRef
 var action_log_button: Button
-var abandon_battle_button: Button
 var action_log_panel: PanelContainer
 var action_log_text: RichTextLabel
 var _battle_started_at: float = 0.0
+var _history_deck_name := ""
 var reconnect_leave_button: Button
 var _reconnect_elapsed_seconds: int = 0
 var _reconnect_attempt: int = 0
@@ -134,6 +134,8 @@ var _hp_presentation_overrides: Dictionary = {}
 var _network_command_phase: String = ""
 var tutorial_controller: BattleTutorialController
 var _active_challenge_id: String = ""
+var _challenge_controller: ChallengeController
+var tutorial_scenario_setup: Callable
 var _last_pile_counts := Vector2i(-1, -1)
 var _pile_arrivals: Dictionary = {}
 var _pile_arrival_serial := 0
@@ -222,6 +224,12 @@ func _apply_theme() -> void:
 	for btn in [debug_state_btn, help_btn]:
 		UITheme.apply_button(btn, "secondary")
 
+func _on_appearance_preference_changed(key: String) -> void:
+	if key == "appearance":
+		_apply_theme()
+		if game != null:
+			_update_battle_status_huds()
+
 
 func _apply_status_hud_theme(hud: Panel, enemy: bool, active: bool) -> void:
 	BattleStatusHud._apply_status_hud_theme(hud, enemy, active)
@@ -234,7 +242,12 @@ func _style_status_bar(bar: ProgressBar, fill_color: Color) -> void:
 func _sync_hand_area_minimum() -> void:
 	if not is_instance_valid(hand_area) or not is_instance_valid(hand_container): return
 	var padding: int = hand_content.get_theme_constant("margin_top")+hand_content.get_theme_constant("margin_bottom")
-	hand_area.custom_minimum_size.y = maxf(154*_ui_scale(),hand_container.get_combined_minimum_size().y+padding)
+	var card_size := BASE_CARD_SIZE * _ui_scale()
+	var span := maxf(0.0, hand_container.size.x - card_size.x)
+	var step := minf(card_size.x * (1.0 + 10.0 / 120.0), span / maxi(1, SkillEngine.MAX_HAND_SIZE - 1))
+	var fan_height := ceili((SkillEngine.MAX_HAND_SIZE - 1) * step * 0.5 * tan(deg_to_rad(4.0)))
+	var reserved_height := card_size.y + fan_height + 12.0 + padding
+	hand_area.custom_minimum_size.y = maxf(reserved_height, hand_container.get_combined_minimum_size().y + padding)
 
 
 func _scale_status_hud(hud: Panel, scale_value: float) -> void:
@@ -246,9 +259,6 @@ func _apply_responsive_layout() -> void:
 	var viewport_size := get_viewport_rect().size
 	_layout_splash_panel()
 
-	# Slots
-	for slot in _my_slots_ui() + _their_slots_ui():
-		_scale_control(slot, BASE_SLOT_SIZE)
 	if enemy_side_ui:
 		enemy_side_ui.add_theme_constant_override("separation", int(20 * s))
 	if player_side_ui:
@@ -285,7 +295,8 @@ func _apply_responsive_layout() -> void:
 			maxf(44 * s, maxf(40, _screen_pixels_in_ui(34))))
 		broadcast_strip.add_theme_font_size_override("font_size", max(12, int(14 * s)))
 	var info_width := float(info_gap * (info_hbox.get_child_count() + 1))
-	for control: Control in [turn_label, end_turn_button, face_mana_button, broadcast_strip]:
+	var action_timer := info_hbox.get_node_or_null("BattleActionTimer") as Control
+	for control: Control in [turn_label, end_turn_button, face_mana_button, broadcast_strip, action_timer]:
 		if control != null:
 			info_width += control.get_combined_minimum_size().x
 	var strip_height := broadcast_strip.custom_minimum_size.y if broadcast_strip else 0.0
@@ -297,6 +308,7 @@ func _apply_responsive_layout() -> void:
 	$CanvasLayer/MainBackground/MainLayout/EnemyStatusRow.custom_minimum_size = Vector2(0, 40 * s)
 	$CanvasLayer/MainBackground/MainLayout/MidSpacer.custom_minimum_size = Vector2(0, 6 * s)
 	$CanvasLayer/MainBackground/MainLayout/BottomSpacer.custom_minimum_size = Vector2(0, 4 * s)
+	$CanvasLayer/MainBackground/MainLayout/PlayerStatusSpacer.custom_minimum_size = Vector2(0, 12 * s)
 	$CanvasLayer/MainBackground/MainLayout/PlayerStatusRow.custom_minimum_size = Vector2(0, 40 * s)
 	$CanvasLayer/MainBackground/MainLayout/HandSpacer.custom_minimum_size = Vector2(0, 4 * s)
 	$CanvasLayer/MainBackground/MainLayout/BottomDockMargin.custom_minimum_size = Vector2(0, 154 * s)
@@ -350,15 +362,29 @@ func _apply_responsive_layout() -> void:
 		action_log_button.custom_minimum_size = Vector2(90, 38) * s
 		action_log_button.size = action_log_button.custom_minimum_size
 		# Utility controls flank the centred enemy HUD instead of covering it.
-		action_log_button.position = Vector2(124.0 * s, 10.0 * s)
-	if abandon_battle_button:
-		UITheme.apply_button(abandon_battle_button, "secondary")
-		abandon_battle_button.add_theme_font_size_override("font_size", max(9, int(12 * s)))
-		abandon_battle_button.custom_minimum_size = Vector2(104, 38) * s
-		abandon_battle_button.size = abandon_battle_button.custom_minimum_size
-		abandon_battle_button.position = Vector2(12.0 * s, 10.0 * s)
+		action_log_button.position = Vector2(12.0 * s, 10.0 * s)
+	_fit_battle_lanes()
 	_layout_action_log_panel.call_deferred()
 	_update_wait_hint_layout()
+
+
+func _fit_battle_lanes() -> void:
+	# The hand's reserved height settles after it receives its width.
+	var layout := $CanvasLayer/MainBackground/MainLayout as VBoxContainer
+	var lane_height := get_viewport_rect().size.y
+	for row in layout.get_children():
+		if row is Control and row.visible and row != player_side_ui and row != enemy_side_ui:
+			lane_height -= row.get_combined_minimum_size().y
+	var lane_scale := clampf(floorf(lane_height * 0.5) / BASE_SLOT_SIZE.y, 0.1, _ui_scale())
+	var changed := false
+	for slot in _my_slots_ui() + _their_slots_ui():
+		if not is_equal_approx(slot.ui_scale, lane_scale):
+			slot.apply_ui_scale(lane_scale)
+			changed = true
+	if changed:
+		await get_tree().process_frame
+		if is_inside_tree():
+			update_entire_screen()
 
 
 
@@ -371,7 +397,7 @@ func _align_turn_label() -> void:
 		var available := middle_info_bar.size.x - inset + row.offset_right
 		var separation := row.get_theme_constant("separation")
 		for child in row.get_children():
-			if child is Control and child != broadcast:
+			if child is Control and child != broadcast and child.visible:
 				available -= child.get_combined_minimum_size().x + separation
 		broadcast.custom_minimum_size.x = maxf(1, minf(available, maxf(330 * _ui_scale(), _screen_pixels_in_ui(224))))
 	row.grow_horizontal = Control.GROW_DIRECTION_END
@@ -527,7 +553,7 @@ func _print_authority_state(label: String) -> void:
 func _broadcast_authority_state(label: String) -> void:
 	_print_authority_state(label)
 	if PlayerData.is_online_battle() and NetworkManager.is_authority():
-		var state: Dictionary = game.export_initial_state()
+		var state := _network_battle_state()
 		NetworkManager.save_match_snapshot(state)
 		# Ship combat feedback from this action so the non-authority can replay
 		# presentation without running combat logic itself.
@@ -536,6 +562,10 @@ func _broadcast_authority_state(label: String) -> void:
 		_pending_hp_events.clear()
 		_pending_feedback_events.clear()
 		NetworkManager.broadcast_authority_state(state)
+
+
+func _network_battle_state() -> Dictionary:
+	return game.export_initial_state()
 
 
 func _commit_authority_state(label: String) -> void:
@@ -562,8 +592,8 @@ func _apply_authority_state(state: Dictionary, label: String = "authority") -> v
 		else:
 			_prime_remote_hand_entry(event, false)
 	game.apply_initial_state(state)
-	NetworkManager.save_match_snapshot(game.export_initial_state())
 	_restore_local_art_paths()
+	NetworkManager.save_match_snapshot(game.export_initial_state())
 	remote_arrow_source = -1
 	remote_arrow_target = -1
 	_refresh_hand_ui()
@@ -672,17 +702,23 @@ var _online_result_back_btn: Button
 var _opening_coin_active := false
 
 
-func _ready():
-	add_to_group("battle_screen")
-	enemy_status_hud.get_parent().mouse_behavior_recursive = Control.MOUSE_BEHAVIOR_DISABLED
-	hand_container.minimum_size_changed.connect(_sync_hand_area_minimum)
-	game = load("res://GameState.gd").new()
-	_battle_started_at = Time.get_unix_time_from_system()
+func _is_party_battle() -> bool:
+	return false
+
+
+func _initialize_battle_game() -> void:
+	game.manual_enemy_swaps = true
+	game.auto_enemy_swap_player = 2 if PlayerData.battle_mode == "practice" else 0
 	_init_network()
 	var opening_player := NetworkManager.match_opening_player if PlayerData.is_online_battle() else PlayerData.hotseat_opening_player
-	game.init_game(Callable(self, "_on_game_draw_cards"), null, opening_player)
+	if tutorial_scenario_setup.is_valid():
+		opening_player = 0
+		game.draw_callable = Callable(self, "_on_game_draw_cards")
+		tutorial_scenario_setup.call(game)
+	else:
+		game.init_game(Callable(self, "_on_game_draw_cards"), null, opening_player)
 	_opening_coin_active = opening_player in [1, 2] and not NetworkManager.just_reconnected and DisplayServer.get_name() != "headless"
-	_active_challenge_id = PlayerData.practice_challenge_id
+	_active_challenge_id = "" if tutorial_scenario_setup.is_valid() else PlayerData.practice_challenge_id
 	if not _active_challenge_id.is_empty():
 		if _active_challenge_id in PracticeChallenges.IDS:
 			# Challenge hands and boards must exist before the first UI refresh.
@@ -694,14 +730,30 @@ func _ready():
 		else:
 			_active_challenge_id = ""
 			PlayerData.practice_challenge_id = ""
-	if PlayerData.battle_mode == "tutorial":
+	if PlayerData.battle_mode == "tutorial" and not tutorial_scenario_setup.is_valid():
 		TutorialController.configure_game(game)
 	if PlayerData.is_online_battle() and NetworkManager.just_reconnected:
 		var saved_state := NetworkManager.load_match_snapshot()
 		if not saved_state.is_empty():
 			game.apply_initial_state(saved_state)
+			_restore_local_art_paths()
 	elif PlayerData.is_online_battle() and NetworkManager.is_authority():
 		NetworkManager.save_match_snapshot(game.export_initial_state())
+
+
+func _ready():
+	add_to_group("battle_screen")
+	enemy_status_hud.get_parent().mouse_behavior_recursive = Control.MOUSE_BEHAVIOR_DISABLED
+	hand_container.minimum_size_changed.connect(_sync_hand_area_minimum)
+	$CanvasLayer/MainBackground/MainLayout/BottomDockMargin.minimum_size_changed.connect(_fit_battle_lanes, CONNECT_DEFERRED)
+	game = load("res://GameState.gd").new()
+	_battle_started_at = Time.get_unix_time_from_system()
+	_history_deck_name = PlayerData.battle_history_deck_name
+	if PlayerData.is_online_battle():
+		var selected := PlayerData.get_deck(PlayerData.online_room_deck_id)
+		if not selected.is_empty():
+			_history_deck_name = PlayerData.deck_display_name(selected)
+	_initialize_battle_game()
 	_build_turn_cover()
 	_build_pile_buttons()
 	if PlayerData.is_online_battle():
@@ -716,6 +768,7 @@ func _ready():
 		$CanvasLayer.add_child(cursor)
 	_build_action_log()
 	_apply_theme()
+	AppPreferences.changed.connect(_on_appearance_preference_changed)
 	_bind_battle_inputs()
 
 	_refresh_hand_ui()
@@ -726,8 +779,11 @@ func _ready():
 	player_status_hud.item_rect_changed.connect(_align_turn_label)
 	get_viewport().size_changed.connect(_on_viewport_size_changed)
 	update_entire_screen()
+	if _is_party_battle():
+		return
 	if PlayerData.battle_mode == "tutorial":
-		tutorial_controller = TutorialController.new()
+		if tutorial_controller == null:
+			tutorial_controller = TutorialController.new()
 		add_child(tutorial_controller)
 		tutorial_controller.start(self)
 	if _active_challenge_id.is_empty():
@@ -748,22 +804,25 @@ func _ready():
 			NetworkManager.request_initial_state()
 
 
-func _play_opening_coin() -> void:
+func _play_opening_coin(winner: int = 0, viewer: int = -1) -> void:
 	if battle_finished:
 		_opening_coin_active = false
 		return
 	var toss := preload("res://presentation/PvpCoinToss.gd").new()
 	toss.name = "PvpOpeningCoin"
-	toss.setup(game.starting_player, my_player)
+	toss.setup(game.starting_player if winner == 0 else winner, my_player if viewer < 0 else viewer)
 	turn_label.hide()
-	toss.finished.connect(func():
-		_opening_coin_active = false
-		turn_label.show()
-		if not battle_finished:
-			update_entire_screen()
-			if game.state_revision == 0:
-				_play_opening_draw_feedback())
+	toss.finished.connect(_on_opening_coin_finished)
 	add_child(toss)
+
+
+func _on_opening_coin_finished() -> void:
+	_opening_coin_active = false
+	turn_label.show()
+	if not battle_finished:
+		update_entire_screen()
+		if game.state_revision == 0:
+			_play_opening_draw_feedback()
 
 
 func is_resolution_locked() -> bool:
@@ -895,7 +954,7 @@ func _show_abandon_confirmation(layer_index: int = 140, before_confirm: Callable
 	panel.offset_top = -105
 	panel.offset_right = 230
 	panel.offset_bottom = 105
-	UITheme.apply_popup_frame(panel, "gold", false)
+	UITheme.apply_popup_frame(panel, "gold", false, true)
 	layer.add_child(panel)
 	var margin := MarginContainer.new()
 	for side in ["margin_left", "margin_top", "margin_right", "margin_bottom"]:
@@ -910,8 +969,11 @@ func _show_abandon_confirmation(layer_index: int = 140, before_confirm: Callable
 	UITheme.apply_title(title, 24)
 	box.add_child(title)
 	var body := Label.new()
-	var online_match := PlayerData.is_online_battle() or NetworkManager.has_saved_match_session()
-	body.text = Locale.t("battle.abandon_confirm_online" if online_match else "battle.abandon_confirm_solo")
+	var online_match := _is_party_battle() or PlayerData.is_online_battle() or NetworkManager.has_saved_match_session()
+	if _is_party_battle():
+		body.text = Locale.t("team.leave_question")
+	else:
+		body.text = Locale.t("battle.abandon_confirm_online" if online_match else "battle.abandon_confirm_solo")
 	body.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	body.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	UITheme.apply_label(body, true)
@@ -1015,6 +1077,11 @@ func _on_skill_roll_failed(source: CardData, skill_name: String, misfortune: int
 
 func _on_skill_safety_limit_hit(source_name: String, _reason: String) -> void:
 	_show_toast("tip.skill_safety_limit", [source_name])
+
+
+func _on_action_dodged(target: CardData) -> void:
+	if not _action_broadcast.is_empty():
+		_action_broadcast["dodged_card"] = target.card_name
 
 
 func _spawn_combat_text(pos: Vector2, delta: int, strong: bool = false, zero_damage: bool = false) -> void:
@@ -1266,8 +1333,7 @@ func _play_skill_cast_feedback(player: int, slot: int, skill_index: int = -1) ->
 	if _defer_action_feedback(_play_skill_cast_feedback.bind(player,slot,skill_index)): return
 	if _defer_random_feedback(_play_skill_cast_feedback.bind(player,slot,skill_index)): return
 	if _defer_deployment_feedback(_play_skill_cast_feedback.bind(player, slot, skill_index)): return
-	# Hand-cast spells have no field slot; render an arcane burst + projectile
-	# flying from the hand toward the battlefield center instead.
+	# Hand-cast spells have no field slot, so pulse at the hand.
 	if slot < 0:
 		_play_spell_cast_from_hand_feedback()
 		return
@@ -1291,8 +1357,6 @@ func _play_skill_cast_feedback(player: int, slot: int, skill_index: int = -1) ->
 	BattleFx.skill_cast_pulse($CanvasLayer, target, center, _ui_scale())
 
 
-# Arcane burst at the hand + a projectile flying to the battlefield center for
-# spells cast directly from hand (slot == -1).
 func _show_unit_action_splash(player: int, slot: int) -> void:
 	var field := _field_for_player(player)
 	if slot >= 0 and slot < field.slots.size():
@@ -1304,9 +1368,6 @@ func _play_spell_cast_from_hand_feedback() -> void:
 		return
 	var start: Vector2 = hand_container.global_position + Vector2(hand_container.size.x * 0.5, hand_container.size.y * 0.35)
 	_spawn_impact_ring(start, false, Color(0.45, 0.7, 1.0, 0.5))
-	var field_center: Vector2 = (player_side_ui.global_position + enemy_side_ui.global_position) / 2
-	field_center.y = (player_side_ui.global_position.y + enemy_side_ui.global_position.y) / 2 + player_side_ui.size.y / 2
-	BattleFx.spell_cast_projectile($CanvasLayer, start, field_center, _ui_scale())
 
 
 func _opponent_of_player(player: int) -> int:
@@ -1366,6 +1427,22 @@ func _begin_action_broadcast(kind: String, player: int, source_name: String, tar
 	_action_damage_events.clear()
 	_action_parasite_events.clear()
 	_action_failed_events.clear()
+
+
+func _record_directed_action(player: int, source_slot: int, target_player: int, target_slot: int, is_attack := false, hand_index := -1) -> void:
+	if _action_broadcast.is_empty() or target_player != 3 - player or target_slot not in range(5):
+		return
+	var motion := {
+		"kind": "attack_motion" if is_attack else "directed_motion",
+		"player": player, "source_slot": source_slot, "target_slot": target_slot,
+		"feedback_group": 0, "projectile": true, "board_before": _random_action_before,
+	}
+	if player == _view_player() and hand_index in range(hand_container.get_child_count()):
+		var card_ui := hand_container.get_child(hand_index) as Control
+		if card_ui != null:
+			var point := card_ui.get_global_rect().get_center() / get_viewport_rect().size
+			motion["origin"] = [point.x, point.y]
+	_action_presentation_events.push_front(motion)
 
 
 func _finish_action_broadcast() -> void:
@@ -1568,7 +1645,7 @@ func _host_apply_move(source_slot: int, target_slot: int, player: int) -> void:
 func _host_apply_parasite(hand_index: int, target_player: int, target_slot: int, player: int) -> void:
 	pass
 
-func _host_apply_skill(slot_index: int, skill_index: int, target_slot: int, player: int) -> void:
+func _host_apply_skill(slot_index: int, skill_index: int, target_slot: int, player: int, target_player: int = 0) -> void:
 	pass
 
 func _host_apply_summon(hand_index: int, slot_index: int, player: int) -> void:

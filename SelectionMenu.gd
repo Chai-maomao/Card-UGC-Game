@@ -126,6 +126,21 @@ func fade_choices(delay := 0.0) -> void:
 		UITheme.fade_enter(_footer, 0.14, delay)
 
 
+func reveal_from_child(opener: Button) -> void:
+	surface.show()
+	# Keep the returning label at full opacity while the other rows reappear.
+	var fade: Tween = entries.get_meta("ui_fade") if entries.has_meta("ui_fade") else null
+	if fade != null and fade.is_valid():
+		fade.kill()
+	entries.modulate.a = 1.0
+	for choice in entries.get_children():
+		if choice is Button and choice != opener:
+			UITheme.fade_enter(choice, 0.14)
+	UITheme.fade_enter(_footer, 0.14)
+	if is_instance_valid(opener) and opener.is_visible_in_tree():
+		opener.grab_focus()
+
+
 func promote_heading() -> void:
 	if is_queued_for_deletion() or _returning or not surface.is_visible_in_tree():
 		return
@@ -166,6 +181,7 @@ func _tween_heading(destination: Vector2, scale_value: float, text: String, colo
 		_heading_tween.tween_property(heading_label, "self_modulate:a", 1.0, 0.065).from(0.0).set_delay(0.085)
 	else:
 		_heading_tween.tween_property(heading_label, "self_modulate:a", 1.0, 0.065)
+		_heading_tween.tween_method(_set_heading_color, heading_label.get_theme_color("font_color"), color, 0.19)
 
 
 func _apply_heading() -> void:
@@ -174,11 +190,15 @@ func _apply_heading() -> void:
 
 func _set_heading_text(text: String, color: Color) -> void:
 	heading_label.text = text
+	_set_heading_color(color)
+
+
+func _set_heading_color(color: Color) -> void:
 	heading_label.add_theme_color_override("font_color", color)
 
 
 func _heading_color() -> Color:
-	return Color.WHITE if AppPreferences.get_value("high_contrast") else UITheme.Tokens.HEADING_GOLD
+	return UITheme.Tokens.CONTRAST_INK if AppPreferences.get_value("high_contrast") else UITheme.Tokens.HEADING_GOLD
 
 
 func focus_choice(text_or_name: String) -> void:
@@ -200,7 +220,7 @@ func _make_choice(text: String, action: Callable) -> Button:
 	if scroll_choices:
 		button.clip_text = true
 		button.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	UITheme.apply_selection_entry(button)
+	UITheme.apply_selection_entry(button, title_entry.get_theme_font("font") if is_instance_valid(title_entry) else null)
 	button.pressed.connect(action)
 	return button
 
@@ -225,8 +245,19 @@ func place(transform: Transform2D, scale_value: float) -> void:
 		_apply_heading()
 	var heading_gap := UITheme.Tokens.SPACING[1] * scale_value
 	heading_label.position = Vector2(22, -heading_label.get_combined_minimum_size().y - heading_gap)
-	entries.add_theme_constant_override("separation", roundi(4 * scale_value))
+	var separation := roundi(4 * scale_value)
+	entries.add_theme_constant_override("separation", separation)
 	var row_size := Vector2(218, 36) * scale_value
+	var screen := get_viewport().get_visible_rect().size
+	var available := (screen.y - transform.origin.y - 16) / transform.y.y
+	if _scroll == null and entries.get_child_count() > 0:
+		var rows := 0
+		var gaps := float(separation * (entries.get_child_count() - 1))
+		for child: Control in entries.get_children():
+			if child is Button: rows += 1
+			else: gaps += child.get_combined_minimum_size().y
+		if rows > 0:
+			row_size.y = clampf((available - gaps) / rows, 0.0, row_size.y)
 	var text_size := 20 + 2 * int(AppPreferences.get_value("text_size"))
 	for button in entries.get_children():
 		if button is Button:
@@ -236,8 +267,6 @@ func place(transform: Transform2D, scale_value: float) -> void:
 	if _scroll != null and _footer != null:
 		_footer.custom_minimum_size = row_size
 		_footer.add_theme_font_size_override("font_size", text_size)
-		var screen := get_viewport().get_visible_rect().size
-		var available := (screen.y - transform.origin.y - 16) / transform.y.y
 		var list_height := minf(entries.get_combined_minimum_size().y, available - row_size.y - 8)
 		_scroll.size = Vector2(clampf(screen.x * 0.34, 280, 410), maxf(row_size.y, list_height))
 		_footer.position = Vector2(0, _scroll.size.y + 8)
@@ -248,16 +277,21 @@ func place(transform: Transform2D, scale_value: float) -> void:
 			_footer.focus_neighbor_top = _footer.get_path_to(last)
 	if _backdrop_material != null:
 		var heading_size := heading_label.get_combined_minimum_size()
-		var menu_size := entries.get_combined_minimum_size()
+		var menu_size := _scroll.size if _scroll != null else entries.get_combined_minimum_size()
+		if _footer != null:
+			menu_size.y = _footer.position.y + _footer.size.y
 		var edge := 22.0 * scale_value
 		var menu_width := maxf(menu_size.x, heading_size.x + heading_label.position.x)
 		var bounds := Rect2(transform * Vector2(0, heading_label.position.y), Vector2.ZERO)
 		for corner in [Vector2(menu_width, heading_label.position.y), Vector2(0, menu_size.y), Vector2(menu_width, menu_size.y)]:
 			bounds = bounds.expand(transform * corner)
 		bounds = bounds.grow(edge)
+		var backdrop_scale := sqrt(0.92)
+		var backdrop_size := bounds.size * backdrop_scale
+		bounds = Rect2(bounds.get_center() - backdrop_size * 0.5, backdrop_size)
 		_backdrop_material.set_shader_parameter("view_size", get_viewport().get_visible_rect().size)
 		_backdrop_material.set_shader_parameter("focus_rect", Vector4(bounds.position.x, bounds.position.y, bounds.size.x, bounds.size.y))
-		_backdrop_material.set_shader_parameter("feather", 260.0 * scale_value)
+		_backdrop_material.set_shader_parameter("feather", 260.0 * scale_value * backdrop_scale)
 
 
 static func tabletop_axis(table: Node3D, screen_point: Vector2) -> Vector2:

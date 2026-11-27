@@ -46,6 +46,7 @@ func _ready() -> void:
 	box.add_child(title)
 	_hint = Label.new()
 	_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UITheme.apply_label(_hint)
 	_hint.add_theme_font_size_override("font_size",14)
 	box.add_child(_hint)
 	var row := HBoxContainer.new()
@@ -80,6 +81,7 @@ func _ready() -> void:
 			inspect_step.emit(_steps[index].path)
 			queue_free())
 	report.add_theme_font_size_override("normal_font_size", 15)
+	report.add_theme_color_override("default_color", UITheme.COLOR_TEXT)
 	box.add_child(report)
 	var actions := HBoxContainer.new()
 	box.add_child(actions)
@@ -107,6 +109,7 @@ func _ready() -> void:
 func _hp_input(row: HBoxContainer, text: String) -> SpinBox:
 	var label := Label.new()
 	label.text = text
+	UITheme.apply_label(label)
 	row.add_child(label)
 	var spin := SpinBox.new()
 	spin.min_value = 1

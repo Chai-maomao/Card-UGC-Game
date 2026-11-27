@@ -53,7 +53,6 @@ text = "Server:"
 
 [node name="ServerInput" type="LineEdit" parent="Panel/VBoxContainer" unique_id=8000009]
 layout_mode = 2
-text = "103.236.54.24"
 
 [node name="RoomLabel" type="Label" parent="Panel/VBoxContainer" unique_id=8000012]
 layout_mode = 2

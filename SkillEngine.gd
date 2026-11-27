@@ -152,7 +152,7 @@ static func trigger_external_skill(skill: Dictionary, source_card: CardData, con
 static func predicts_target_lethal(skill: Dictionary, source_card: CardData, target_card: CardData, context: Dictionary) -> bool:
 	if skill.is_empty() or source_card == null or target_card == null:
 		return false
-	if int(skill.get("probability", 100)) - source_card.get_misfortune() < 100:
+	if source_card.skill_activation_probability(int(skill.get("probability", 100))) < 100:
 		return false
 	var simulation := target_card.duplicate_card()
 	var state := {
@@ -554,29 +554,28 @@ static func legacy_skill_effects(skill: Dictionary) -> Array:
 # ============================================
 
 static func _passes_skill_roll(skill: Dictionary, source_card: CardData, context: Dictionary) -> bool:
-	var prob: int = skill.get("probability", 100)
-	var misfortune: int = source_card.get_misfortune()
-	if misfortune > 0:
-		prob = max(0, prob - misfortune)
-		_GameplayLog.write("[SkillEngine] %s: misfortune -%d%% (eff: %d%%)" % [skill.get("skill_name", "???"), misfortune, prob])
+	var base_probability := int(skill.get("probability", 100))
+	var prob := source_card.skill_activation_probability(base_probability)
+	if prob != base_probability:
+		_GameplayLog.write("[SkillEngine] %s: activation chance %d%% → %d%%" % [skill.get("skill_name", "???"), base_probability, prob])
 	var passed := true
 	if prob < 100:
 		var roll := _roll_percent(context)
-		passed = roll <= float(prob)
+		passed = prob > 0 and roll <= float(prob)
 		_emit_random(source_card,context,{"type":"chance","chance_scope":"skill","probability":prob,"roll":roll,"success":passed,"skill":str(skill.get("skill_name",source_card.card_name))})
 	if not passed:
 		_GameplayLog.write("[SkillEngine] %s: %d%% roll failed — skipped" % [skill.get("skill_name", "???"), prob])
-		EventBus.skill_roll_failed.emit(source_card, skill.get("skill_name", "技能"), misfortune, prob)
+		EventBus.skill_roll_failed.emit(source_card, skill.get("skill_name", "技能"), maxi(0, base_probability - prob), prob)
 		return false
 	return true
 
 
 static func _passes_effect_roll(eff: Dictionary, source_card: CardData, context: Dictionary) -> bool:
-	var prob: int = eff.get("probability", 100)
+	var prob := clampi(int(eff.get("probability", 100)), 0, 100)
 	var passed := true
 	if prob < 100:
 		var roll := _roll_percent(context)
-		passed = roll <= float(prob)
+		passed = prob > 0 and roll <= float(prob)
 		_emit_random(source_card,context,{
 			"type": "chance", "chance_scope": "effect", "effect_id": str(eff.get("effect", "")),
 			"buff_id": str(eff.get("buff_id", "")), "probability": prob, "roll": roll, "success": passed,

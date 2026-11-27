@@ -78,6 +78,9 @@ static func _trigger_damaged_safe(target: CardData, context: Dictionary) -> void
 	# On-damaged triggers only fire for non-lethal damage (target still alive).
 	if target == null or not target.is_alive():
 		return
+	var party_reaction: Callable = context.get("party_reaction", Callable())
+	if party_reaction.is_valid() and party_reaction.call(SkillEngine.TRIGGER_ON_DAMAGED, target, context):
+		return
 	var reaction := _reaction_context(target, context)
 	SkillEngine.trigger_skills(SkillEngine.TRIGGER_ON_DAMAGED, target, reaction)
 	ParasiteRules.trigger_host_passives(SkillEngine.TRIGGER_ON_DAMAGED, target, reaction)
@@ -85,6 +88,9 @@ static func _trigger_damaged_safe(target: CardData, context: Dictionary) -> void
 
 static func _trigger_healed_safe(target: CardData, context: Dictionary) -> void:
 	if target == null:
+		return
+	var party_reaction: Callable = context.get("party_reaction", Callable())
+	if party_reaction.is_valid() and party_reaction.call(SkillEngine.TRIGGER_ON_HEALED, target, context):
 		return
 	SkillEngine.trigger_skills(SkillEngine.TRIGGER_ON_HEALED, target, _reaction_context(target, context))
 
@@ -138,7 +144,7 @@ static func _apply_buff(target: CardData, value: int, skill: Dictionary, context
 		_metric(context, "unmeasured_effect", target, 1)
 	var duration: int = skill.get("duration", 1)
 	if buff_id != "":
-		target.apply_buff(buff_id, value, duration, context.get("current_player", 0))
+		target.apply_buff(buff_id, value, duration, context.get("status_owner", context.get("current_player", 0)))
 		if buff_id in [SkillEngine.BUFF_POISON, SkillEngine.BUFF_REGEN, SkillEngine.BUFF_MANA_REFUND] and not target.status_effects.is_empty():
 			_metric(context, "status_origin", target, 0, {"status": target.status_effects.back()})
 		if buff_id == SkillEngine.BUFF_IMMUNE_LETHAL and value > 0:
@@ -283,28 +289,15 @@ static func _apply_charm(target: CardData, _value: int, _skill: Dictionary, cont
 	if target == context.get("source_card") and str(context.get("trigger", "")) == SkillEngine.TRIGGER_ON_DEATH:
 		push_warning("[SkillEffect] A dead card cannot charm itself")
 		return
-	var enemy_field: BattleField = context.get("enemy_field")
 	var player_field: BattleField = context.get("player_field")
 	var hand: Array = context.get("active_hand", [])
 	if hand == null:
 		return
 
-	var slot_idx := -1
-	var target_field: BattleField = null
-	if enemy_field != null:
-		for i in range(enemy_field.slots.size()):
-			if enemy_field.slots[i] == target:
-				slot_idx = i
-				target_field = enemy_field
-				break
-	if target_field == null and player_field != null:
-		for i in range(player_field.slots.size()):
-			if player_field.slots[i] == target:
-				slot_idx = i
-				target_field = player_field
-				break
-	if slot_idx < 0:
+	var target_field := _field_containing_unit(target, context)
+	if target_field == null:
 		return
+	var slot_idx := target_field.slots.find(target)
 
 	var copy := target.duplicate_card()
 	copy.apply_charm_cost(slot_idx)
@@ -313,7 +306,10 @@ static func _apply_charm(target: CardData, _value: int, _skill: Dictionary, cont
 
 	target_field.slots[slot_idx] = null
 	var board_change_cb: Callable = context.get("board_change_callable", Callable())
-	if board_change_cb.is_valid():
+	var party_change: Callable = context.get("party_board_change", Callable())
+	if party_change.is_valid():
+		party_change.call("leave", target, target_field)
+	elif board_change_cb.is_valid():
 		board_change_cb.call(source_player, "leave", target)
 	_GameplayLog.write("  -> %s charmed! (slot %d) cost 0 for this turn" % [copy.card_name, slot_idx])
 	_resolve_hand_entry(copy, "field", {
@@ -330,6 +326,10 @@ static func _apply_charm(target: CardData, _value: int, _skill: Dictionary, cont
 static func _apply_view_discard_select(_target: CardData, value: int, _skill: Dictionary, context: Dictionary) -> void:
 	if value <= 0:
 		return
+	var picker: Callable = context.get("party_card_choice", Callable())
+	if picker.is_valid():
+		picker.call({"kind": "discard", "count": value, "look": int(context.get("random_count", 0))})
+		return
 	var discard_pile: Array = context.get("discard_pile", [])
 	if discard_pile.is_empty():
 		_GameplayLog.write("[SkillEffect] View discard: discard pile is empty")
@@ -342,6 +342,10 @@ static func _apply_view_discard_select(_target: CardData, value: int, _skill: Di
 
 static func _apply_view_deck_select(_target: CardData, value: int, _skill: Dictionary, context: Dictionary) -> void:
 	if value <= 0:
+		return
+	var picker: Callable = context.get("party_card_choice", Callable())
+	if picker.is_valid():
+		picker.call({"kind": "deck", "count": value, "look": int(context.get("random_count", 0))})
 		return
 	var deck: Array = context.get("shared_deck", [])
 	if deck.is_empty():
@@ -401,30 +405,49 @@ static func _apply_make_zero_cost(_target: CardData, value: int, skill: Dictiona
 		return
 
 	# Otherwise the player selects one anchor; SIDES also affects its neighbors.
+	var picker: Callable = context.get("party_card_choice", Callable())
+	if picker.is_valid():
+		picker.call({"kind": "cost", "count": 1, "value": value, "target": target_str, "mode": cost_mode})
+		return
 	EventBus.make_zero_cost_select.emit(value, cost_mode, context.get("current_player", 0), hand, target_str, random_count)
 	_GameplayLog.write("  -> Choose a hand card to reduce by %d (%s, target=%s)" % [value, cost_mode, target_str])
 
 
-static func _apply_clone_enemy(target: CardData, _value: int, _skill: Dictionary, context: Dictionary) -> void:
+static func _field_containing_unit(target: CardData, context: Dictionary) -> BattleField:
+	for field: BattleField in [context.get("selected_unit_field"), context.get("player_field"), context.get("enemy_field")]:
+		if field != null and target in field.slots:
+			return field
+	var party_fields: Callable = context.get("party_fields", Callable())
+	if party_fields.is_valid():
+		for field: BattleField in party_fields.call(context.get("source_card"), SkillEngine.TARGET_SIDE_ALL):
+			if target in field.slots:
+				return field
+	return null
+
+
+static func _apply_clone_enemy(target: CardData, _value: int, skill: Dictionary, context: Dictionary) -> void:
 	if target == null:
 		return
-	var enemy_field: BattleField = context.get("enemy_field")
+	var field: BattleField = context.get("enemy_field")
+	var party_fields: Callable = context.get("party_fields", Callable())
+	if party_fields.is_valid() or SkillTargetResolver.uses_selected_unit(str(skill.get("target", ""))):
+		field = _field_containing_unit(target, context)
 	var hand: Array = context.get("active_hand", [])
-	if enemy_field == null or hand == null or target not in enemy_field.slots:
+	if field == null or hand == null or target not in field.slots:
 		return
 	var copy := target.duplicate_card()
 	var rng := _GameplayRng.from_context(context)
 	_reidentify_clone_tree(copy, rng)
 	# A clone carries the target's complete current card state; only its runtime
 	# identity changes so synchronization and replay can distinguish the copy.
-	var slot_idx: int = enemy_field.slots.find(target)
+	var slot_idx: int = field.slots.find(target)
 	var current_player: int = int(context.get("current_player", 0))
 	_resolve_hand_entry(copy, "field", {
-		"source_player": 2 if current_player == 1 else 1,
+		"source_player": current_player if field == context.get("player_field") else 3 - current_player,
 		"source_slot": slot_idx,
 		"source_instance_id": target.instance_id,
 	}, context)
-	_GameplayLog.write("  -> Clone enemy %s into hand" % target.card_name)
+	_GameplayLog.write("  -> Clone %s into hand" % target.card_name)
 
 
 static func _reidentify_clone_tree(card: CardData, rng: RandomNumberGenerator) -> void:
@@ -457,6 +480,12 @@ static func _apply_mana_drain(_target: CardData, value: int, _skill: Dictionary,
 		_metric(context, "mana_gained", pf, pf.current_mana - before)
 		_GameplayLog.write("  -> Self gains %d mana (%d)" % [drained, pf.current_mana])
 	_metric(context, "mana_drained", ef, drained)
+
+
+static func _apply_swap_enemy_slots(_target: CardData, _value: int, _skill: Dictionary, context: Dictionary) -> void:
+	var request: Callable = context.get("enemy_swap_callable", Callable())
+	if request.is_valid():
+		request.call()
 
 
 static func _apply_swap_attack(target: CardData, _value: int, _skill: Dictionary, context: Dictionary) -> void:

@@ -315,6 +315,31 @@ func get_misfortune() -> int:
 	return total
 
 
+func skill_activation_probability(base_probability: int) -> int:
+	var luck := 0
+	for effect in status_effects:
+		if effect.get("buff_id") == SkillEngine.BUFF_LUCK:
+			luck += clampi(int(effect.get("value", 0)), 0, 100)
+	return clampi(base_probability + luck - maxi(0, get_misfortune()), 0, 100)
+
+
+func get_dodge_chance() -> int:
+	var chance := 0
+	for effect in status_effects:
+		if effect.get("buff_id", "") == SkillEngine.BUFF_DODGE:
+			chance += clampi(int(effect.get("value", 0)), 0, 100)
+	return mini(chance, 100)
+
+func is_selectable() -> bool:
+	return is_alive() and not has_untargetable()
+
+func has_untargetable() -> bool:
+	for effect in status_effects:
+		if effect.get("buff_id") == SkillEngine.BUFF_UNTARGETABLE:
+			return true
+	return false
+
+
 func get_mana_refund() -> int:
 	var total: int = 0
 	for eff in status_effects:
@@ -332,7 +357,7 @@ func has_taunt() -> bool:
 	return false
 
 
-# Stun suppresses attacks and skills immediately, through the next friendly turn.
+# Stun suppresses attacks and skills immediately, counting full turns of the affected side.
 func has_stun() -> bool:
 	for eff in status_effects:
 		if eff.get("buff_id", "") == SkillEngine.BUFF_STUN and eff.get("value", 0) > 0:
@@ -346,17 +371,22 @@ func skills_disabled() -> bool:
 
 func finish_stun_turn() -> void:
 	for i in range(status_effects.size() - 1, -1, -1):
-		if status_effects[i].get("buff_id", "") == SkillEngine.BUFF_STUN and status_effects[i].get("stun_active", false):
+		var effect: Dictionary = status_effects[i]
+		if effect.get("buff_id", "") != SkillEngine.BUFF_STUN or not effect.get("stun_active", false):
+			continue
+		var remaining := int(effect.get("duration", 1)) - 1
+		if remaining <= 0:
 			status_effects.remove_at(i)
+		else:
+			effect["duration"] = remaining
+			effect.erase("stun_active")
 
 
-func consume_stun() -> bool:
-	for i in range(status_effects.size()):
-		if status_effects[i].get("buff_id", "") == SkillEngine.BUFF_STUN and status_effects[i].get("value", 0) > 0:
-			status_effects[i]["stun_active"] = true
-			_GameplayLog.write("  [Stun] %s is stunned and skips its turn" % card_name)
-			return true
-	return false
+func begin_stun_turn() -> void:
+	for effect: Dictionary in status_effects:
+		if effect.get("buff_id", "") == SkillEngine.BUFF_STUN and effect.get("value", 0) > 0:
+			effect["stun_active"] = true
+	_GameplayLog.write("  [Stun] %s is stunned and skips its turn" % card_name)
 
 
 # ============================================
@@ -366,6 +396,8 @@ func consume_stun() -> bool:
 func apply_buff(buff_id: String, value: int, duration: int, owner: int = 0) -> void:
 	# Temp HP is not a buff — just add to scalar
 
+	if buff_id == SkillEngine.BUFF_STUN:
+		duration = maxi(1, duration)
 	status_effects.append({"buff_id": buff_id, "value": value, "duration": duration, "owner": owner})
 	_GameplayLog.write("  [Buff] %s gained %s: v=%d d=%d (owner P%d)" % [card_name, buff_id, value, duration, owner])
 

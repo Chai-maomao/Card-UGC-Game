@@ -1,0 +1,6 @@
+[gd_scene format=3]
+
+[ext_resource type="Script" path="res://tests/integration/matchmaking_client.gd" id="1"]
+
+[node name="MatchmakingIntegration" type="Node"]
+script = ExtResource("1")

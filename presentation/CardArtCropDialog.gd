@@ -37,6 +37,10 @@ var preview_card: CardData
 var on_saved: Callable
 var crop_view: CropView
 var _error: Label
+var _zoom: HSlider
+var _confirm_button: Button
+var _cancel_button: Button
+var _save_thread: Thread
 
 func _ready() -> void:
 	layer = 150
@@ -82,6 +86,7 @@ func _ready() -> void:
 	UITheme.apply_label(zoom_label)
 	box.add_child(zoom_label)
 	var zoom := HSlider.new()
+	_zoom = zoom
 	zoom.min_value = 1
 	zoom.max_value = 4
 	zoom.step = 0.01
@@ -103,30 +108,70 @@ func _ready() -> void:
 		UITheme.apply_button(button,"primary" if action == "confirm" else "secondary")
 		buttons.add_child(button)
 		button.pressed.connect(_confirm if action == "confirm" else queue_free)
+		if action == "confirm": _confirm_button = button
+		else: _cancel_button = button
 	set_meta("popup_close",queue_free)
+	set_process(false)
 
 func _confirm() -> void:
-	var cropped := source_image.get_region(crop_view.source_rect())
+	if _save_thread != null:
+		return
+	var region := crop_view.source_rect()
+	_save_thread = Thread.new()
+	if _save_thread.start(_write_crop.bind(source_image, region)) != OK:
+		_save_thread = null
+		_error.show()
+		return
+	_error.hide()
+	_set_saving(true)
+	set_process(true)
+
+
+func _set_saving(saving: bool) -> void:
+	_confirm_button.text = Locale.t("editor.art_processing" if saving else "battle.confirm")
+	_confirm_button.disabled = saving
+	_cancel_button.disabled = saving
+	_zoom.editable = not saving
+	crop_view.dragging = false
+	crop_view.mouse_filter = Control.MOUSE_FILTER_IGNORE if saving else Control.MOUSE_FILTER_STOP
+	set_meta("popup_close_locked", saving)
+
+
+func _process(_delta: float) -> void:
+	if _save_thread == null or _save_thread.is_alive():
+		return
+	var path := str(_save_thread.wait_to_finish())
+	_save_thread = null
+	set_process(false)
+	if path.is_empty():
+		_set_saving(false)
+		_error.show()
+		return
+	if on_saved.is_valid(): on_saved.call(path)
+	queue_free()
+
+
+func _exit_tree() -> void:
+	if _save_thread != null:
+		_save_thread.wait_to_finish()
+
+
+static func _write_crop(source: Image, region: Rect2i) -> String:
+	var cropped := source.get_region(region)
 	if cropped.get_width()>1024: cropped.resize(1024,roundi(1024.0*303/320),Image.INTERPOLATE_LANCZOS)
 	var bytes := cropped.save_png_to_buffer()
 	while bytes.size()>PlayerData.MAX_ART_BYTES and cropped.get_width()>64:
 		var width := maxi(64,int(cropped.get_width()*0.8))
 		cropped.resize(width,maxi(1,roundi(width*303.0/320)),Image.INTERPOLATE_LANCZOS)
 		bytes = cropped.save_png_to_buffer()
-	if bytes.is_empty():
-		_error.show()
-		return
+	if bytes.is_empty() or bytes.size() > PlayerData.MAX_ART_BYTES:
+		return ""
 	DirAccess.make_dir_recursive_absolute("user://arts")
 	var path := "user://arts/crop-"+Crypto.new().generate_random_bytes(8).hex_encode()+".png"
 	var file := FileAccess.open(path,FileAccess.WRITE)
 	if file == null:
-		_error.show()
-		return
+		return ""
 	file.store_buffer(bytes)
 	var error := file.get_error()
 	file.close()
-	if error != OK:
-		_error.show()
-		return
-	if on_saved.is_valid(): on_saved.call(path)
-	queue_free()
+	return path if error == OK else ""

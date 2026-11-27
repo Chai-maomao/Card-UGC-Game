@@ -655,6 +655,8 @@ func _preview_trigger_attachment() -> SkillBlock:
 		_clear_trigger_attachment()
 		_trigger_snap_target = best
 		if best != null: best._set_drag_highlight(true)
+	if best != null:
+		canvas.show_snap_marker(canvas.world.get_global_transform().affine_inverse() * _trigger_body_anchor())
 	return best
 
 func _trigger_body_anchor() -> Vector2:
@@ -665,6 +667,7 @@ func _clear_trigger_attachment() -> void:
 	if is_instance_valid(_trigger_snap_target):
 		_trigger_snap_target._set_drag_highlight(false)
 	_trigger_snap_target = null
+	workbench.workspace.hide_snap_marker()
 
 func _finish_trigger_drag(at: Vector2, allow_attachment: bool) -> void:
 	workspace_script_position = at
@@ -772,6 +775,8 @@ func _highlight_slot(vbox: VBoxContainer, on: bool) -> void:
 		if child is Label: child.visible = not on
 
 func _hide_insertion_line() -> void:
+	if workbench != null:
+		workbench.workspace.hide_snap_marker()
 	if _highlighted_slot != null:
 		_highlight_slot(_highlighted_slot, false)
 		_highlighted_slot = null
@@ -784,7 +789,17 @@ func _hide_insertion_line() -> void:
 
 func _process(_delta: float) -> void:
 	if workbench != null and get_viewport().gui_is_dragging():
-		_preview_stack_drop(get_viewport().gui_get_drag_data())
+		var data: Variant = get_viewport().gui_get_drag_data()
+		_preview_stack_drop(data)
+		var workspace: Control = workbench.workspace
+		var pointer: Vector2 = workspace.get_global_transform_with_canvas() * workspace.last_pointer
+		workspace.highlight_reporter_socket(workspace.find_reporter_socket(pointer, data))
+		var palette_panel: Panel = $Panel/Margin/HBox/PalettePanel
+		var palette_bounds := palette_panel.get_global_transform_with_canvas() * Rect2(Vector2.ZERO, palette_panel.size)
+		if palette_bounds.has_point(pointer):
+			_can_drop_on_palette(Vector2.ZERO, data)
+		else:
+			_set_palette_discard_highlight(false)
 	# Track the editor viewport's press/release events. Forwarded editor input
 	# does not necessarily update Input's OS-level mouse-button state.
 	if _is_editor_drag_active() and not _pointer_down:
@@ -798,18 +813,29 @@ func _process(_delta: float) -> void:
 		_hide_insertion_line()
 	if _palette_discard_highlight and not get_viewport().gui_is_dragging():
 		_set_palette_discard_highlight(false)
-	elif _palette_discard_highlight:
-		var palette_panel: Panel = $Panel/Margin/HBox/PalettePanel
-		if not palette_panel.get_global_rect().has_point(get_global_mouse_position()):
-			_set_palette_discard_highlight(false)
 
 
 func _input(event: InputEvent) -> void:
 	var mouse_button := event as InputEventMouseButton
-	if mouse_button != null and mouse_button.button_index == MOUSE_BUTTON_LEFT:
-		_pointer_down = mouse_button.pressed
-	if mouse_button != null and mouse_button.button_index == MOUSE_BUTTON_LEFT \
-			and not mouse_button.pressed and _drag_in_progress:
+	if mouse_button == null or mouse_button.button_index != MOUSE_BUTTON_LEFT:
+		return
+	_pointer_down = mouse_button.pressed
+	if mouse_button.pressed and is_visible_in_tree():
+		var field := get_viewport().gui_get_focus_owner() as LineEdit
+		if field != null and is_ancestor_of(field):
+			var local_point := field.get_global_transform_with_canvas().affine_inverse() * mouse_button.position
+			if not Rect2(Vector2.ZERO, field.size).has_point(local_point):
+				field.release_focus()
+	elif not mouse_button.pressed and _drag_in_progress:
+		var viewport := get_viewport()
+		if workbench != null and viewport.gui_is_dragging():
+			var data: Variant = viewport.gui_get_drag_data()
+			var socket: Control = workbench.workspace.find_reporter_socket(mouse_button.position, data)
+			if socket != null:
+				socket.drop_reporter(data)
+				viewport.gui_cancel_drag()
+				viewport.set_input_as_handled()
+				return
 		# Run after the viewport has had a chance to perform the normal drop. If
 		# it failed to end the drag, gui_cancel_drag() releases the capture.
 		_recover_pointer_after_drag.call_deferred()
@@ -820,6 +846,8 @@ func _notification(what: int) -> void:
 		_drag_in_progress = true
 		_set_palette_drop_overlay_active(true)
 	elif what == NOTIFICATION_DRAG_END:
+		if workbench != null:
+			workbench.workspace.highlight_reporter_socket(null)
 		if _stack_snap != null: _stack_snap.clear()
 		_hide_insertion_line()
 		_restore_drag_views()
@@ -1021,7 +1049,7 @@ func _is_path_prefix(prefix: Array, path: Array) -> bool:
 	if prefix.is_empty() or prefix.size() >= path.size():
 		return false
 	for i in range(prefix.size()):
-		if prefix[i] != path[i]:
+		if not is_same(prefix[i], path[i]):
 			return false
 	return true
 
@@ -1327,7 +1355,7 @@ func _default_effect(effect_id: String, buff_id: String = "") -> Dictionary:
 		eff["target_side"] = SkillEngine.TARGET_SIDE_ALL
 	if effect_id == SkillEngine.EFFECT_ADD_BUFF:
 		eff["buff_id"] = buff_id if buff_id in SkillRegistry.BUFF_IDS else SkillEngine.BUFF_ATK_BOOST
-		eff["duration"] = 2
+		eff["duration"] = 1
 	if effect_id == SkillEngine.EFFECT_ZERO_COST:
 		# The selector shape describes cards in the active hand, not a battlefield
 		# target.  Unlike ordinary effects this block has no inline target socket,
@@ -1639,7 +1667,7 @@ func _build_settings_row() -> void:
 	row1.add_child(prob_lbl)
 	skill_prob_spin = SpinBox.new()
 	skill_prob_spin.custom_minimum_size = Vector2(60 * s, 0)
-	skill_prob_spin.min_value = 1.0
+	skill_prob_spin.min_value = 0.0
 	skill_prob_spin.max_value = 100.0
 	skill_prob_spin.value = 100.0
 	UITheme.apply_input(skill_prob_spin)
@@ -1975,7 +2003,7 @@ func _builtin_skill_templates() -> Array:
 			"probability": 100, "max_uses": 0, "skill_type": SkillEngine.SKILL_TYPE_NORMAL,
 			"effects": [
 				_TargetResolver.normalize_effect_target({"target": SkillEngine.TARGET_SELF, "effect": SkillEngine.EFFECT_SHIELD, "value": 2}),
-				_TargetResolver.normalize_effect_target({"target": SkillEngine.TARGET_SELF, "effect": SkillEngine.EFFECT_ADD_BUFF, "buff_id": SkillEngine.BUFF_TAUNT, "value": 1, "duration": 2}),
+				_TargetResolver.normalize_effect_target({"target": SkillEngine.TARGET_SELF, "effect": SkillEngine.EFFECT_ADD_BUFF, "buff_id": SkillEngine.BUFF_TAUNT, "value": 1, "duration": 1}),
 			],
 		}},
 		{"name": Locale.t("skill_template.draw"), "skill": {
@@ -1988,9 +2016,11 @@ func _builtin_skill_templates() -> Array:
 
 func _show_skill_templates_popup() -> void:
 	var page := preload("res://SelectionMenu.gd").new()
+	page.name = "SkillTemplatesPopup"
 	page.layer = 105
 	page.heading = Locale.t("skill_editor.templates")
-	page.backdrop = UITheme.COLOR_BG
+	page.backdrop = Color(Color.BLACK, 0.68)
+	page.blur_backdrop = true
 	page.scroll_choices = true
 	add_child(page)
 	var templates := _builtin_skill_templates()
@@ -1998,7 +2028,7 @@ func _show_skill_templates_popup() -> void:
 	for entry in templates:
 		var template_skill := (entry.get("skill", {}) as Dictionary).duplicate(true)
 		var template_name := str(entry.get("name", Locale.t("skill.no_name")))
-		page.add_choice(template_name, _on_skill_template_chosen.bind(template_skill, page), template_name)
+		page.add_choice(template_name, _on_skill_template_chosen.bind(template_skill, page))
 	var name_input := LineEdit.new()
 	name_input.placeholder_text = Locale.t("skill_editor.template_name")
 	name_input.custom_minimum_size.y = 36
@@ -2006,8 +2036,10 @@ func _show_skill_templates_popup() -> void:
 	page.entries.add_child(name_input)
 	page.add_choice(Locale.t("skill_editor.favorite_current"), func():
 		if PlayerData.save_custom_skill_template(name_input.text, _build_skill()):
-			page.queue_free())
+			page.dismiss())
+	UIMotion.register_popup(page)
 	page.finish()
+	UITheme.fade_enter(page.surface, 0.16)
 
 
 func _on_skill_template_chosen(skill: Dictionary, layer: CanvasLayer) -> void:
@@ -2136,7 +2168,7 @@ func _show_save_blocked_popup(errors: Array, title_key: String = "skill_editor.s
 	title.text = Locale.t(title_key)
 	title.add_theme_font_size_override("font_size", max(13, int(16 * s)))
 	UITheme.apply_title(title, max(13, int(16 * s)))
-	title.add_theme_color_override("font_color", UITheme.Tokens.PAPER)
+	title.add_theme_color_override("font_color", UITheme.Tokens.TITLE)
 	vb.add_child(title)
 
 	var body := Label.new()
@@ -2214,6 +2246,7 @@ func _on_cancel_pressed():
 		_discard_dialog.dialog_text = Locale.t("editor.discard_body")
 		add_child(_discard_dialog)
 		UITheme.apply_dialog(_discard_dialog,true)
+		UITheme.apply_destructive_confirmation(_discard_dialog, Locale.t("editor.discard_action"))
 		_discard_dialog.confirmed.connect(_leave_skill_without_saving)
 	_discard_dialog.popup_centered()
 
@@ -2264,6 +2297,9 @@ func _valid_loose_reporter(record: Dictionary) -> bool:
 
 func _can_drop_on_workspace(data: Variant) -> bool:
 	if not data is Dictionary: return false
+	var workspace: Control = workbench.workspace
+	var pointer: Vector2 = workspace.get_global_transform_with_canvas() * workspace.last_pointer
+	if workspace.find_reporter_socket(pointer, data) != null: return true
 	# A rejected typed-socket drop must not fall through to a destructive
 	# detach onto the canvas (especially a reporter into its own descendant).
 	var hovered: Control = get_viewport().gui_get_hovered_control()

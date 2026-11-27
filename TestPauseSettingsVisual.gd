@@ -15,8 +15,19 @@ func _verify() -> void:
 	assert(direct != null and direct.name == "BattleSettingsOverlay" and get_tree().paused)
 	var direct_settings = direct.get_child(0)
 	assert(direct_settings.scene_file_path == "res://SettingsMenu.tscn")
+	var appearance: OptionButton = direct_settings._preference_controls.appearance
+	var dark_surface: Color = direct_settings._settings_panel.get_theme_stylebox("panel").bg_color
+	await _click(appearance.get_global_rect().get_center())
+	var choices := appearance.get_popup()
+	assert(choices.visible and choices.item_count == 2)
+	await _click(Vector2(choices.position) + Vector2(choices.size) * Vector2(0.5, 0.73))
+	assert(appearance.selected == 1 and AppPreferences.get_value("appearance") == 1)
+	assert(direct_settings._settings_panel.get_theme_stylebox("panel").bg_color.get_luminance() > dark_surface.get_luminance())
+	var config := ConfigFile.new()
+	assert(config.load(AppPreferences.PATH) == OK and config.get_value("presentation", "appearance") == 1)
+	await get_tree().create_timer(0.2).timeout
 	await RenderingServer.frame_post_draw
-	get_viewport().get_texture().get_image().save_png("res://artifacts/battle-global-settings.png")
+	get_viewport().get_texture().get_image().save_png("res://artifacts/appearance-settings-light.png")
 	await _click(direct_settings.back_button.get_global_rect().get_center())
 	if not AppPreferences.get_value("reduced_motion"):
 		assert(is_instance_valid(direct) and direct_settings.modulate.a > 0.0, "closing settings should keep the layer visible during its fade")
@@ -37,6 +48,7 @@ func _verify() -> void:
 	var settings_layer := UIMotion.top_popup()
 	assert(settings_layer != pause and get_tree().paused,"settings must open above the paused battle")
 	var settings = settings_layer.get_child(0)
+	assert(settings._preference_controls.appearance.selected == 1, "reopening settings must retain the appearance")
 	if not AppPreferences.get_value("reduced_motion"):
 		assert(settings.modulate.a < 1.0, "settings must fade in from the pause screen")
 	await get_tree().create_timer(0.2).timeout
@@ -86,6 +98,8 @@ func _verify() -> void:
 	await get_tree().scene_changed
 	await get_tree().create_timer(.4).timeout
 	assert(not get_tree().paused and get_tree().current_scene.scene_file_path == "res://MainMenu.tscn","confirmed exit must unpause and return to the main menu")
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png("res://artifacts/appearance-main-menu-light.png")
 	print("TEST_PAUSE_SETTINGS_VISUAL_OK")
 	get_tree().quit(0)
 

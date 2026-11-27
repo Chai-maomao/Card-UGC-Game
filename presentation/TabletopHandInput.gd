@@ -50,7 +50,8 @@ func _get_drag_data(at: Vector2) -> Variant:
 	battle.tabletop_selected_hand = null
 	if is_instance_valid(battle.card_inspector): battle.card_inspector.hide()
 	if not battle.is_my_turn(): return null
-	set_drag_preview(Preview.make(source.current_card_data,at))
+	var card: CardData = source.current_card_data
+	set_drag_preview(Preview.make(card, at, battle.tabletop.drag_portrait(10 + source.get_index(), card)))
 	return {"card_data":source.current_card_data,"card_ui":source}
 
 func _ready() -> void:

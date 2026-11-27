@@ -39,7 +39,7 @@ func _ready() -> void:
 	set_meta("popup_close",queue_free)
 	var shade := ColorRect.new()
 	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	shade.color = Color(0,0,0,0.85)
+	UITheme.apply_overlay(shade)
 	add_child(shade)
 	var panel := PanelContainer.new()
 	panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -47,7 +47,7 @@ func _ready() -> void:
 	panel.offset_top = 24
 	panel.offset_right = -24
 	panel.offset_bottom = -24
-	UITheme.apply_popup_frame(panel, "dark", false)
+	UITheme.apply_popup_frame(panel, "dark", false, true)
 	add_child(panel)
 	var box := VBoxContainer.new()
 	box.add_theme_constant_override("separation",12)
@@ -60,12 +60,18 @@ func _ready() -> void:
 	box.add_child(tabs)
 	var text := RichTextLabel.new()
 	text.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	text.add_theme_font_override("normal_font", UITheme.regular_font())
 	text.add_theme_color_override("default_color",UITheme.COLOR_TEXT)
-	text.add_theme_font_size_override("normal_font_size",16)
+	text.add_theme_font_size_override("normal_font_size", 16 + int(AppPreferences.get_value("text_size")) * 2)
 	text.add_theme_constant_override("line_separation",6)
 	box.add_child(text)
+	var documents_group := ButtonGroup.new()
 	for key in DOCUMENTS:
 		var button := _button(Locale.t("support."+key),tabs)
+		button.toggle_mode = true
+		button.button_group = documents_group
+		UITheme.apply_button(button, "outlined")
+		button.set_pressed_no_signal(key == _document)
 		button.pressed.connect(func(): _show_document(key))
 	_body = text
 	_full_button = _button("",tabs)

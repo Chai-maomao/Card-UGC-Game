@@ -17,6 +17,7 @@ func _ready() -> void:
 			_compare_opening(draw_amount, hp)
 	_test_explicit_config_isolation()
 	_test_second_seat_opens()
+	_test_regular_elixir_refill()
 	EventBus.set_block_signals(previously_blocked)
 	NetworkManager.is_online = was_online
 	PlayerData._apply_battle_preparation(preparation)
@@ -75,6 +76,21 @@ func _test_explicit_config_isolation() -> void:
 		"simulation must isolate caller rules and player preferences")
 	var fallback := HeadlessBattleSimulator._create_game(_deck("A"), _deck("B"), 456)
 	_check(fallback.player_field.player_hp == 7, "omitted rules must use the current configured HP")
+
+
+func _test_regular_elixir_refill() -> void:
+	for amount in [3, 5]:
+		var rules := PlayerData.DEFAULT_BATTLE_CONFIG.duplicate(true)
+		if amount == 5:
+			rules.mana_per_turn = 5
+		var game := HeadlessBattleSimulator._create_game(_deck("A"), _deck("B"), 98, rules)
+		game.start_new_turn()
+		game.player_field.current_mana = 2
+		game.start_new_turn()
+		_check(game.player_field.current_mana == 2 + amount, "regular turns use the default or explicitly configured Elixir refill")
+		game.player2_field.current_mana = 9
+		game.start_new_turn()
+		_check(game.player2_field.current_mana == 10, "Elixir refill respects the player's maximum")
 
 
 func _test_second_seat_opens() -> void:

@@ -315,6 +315,8 @@ func register_popup(node: Node, initial_focus: Control = null) -> void:
 		node.set_meta("modal_visibility_hook",true)
 		node.visibility_changed.connect(func():
 			if not _popup_visible(node): _popup_exited(node))
+	if initial_focus == null and node.has_meta("popup_initial_focus"):
+		initial_focus = node.get_meta("popup_initial_focus", null) as Control
 	var initial_focus_ref: WeakRef = weakref(initial_focus) if is_instance_valid(initial_focus) else null
 	_focus_popup.call_deferred(weakref(node), initial_focus_ref)
 
@@ -398,13 +400,16 @@ func _input(event: InputEvent) -> void:
 	if _busy:
 		get_viewport().set_input_as_handled()
 		return
+	var top := top_popup()
+	if top != null and top.get_meta("popup_close_animated", false) and top.get_meta("popup_close_locked", false):
+		get_viewport().set_input_as_handled()
+		return
 	if key_capture.is_valid() and event is InputEventKey and event.pressed and not event.echo:
 		var callback := key_capture
 		key_capture = Callable()
 		callback.call(event.keycode)
 		get_viewport().set_input_as_handled()
 		return
-	var top := top_popup()
 	# Node2D battle scenes have their controls inside CanvasLayers. Seed focus
 	# explicitly when no Control owns it, then let Godot traverse normally.
 	if top == null and get_viewport().gui_get_focus_owner() == null and (event.is_action_pressed("ui_focus_next") or event.is_action_pressed("ui_focus_prev")):

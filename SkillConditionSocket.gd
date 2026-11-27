@@ -1,5 +1,7 @@
 extends PanelContainer
 
+const DragPreview := preload("res://SkillDragPreview.gd")
+
 var block: Node
 var condition_path: Array = []
 var highlighted := false
@@ -17,21 +19,32 @@ func _get_reporter_drag(position: Vector2):
 	return null
 
 func _can_drop_data(_position: Vector2, payload) -> bool:
-	var accepted: bool = block != null and block._can_drop_condition_at(condition_path, payload)
-	if highlighted != accepted:
-		highlighted = accepted
-		_refresh_style()
+	if DragPreview.uses_socket_overlap(self):
+		return false
+	var accepted := accepts_reporter(payload)
+	set_reporter_highlight(accepted)
 	return accepted
 
 func _drop_data(_position: Vector2, payload) -> void:
 	if not _can_drop_data(Vector2.ZERO, payload): return
-	highlighted = false
+	drop_reporter(payload)
+
+func accepts_reporter(payload: Variant) -> bool:
+	return is_instance_valid(block) and block._can_drop_condition_at(condition_path, payload)
+
+func drop_reporter(payload: Dictionary) -> void:
+	set_reporter_highlight(false)
 	block._drop_condition_at(condition_path, payload)
 
-func _process(_delta: float) -> void:
-	if highlighted and (not get_viewport().gui_is_dragging() or not get_global_rect().has_point(get_global_mouse_position())):
-		highlighted = false
+func set_reporter_highlight(on: bool) -> void:
+	if highlighted != on:
+		highlighted = on
 		_refresh_style()
+
+func _process(_delta: float) -> void:
+	if highlighted and not DragPreview.uses_socket_overlap(self):
+		if not get_viewport().gui_is_dragging() or not get_global_rect().has_point(get_global_mouse_position()):
+			set_reporter_highlight(false)
 
 
 func flash_attachment() -> void:

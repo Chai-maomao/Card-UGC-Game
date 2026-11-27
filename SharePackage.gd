@@ -37,12 +37,13 @@ static func changes(package: Dictionary, local_cards: Array) -> Dictionary:
 	return result
 
 
-static func summary(package: Dictionary, local_cards: Array = []) -> String:
+static func summary(package: Dictionary) -> String:
 	var info := metadata(package.get("provenance", {}))
-	var diff := changes(package, local_cards)
+	var card_count: int = package.get("cards", []).size()
 	if Locale.language == "zh":
-		return "作者：%s\n内容版本：%s\n来源：%s\n\n卡牌 %d 张：新增 %d，玩法变更 %d，玩法相同 %d。\n作者与来源为分享者填写；卡图差异未计入玩法比较。" % [info.author, info.revision, info.source, package.get("cards", []).size(), diff.added, diff.changed, diff.unchanged]
-	return "Author: %s\nContent revision: %s\nSource: %s\n\n%d cards: %d new, %d gameplay changes, %d unchanged.\nAttribution is supplied by the sharer; artwork is excluded from gameplay comparison." % [info.author, info.revision, info.source, package.get("cards", []).size(), diff.added, diff.changed, diff.unchanged]
+		return "作者：%s\n内容版本：%s\n来源：%s\n\n卡牌 %d 张" % [info.author, info.revision, info.source, card_count]
+	var count_text := "%d card" if card_count == 1 else "%d cards"
+	return "Author: %s\nContent revision: %s\nSource: %s\n\n%s" % [info.author, info.revision, info.source, count_text % card_count]
 
 
 static func edit_metadata(parent: Node, package: Dictionary, accepted: Callable) -> void:

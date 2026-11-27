@@ -76,8 +76,7 @@ func reserve_count(count: int,discard_count: int) -> void:
 func _process(delta: float) -> void:
 	if not is_instance_valid(battle) or battle.game == null: return
 	if not busy:
-		var hand: Array = battle.game.player2_hand if battle._view_player()==1 else battle.game.player_hand
-		_set_count(reserved[0] if not reserved.is_empty() and reserved[0]>=0 else hand.size())
+		_set_count(reserved[0] if not reserved.is_empty() and reserved[0]>=0 else battle._opponent_hand_count())
 	_layout(delta)
 
 func _set_count(count: int) -> void:

@@ -19,6 +19,7 @@ func _ready() -> void:
 	var editor := preload("res://CardEditor.tscn").instantiate()
 	add_child(editor)
 	await get_tree().process_frame
+	await _check_long_skill_summary(editor)
 	if not await _save_with_keyboard_navigation(editor):
 		get_tree().quit(1)
 		return
@@ -50,8 +51,37 @@ func _ready() -> void:
 	await _check_cancelled_import()
 	await _check_new_deck_import_result()
 	await _check_failed_card_save()
+	await _check_sync_defaults()
 	if failures == 0: print("TEST_CARD_SAVE_RETURN_OK")
 	get_tree().quit(0 if failures == 0 else 1)
+
+func _check_long_skill_summary(editor: Node) -> void:
+	var effects: Array = []
+	for i in range(12):
+		var branch := SkillRegistry.make_chance_block(50)
+		branch.then_effects = [{"effect": SkillEngine.EFFECT_GAIN_MANA, "target": SkillEngine.TARGET_SELF, "value": i + 1}]
+		effects.append(branch)
+	effects.append({"effect": SkillEngine.EFFECT_CHANGE_COST, "target": SkillEngine.TARGET_ALL,
+		"target_side": SkillEngine.TARGET_SIDE_ALLY, "value": -1})
+	var draft := PlayerData.card_draft.duplicate(true)
+	PlayerData.card_draft.skill2 = {"skill_name": "长技能描述", "trigger": SkillEngine.TRIGGER_ON_TURN_START, "effects": effects}
+	editor._update_skill_labels()
+	var summary: Label = editor.skill2_summary
+	await get_tree().create_timer(0.2).timeout
+	var scroll: ScrollContainer = editor.get_node("Panel/MarginContainer/ScrollContainer")
+	scroll.ensure_control_visible(editor.edit_skill2_btn)
+	await get_tree().process_frame
+	_check(summary.get_visible_line_count() == summary.get_line_count() and summary.get_line_count() > 3,
+		"the full long skill must wrap above the edit button")
+	var overlay := summary.get_node_or_null("KeywordText") as RichTextLabel
+	_check(overlay != null and overlay.get_content_height() <= summary.size.y + 1
+		and overlay.get_parsed_text().ends_with("1 点（最低为 0）"),
+		"the colored description must fit through the last effect")
+	if DisplayServer.get_name() != "headless":
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png("res://artifacts/card-editor-long-skill.png")
+	PlayerData.card_draft = draft
+	editor._update_skill_labels()
 
 func _send_key(key: Key) -> void:
 	for pressed in [true, false]:
@@ -106,7 +136,7 @@ func _check(value: bool, message: String) -> void:
 		push_error(message)
 
 func _check_save_name_conflicts() -> void:
-	for action in ["share.rename_incoming","share.rename_local"]:
+	for action in ["share.rename_incoming", "share.overwrite"]:
 		PlayerData.deck_library = [{"id":"save-return-test","name":"测试牌组","cards":[]}]
 		PlayerData.current_deck_id = "save-return-test"
 		PlayerData.rebuild_card_library_cache()
@@ -115,7 +145,12 @@ func _check_save_name_conflicts() -> void:
 		PlayerData.editing_instance_id = ""
 		for card_name in ["未命名","未命名 2","未命名 4"]:
 			PlayerData.add_card_copy_to_deck("save-return-test",CardData.new(card_name,1,4,1,[]))
-		var incoming := CardData.new("未命名",1,4,3,[])
+		var original: CardData = PlayerData.get_cards_for_deck("save-return-test")[0]
+		var overwrite: bool = action == "share.overwrite"
+		var incoming := CardData.new("未命名", 1, 4, 1 if overwrite else 3, [])
+		if overwrite:
+			original.art_path = CardArtwork.NORMAL
+			incoming.art_path = CardArtwork.DAMAGED
 		PlayerData.card_draft = PlayerData.card_to_draft(incoming)
 		var editor := preload("res://CardEditor.tscn").instantiate()
 		add_child(editor)
@@ -134,12 +169,31 @@ func _check_save_name_conflicts() -> void:
 		var suggested := input.text
 		var names_before: Array = PlayerData.get_cards_for_deck("save-return-test").map(func(c): return c.card_name)
 		_check(suggested not in names_before,"suggested rename is already taken: %s" % suggested)
-		var rename: Button
+		var action_button: Button
 		for button in conflict.find_children("*","Button",true,false):
-			if button.text == Locale.t(action): rename = button
+			_check(button.text != Locale.t("share.rename_local"), "saving must not offer to rename the existing card")
+			if button.text == Locale.t(action): action_button = button
+		_check(action_button != null, "the requested resolution must be available")
+		if action_button == null:
+			editor.queue_free()
+			await get_tree().process_frame
+			continue
+		if overwrite:
+			if DisplayServer.get_name() != "headless":
+				await RenderingServer.frame_post_draw
+				get_viewport().get_texture().get_image().save_png("res://artifacts/save-art-only-conflict.png")
+			await _click(action_button)
+			var replaced := PlayerData.find_deck_card("save-return-test", original.instance_id)
+			_check(replaced != null and replaced.art_path == CardArtwork.DAMAGED
+				and PlayerData.get_cards_for_deck("save-return-test").size() == 3,
+				"overwriting an art-only conflict must update the chosen existing card")
+			editor.queue_free()
+			await get_tree().process_frame
+			continue
 		input.text = "未命名 2"
-		await _click(rename)
+		await _click(action_button)
 		_check(is_instance_valid(conflict) and not conflict.is_queued_for_deletion(),"duplicate rename must keep the dialog open")
+		_check(input.has_focus(), "a duplicate rename must return focus to the name field")
 		_check(PlayerData.get_cards_for_deck("save-return-test").map(func(c): return c.card_name) == names_before,"rejected rename changed the existing cards")
 		_check(incoming.card_name == "未命名","rejected rename changed the unsaved card")
 		_check(editor.pending_save_index == 0,"rejected rename advanced the save or reported success")
@@ -149,11 +203,11 @@ func _check_save_name_conflicts() -> void:
 				await RenderingServer.frame_post_draw
 				get_viewport().get_texture().get_image().save_png("res://artifacts/hand-overlap-20261115/save-name-conflict.png")
 			input.text = suggested
-			await _click(rename)
+			await _click(action_button)
 			var cards := PlayerData.get_cards_for_deck("save-return-test")
 			_check(cards.size() == 4,"successful rename lost or overwrote a card")
 			_check(cards.map(func(c): return c.card_name).count(suggested) == 1,"successful rename did not keep a unique name")
-			_check(cards.any(func(c): return c.card_name == (suggested if action == "share.rename_incoming" else "未命名") and c.base_atk == 3),"the actual incoming card was not saved")
+			_check(cards.any(func(c): return c.card_name == suggested and c.base_atk == 3),"the actual incoming card was not saved")
 		editor.queue_free()
 		await get_tree().process_frame
 
@@ -505,6 +559,49 @@ func _editor_popup(editor: Node, index: int) -> CanvasLayer:
 		if child is CanvasLayer and child.layer == index and not child.is_queued_for_deletion():
 			return child
 	return null
+
+
+func _check_sync_defaults() -> void:
+	var original := PlayerData.prepare_deck_card(CardData.new("同名测试卡", 2, 5, 2))
+	var duplicate := PlayerData.prepare_deck_card(original)
+	var variant := PlayerData.prepare_deck_card(CardData.new("同名测试卡", 4, 8, 3))
+	var art_variant := PlayerData.prepare_deck_card(original)
+	art_variant.art_path = "res://res/ui/keywords/regen.svg"
+	PlayerData.deck_library = [
+		{"id": "active", "name": "当前牌组", "cards": [original]},
+		{"id": "duplicate", "name": "同设计", "cards": [duplicate]},
+		{"id": "variant", "name": "数值不同", "cards": [variant]},
+		{"id": "art-variant", "name": "卡面不同", "cards": [art_variant]},
+	]
+	PlayerData.rebuild_card_library_cache()
+	PlayerData.editing_deck_id = "active"
+	PlayerData.editing_instance_id = original.instance_id
+	PlayerData.editing_index = 0
+	PlayerData.card_draft = PlayerData.card_to_draft(original)
+	var editor := preload("res://CardEditor.tscn").instantiate()
+	add_child(editor)
+	await get_tree().process_frame
+	editor.cost_input.value = 6
+	editor.save_button.pressed.emit()
+	await get_tree().create_timer(0.35).timeout
+	var popup := _editor_popup(editor, 105)
+	_check(popup != null, "saving a named card must offer sync options")
+	if popup == null:
+		editor.queue_free()
+		return
+	var checkboxes := {}
+	for checkbox: CheckBox in popup.find_children("*", "CheckBox", true, false):
+		checkboxes[checkbox.text] = checkbox
+	_check(checkboxes.size() == 4, "all same-name copies must be listed even if the design differs")
+	if checkboxes.size() == 4:
+		_check(checkboxes["同设计"].button_pressed and not checkboxes["数值不同"].button_pressed and not checkboxes["卡面不同"].button_pressed,
+			"only copies that match the saved card before editing may default to selected")
+		checkboxes["数值不同"].button_pressed = true
+		await _click(_save_button(popup))
+		_check(PlayerData.find_deck_card("duplicate", duplicate.instance_id).cost == 6, "the matching copy must update")
+		_check(PlayerData.find_deck_card("variant", variant.instance_id).cost == 6, "the manually chosen variant must update")
+		_check(PlayerData.find_deck_card("art-variant", art_variant.instance_id).cost == 2, "the unselected design must retain its data")
+	editor.queue_free()
 
 
 func _save_button(targets: CanvasLayer) -> Button:

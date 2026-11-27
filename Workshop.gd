@@ -1,14 +1,19 @@
 extends Control
 
+const LOCAL_PACKS_DIR := "res://res/workshop/curated/"
+
 var client: WorkshopBackend
+var _local_packs: Dictionary
 var _items: GridContainer
 var _status: Label
 var _search: LineEdit
 var _sort: OptionButton
 var _account: Button
+var _publish: Button
 var _offset := 0
 var _more: Button
 var _loading := false
+var _opening_package := false
 var _mine := false
 var _discover_tab: Button
 var _mine_tab: Button
@@ -24,6 +29,10 @@ func _ready() -> void:
 	client = WorkshopProviders.create()
 	add_child(client)
 	var available := client.ready_for_use()
+	var catalog: Variant = JSON.parse_string(_read_local_pack("catalog"))
+	if catalog is Array:
+		for entry: Dictionary in catalog:
+			_local_packs[entry.id] = entry
 	var background := Panel.new()
 	background.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	UITheme.apply_app_background(background)
@@ -48,18 +57,19 @@ func _ready() -> void:
 	_account = _button(_t("登录"),header,_account_pressed)
 	UITheme.apply_button(_account, "utility")
 	_account.visible = available
-	var publish := _button(_t("上传卡包"),header,_upload_pressed)
-	UITheme.apply_button(publish,"primary")
-	publish.visible = available
+	_publish = _button(_t("上传卡包"),header,_upload_pressed)
+	UITheme.apply_button(_publish,"primary")
+	_publish.visible = available
 	var filters := HBoxContainer.new()
 	filters.add_theme_constant_override("separation",12)
-	filters.visible = available
+	filters.visible = available or not _local_packs.is_empty()
 	layout.add_child(filters)
 	var navigation := HBoxContainer.new()
 	navigation.add_theme_constant_override("separation", 8)
 	filters.add_child(navigation)
 	_discover_tab = _button(_t("发现"),navigation,func(): _show_mine(false))
 	_mine_tab = _button(_t("我的上传"),navigation,func(): _show_mine(true))
+	_mine_tab.visible = available
 	for tab in [_discover_tab, _mine_tab]:
 		tab.toggle_mode = true
 		UITheme.apply_button(tab, "navigation")
@@ -79,7 +89,7 @@ func _ready() -> void:
 	filters.add_child(_sort)
 	_sort.item_selected.connect(func(_index): _reload())
 	var divider := UITheme.separator()
-	divider.visible = available
+	divider.visible = filters.visible
 	layout.add_child(divider)
 	_status = Label.new()
 	_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -89,8 +99,14 @@ func _ready() -> void:
 	_progress = ProgressBar.new()
 	_progress.indeterminate = true
 	_progress.show_percentage = false
-	_progress.custom_minimum_size.y = 3
-	layout.add_child(_progress)
+	_progress.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_progress.offset_top = -1
+	_progress.offset_bottom = 2
+	_progress.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_progress.add_theme_stylebox_override("background", UITheme.panel_style(UITheme.Tokens.DIVIDER, Color.TRANSPARENT, 0, 0))
+	_progress.add_theme_stylebox_override("fill", UITheme.panel_style(UITheme.COLOR_GOLD, Color.TRANSPARENT, 0, 0))
+	_progress.hide()
+	divider.add_child(_progress)
 	_empty = VBoxContainer.new()
 	_empty.add_theme_constant_override("separation", 12)
 	_empty.hide()
@@ -121,7 +137,16 @@ func _ready() -> void:
 	UITheme.place_page_back(self,back)
 	get_viewport().size_changed.connect(_fit_catalog)
 	_fit_catalog()
+	client.request_activity_changed.connect(_refresh_catalog_controls)
+	_loading = true
+	_add_local_entries()
+	_fit_catalog()
+	_refresh_catalog_controls()
+	# The incoming scene is ready before UIMotion clears the transition flag.
+	await get_tree().process_frame
 	await client.restore_session()
+	_loading = false
+	if UIMotion.is_transitioning(): return
 	_refresh_account()
 	_reload()
 
@@ -145,7 +170,7 @@ func _refresh_account() -> void:
 	_account.text = _t("登录") if not client.authenticated() else client.display_name()
 
 func _show_mine(mine: bool) -> void:
-	if _loading: return
+	if _catalog_busy(): return
 	if mine and not client.authenticated():
 		_discover_tab.set_pressed_no_signal(not _mine)
 		_mine_tab.set_pressed_no_signal(_mine)
@@ -158,36 +183,57 @@ func _show_mine(mine: bool) -> void:
 	_reload()
 
 func _reload() -> void:
-	if _loading: return
+	if _catalog_busy(): return
 	_offset = 0
 	for child in _items.get_children():
 		_items.remove_child(child)
 		child.queue_free()
 	_catalog_scroll.scroll_vertical = 0
+	if not _mine:
+		_add_local_entries()
+	_fit_catalog()
 	_load_page()
 
-func _load_more() -> void:
-	if not _loading: _load_page()
+func _add_local_entries() -> void:
+	var query := _search.text.strip_edges()
+	var entries := _local_packs.values()
+	if _sort.selected == 1:
+		entries.sort_custom(func(a: Dictionary, b: Dictionary): return int(a.downloads) > int(b.downloads))
+	for entry: Dictionary in entries:
+		if query.is_empty() or str(entry.title).containsn(query) or str(entry.description).containsn(query):
+			_add_entry(entry, true)
 
-func _set_catalog_busy(busy: bool) -> void:
-	for button in [_discover_tab,_mine_tab,_sort,_search_button]: button.disabled = busy
+func _load_more() -> void:
+	if not _catalog_busy(): _load_page()
+
+func _catalog_busy() -> bool:
+	return _loading or _opening_package or client.is_request_active()
+
+
+func _refresh_catalog_controls() -> void:
+	var busy := _catalog_busy()
+	for button in [_discover_tab, _mine_tab, _sort, _search_button, _account, _publish, _more, _retry]:
+		button.disabled = busy
+	for button in _items.find_children("ViewWorkshopPack", "Button", true, false):
+		button.disabled = _opening_package or (busy and not button.get_meta("local_pack", false))
 
 func _load_page() -> void:
 	_loading = true
-	_set_catalog_busy(true)
+	_refresh_catalog_controls()
 	_progress.show()
 	_empty.hide()
 	_status.hide()
-	_more.disabled = true
-	var result := await client.browse(_search.text,"popular" if _sort.selected == 1 else "new",_offset,_mine)
+	var result := {"ok": true}
+	if client.ready_for_use():
+		result = await client.browse(_search.text,"popular" if _sort.selected == 1 else "new",_offset,_mine)
 	_loading = false
-	_set_catalog_busy(false)
+	_refresh_catalog_controls()
 	_progress.hide()
-	_more.disabled = false
+	if UIMotion.is_transitioning(): return
 	_refresh_account()
 	if not result.get("ok",false):
 		var message := _t(str(result.get("error",_t("加载失败，请重试"))))
-		if _offset == 0:
+		if _items.get_child_count() == 0:
 			_empty_title.text = message
 			_retry.visible = client.ready_for_use()
 			_empty.show()
@@ -197,31 +243,33 @@ func _load_page() -> void:
 		_more.visible = _offset > 0
 		return
 	var entries: Array = result.get("items",[])
-	for entry in entries: _add_entry(entry)
+	for entry in entries:
+		if _mine or not _local_packs.has(entry.id):
+			_add_entry(entry)
 	_offset += entries.size()
 	_more.visible = bool(result.get("has_more",false))
-	if _offset == 0:
+	if _items.get_child_count() == 0:
 		_empty_title.text = _t("还没有上传卡包") if _mine else (_t("没有找到相关卡包") if not _search.text.is_empty() else _t("还没有卡包"))
 		_retry.hide()
 		_empty.show()
 	_fit_catalog()
 
-func _add_entry(entry: Dictionary) -> void:
+func _add_entry(entry: Dictionary, local: bool = false) -> void:
 	var tile := PanelContainer.new()
 	tile.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	UITheme.apply_panel(tile, "dark")
 	_items.add_child(tile)
 	var margin := MarginContainer.new()
-	for edge in ["left","right","top","bottom"]: margin.add_theme_constant_override("margin_"+edge,20)
+	for edge in ["left","right","top","bottom"]: margin.add_theme_constant_override("margin_"+edge,16)
 	tile.add_child(margin)
 	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation",20)
+	row.add_theme_constant_override("separation",16)
 	margin.add_child(row)
 	var preview := WorkshopCardPreview.new()
 	row.add_child(preview)
 	preview.bind_preview(entry.get("preview",{}))
 	var info := VBoxContainer.new()
-	info.add_theme_constant_override("separation",10)
+	info.add_theme_constant_override("separation",8)
 	info.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	row.add_child(info)
 	var title := Label.new()
@@ -233,7 +281,7 @@ func _add_entry(entry: Dictionary) -> void:
 	var author := Label.new()
 	author.text = str(entry.author)
 	author.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-	UITheme.apply_label(author)
+	UITheme.apply_label(author, true)
 	info.add_child(author)
 	var count := Label.new()
 	count.text = _t("%d 张卡牌") % int(entry.count)
@@ -253,9 +301,13 @@ func _add_entry(entry: Dictionary) -> void:
 	var spacer := Control.new()
 	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	info.add_child(spacer)
-	var open := _button(_t("查看卡包"),info,func(): _view_package(entry))
+	var open := _button(_t("查看卡包"),info,func(): _view_package(entry, local))
+	open.name = "ViewWorkshopPack"
+	open.set_meta("local_pack", local)
+	UITheme.apply_button(open, "outlined")
 	open.size_flags_horizontal = Control.SIZE_FILL
 func _account_pressed() -> void:
+	if _catalog_busy(): return
 	if not client.password_login():
 		if client.authenticated(): client.open_account()
 		else:
@@ -315,6 +367,7 @@ func _login_dialog() -> void:
 		tab.toggle_mode = true
 		tab.button_group = group
 		tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		UITheme.apply_button(tab, "outlined")
 	login_tab.set_pressed_no_signal(true)
 	var name_input := _text_field(_t("用户名"),box,false,24)
 	name_input.name = "UsernameInput"
@@ -330,6 +383,7 @@ func _login_dialog() -> void:
 	var remember := CheckButton.new()
 	remember.name = "RememberLogin"
 	remember.text = _t("记住登录")
+	UITheme.apply_button(remember, "utility", false)
 	box.add_child(remember)
 	var notice := Label.new()
 	notice.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -379,6 +433,7 @@ func _login_dialog() -> void:
 	dialog.popup_centered()
 
 func _upload_pressed() -> void:
+	if _catalog_busy(): return
 	if not client.authenticated():
 		_after_login = _upload_pressed
 		_account_pressed()
@@ -476,23 +531,49 @@ func _upload_pressed() -> void:
 		else: notice.text = _t(str(result.get("error",_t("上传失败，请重试")))))
 	dialog.popup_centered(Vector2i(720,500))
 
-func _view_package(entry: Dictionary) -> void:
+static func _read_local_pack(name: String) -> String:
+	# Protect against plain-text extraction from the export. The offline
+	# client must still be able to derive this key.
+	var key := ("Cardex.Workshop.Bundled.v1/" + name).sha256_buffer()
+	var file := FileAccess.open_encrypted(LOCAL_PACKS_DIR + name + ".pack", FileAccess.READ, key)
+	return file.get_as_text() if file != null else ""
+
+
+func _view_package(entry: Dictionary, local: bool = false) -> void:
+	if local:
+		if not _opening_package and not UIMotion.is_transitioning():
+			_show_package(entry, _read_local_pack(str(entry.id)), true)
+		return
+	if _catalog_busy(): return
+	var previous_focus := get_viewport().gui_get_focus_owner()
+	_opening_package = true
+	_refresh_catalog_controls()
 	_status.text = _t("正在下载…")
 	_status.show()
 	var result := await client.download(str(entry.id))
+	_opening_package = false
+	_refresh_catalog_controls()
+	if UIMotion.is_transitioning(): return
+	if is_instance_valid(previous_focus) and previous_focus.is_visible_in_tree():
+		previous_focus.grab_focus()
 	if not result.get("ok",false):
 		_status.text = _t(str(result.get("error",_t("下载失败，请重试"))))
 		return
-	var parsed := PlayerData.parse_share_package(JSON.stringify(result.get("package",{})))
+	_show_package(entry, JSON.stringify(result.get("package",{})), false)
+
+
+func _show_package(entry: Dictionary, source: String, local: bool) -> void:
+	var parsed := PlayerData.parse_share_package(source)
 	if not parsed.get("ok",false):
 		_status.text = _t("这个卡包无法导入，可能需要更新游戏")
+		_status.show()
 		return
 	_status.text = ""
 	_status.hide()
 	var package: Dictionary = parsed.package
 	var dialog := WorkshopPackPreview.new()
 	add_child(dialog)
-	dialog.build(entry,package,_mine)
+	dialog.build(entry,package,_mine,local)
 	dialog.canceled.connect(dialog.queue_free)
 	dialog.report_requested.connect(func():
 		dialog.hide()
@@ -517,7 +598,7 @@ func _view_package(entry: Dictionary) -> void:
 func _confirm_remove(entry: Dictionary) -> void:
 	var dialog := _dialog(_t("下架卡包"),Vector2i(420,180))
 	dialog.dialog_text = _t("下架后，其他玩家将无法再下载这个卡包。")
-	dialog.get_ok_button().text = _t("下架")
+	UITheme.apply_destructive_confirmation(dialog, _t("下架"))
 	dialog.confirmed.connect(func():
 		var result := await client.withdraw(str(entry.id))
 		if is_instance_valid(dialog): dialog.queue_free()

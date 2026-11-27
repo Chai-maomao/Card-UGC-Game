@@ -61,16 +61,16 @@ static func can_cast(card: CardData, current_mana: int, skill_index: int = CAST_
 		return {"ok": false, "reason": REASON_WRONG_TRIGGER}
 	if card.cost > current_mana:
 		return {"ok": false, "reason": REASON_NO_MANA}
-	if turn_number <= 1 and targets_enemy(skill):
+	if turn_number <= 1 and targets_enemy(skill, false):
 		return {"ok": false, "reason": REASON_ENEMY_TARGET_TURN_ONE, "skill": skill}
 	return {"ok": true, "reason": REASON_OK, "skill": skill, "needs_target": needs_target(skill)}
 
 
-static func targets_enemy(skill: Dictionary) -> bool:
-	return _effects_target_enemy(_effects_for(skill))
+static func targets_enemy(skill: Dictionary, selected_enemy: bool = true) -> bool:
+	return _effects_target_enemy(_effects_for(skill), selected_enemy)
 
 
-static func _effects_target_enemy(effects: Array) -> bool:
+static func _effects_target_enemy(effects: Array, selected_enemy: bool) -> bool:
 	for value in effects:
 		if not value is Dictionary:
 			continue
@@ -78,7 +78,7 @@ static func _effects_target_enemy(effects: Array) -> bool:
 		var effect_id := str(effect.get("effect", ""))
 		for branch in ["then_effects", "else_effects"]:
 			var nested = effect.get(branch, [])
-			if nested is Array and _effects_target_enemy(nested):
+			if nested is Array and _effects_target_enemy(nested, selected_enemy):
 				return true
 		if SkillRegistry.is_control_effect(effect_id):
 			continue
@@ -87,11 +87,15 @@ static func _effects_target_enemy(effects: Array) -> bool:
 		if not SkillRegistry.requires_live_target(effect_id):
 			continue
 		var target := str(effect.get("target", ""))
+		if SkillTargetResolver.uses_selected_unit(target):
+			if selected_enemy:
+				return true
+			continue
 		var side := str(effect.get("target_side", ""))
 		if target == "all_enemies":
 			return true
 		var can_select_field := target in [
-			SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES, SkillEngine.TARGET_ALL,
+			SkillEngine.TARGET_ALL,
 			SkillEngine.TARGET_PLAYER,
 			SkillEngine.TARGET_MALE, SkillEngine.TARGET_FEMALE, SkillEngine.TARGET_NONHUMAN,
 		]
@@ -104,42 +108,26 @@ static func needs_target(skill: Dictionary) -> bool:
 	return _effects_need_target(_effects_for(skill))
 
 
-static func manual_target_side(skill: Dictionary) -> String:
-	return _manual_target_side_in_effects(_effects_for(skill))
-
-
-static func _manual_target_side_in_effects(effects: Array) -> String:
-	for value in effects:
-		if not value is Dictionary:
-			continue
-		var effect: Dictionary = value
-		for branch in ["then_effects", "else_effects"]:
-			var nested = effect.get(branch, [])
-			if nested is Array:
-				var nested_side := _manual_target_side_in_effects(nested)
-				if nested_side != "":
-					return nested_side
-		if str(effect.get("target", "")) in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES]:
-			var side := str(effect.get("target_side", SkillEngine.TARGET_SIDE_ENEMY))
-			return side if side != "" else SkillEngine.TARGET_SIDE_ENEMY
-	return ""
-
-
-static func target_player_matches_drop(skill: Dictionary, caster_player: int, target_player: int) -> bool:
-	if not needs_target(skill):
-		return true
-	if target_player not in [1, 2]:
+static func can_select_unit(skill: Dictionary, source: CardData, field: BattleField, slot: int, hostile: bool, round_number: int) -> bool:
+	if field == null or field.player_hp <= 0 or slot < 0 or slot >= field.slots.size():
 		return false
-	match manual_target_side(skill):
-		SkillEngine.TARGET_SIDE_ALLY:
-			return target_player == caster_player
-		SkillEngine.TARGET_SIDE_ENEMY:
-			return target_player != caster_player
-	return true
+	var target: CardData = field.slots[slot]
+	if target == null or target == source or not target.is_selectable():
+		return false
+	if not hostile:
+		return true
+	if not target.has_taunt() and field.has_any_taunt():
+		return false
+	if round_number > 1:
+		return true
+	return skill.get("trigger") != SkillEngine.TRIGGER_ON_CAST and not SkillRegistry.skill_changes_enemy_hp_or_presence(skill, true)
 
 
-static func default_target_player(skill: Dictionary, caster_player: int) -> int:
-	return caster_player if manual_target_side(skill) == SkillEngine.TARGET_SIDE_ALLY else 3 - caster_player
+static func has_selectable_unit(skill: Dictionary, source: CardData, field: BattleField, hostile: bool, round_number: int) -> bool:
+	for slot in field.slots.size():
+		if can_select_unit(skill, source, field, slot, hostile, round_number):
+			return true
+	return false
 
 
 static func _effects_need_target(effects: Array) -> bool:

@@ -1,21 +1,19 @@
 extends RefCounted
 
-static func build(card: CardData) -> PanelContainer:
+static func build(card: CardData, skill_use_refreshers: Array[Callable]) -> PanelContainer:
 	var rows: Array[Array] = []
 	var zh := Locale.language == "zh"
 	if card.temp_hp > 0:
-		rows.append(["护盾" if zh else "Shield", "+%d" % card.temp_hp, "1回合后结束" if zh else "Ends after 1 turn"])
+		rows.append(["护盾" if zh else "Shield", "+%d" % card.temp_hp, Locale.t("card.status_shield_expiry")])
 	for effect in card.status_effects:
-		var value := int(effect.get("value",0))
-		if value == 0: continue
 		var buff := str(effect.get("buff_id",""))
-		var duration := int(effect.get("duration",0))
-		var expiry := ("剩余 %d 回合" if zh else "%d turns remaining") % duration
-		if buff == SkillEngine.BUFF_STUN:
-			expiry = ("本回合结束解除" if effect.get("stun_active",false) else "下次己方回合结束解除") if zh else ("Until this turn ends" if effect.get("stun_active",false) else "Until the next friendly turn ends")
-		rows.append([Locale.term("buff",buff),SkillEngine.format_buff_value(buff,str(value)),expiry])
+		var value := int(effect.get("value",0))
+		if buff == SkillEngine.BUFF_IMMUNE_LETHAL or (value == 0 and buff != SkillEngine.BUFF_TAUNT):
+			continue
+		var detail := SkillTextFormatter.format_buff_value(buff, str(value)) if SkillRegistry.buff_uses_value(buff) else ""
+		rows.append([Locale.term("buff", buff), detail, SkillTextFormatter.status_time_left(effect)])
 	if card.immune_lethal:
-		rows.append(["免疫致命伤害" if zh else "Lethal immunity", "1 次" if zh else "Once", "触发后消耗" if zh else "Consumed on trigger"])
+		rows.append([Locale.term("buff", SkillEngine.BUFF_IMMUNE_LETHAL), Locale.t("card.status_lethal_detail"), Locale.t("card.status_lethal_once")])
 	if card.turn_cost_reduction > 0:
 		rows.append(["本回合费用降低" if zh else "Turn cost reduction", "−%d" % card.turn_cost_reduction,"回合结束到期" if zh else "Until turn end"])
 	var attachment_row_begin := rows.size()
@@ -47,13 +45,14 @@ static func build(card: CardData) -> PanelContainer:
 	list.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	list.add_theme_constant_override("separation",12)
 	scroll.add_child(list)
-	if has_own_parasite_skills: _add_parasite_skills(list,card)
+	if has_own_parasite_skills: _add_parasite_skills(list, card, skill_use_refreshers)
 	for row_index in range(rows.size()):
 		var row: Array = rows[row_index]
 		var entry := VBoxContainer.new()
 		entry.add_theme_constant_override("separation",4)
 		list.add_child(entry)
 		for i in range(row.size()):
+			if row[i] == "": continue
 			var label := Label.new()
 			if i == 0 and row_index >= attachment_row_begin: label.set_meta("keyword_literal",true)
 			label.text = row[i]
@@ -65,10 +64,11 @@ static func build(card: CardData) -> PanelContainer:
 			elif i == 1: label.add_theme_color_override("font_color",UITheme.COLOR_GOLD)
 			entry.add_child(label)
 		if row_index>=attachment_row_begin:
-			_add_parasite_skills(entry,card.parasite_cards[row_index-attachment_row_begin])
+			var attachment_index := row_index - attachment_row_begin
+			_add_parasite_skills(entry, card.parasite_cards[attachment_index], skill_use_refreshers, attachment_index)
 	return panel
 
-static func _add_parasite_skills(parent: Control,parasite: CardData) -> void:
+static func _add_parasite_skills(parent: Control, parasite: CardData, refreshers: Array[Callable], attachment_index: int = -1) -> void:
 	var box := VBoxContainer.new()
 	box.name = "ParasiteSkills"
 	box.add_theme_constant_override("separation",8)
@@ -76,4 +76,4 @@ static func _add_parasite_skills(parent: Control,parasite: CardData) -> void:
 	for index in range(parasite.skills.size()):
 		var skill: Dictionary = parasite.skills[index]
 		if skill.is_empty(): continue
-		box.add_child(preload("res://presentation/SkillDescription.gd").build(SkillTextFormatter.format_skill_tooltip(skill,index)))
+		box.add_child(preload("res://presentation/SkillDescription.gd").build_battle_skill(parasite, index, refreshers, attachment_index))

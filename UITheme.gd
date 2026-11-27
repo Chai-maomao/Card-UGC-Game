@@ -55,10 +55,10 @@ static func selection_font() -> Font:
 	return _selection_slanted
 
 
-static func apply_selection_entry(button: Button) -> void:
+static func apply_selection_entry(button: Button, font: Font = null) -> void:
 	button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	button.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
-	button.add_theme_font_override("font", selection_font())
+	button.add_theme_font_override("font", font if font != null else selection_font())
 	var style := StyleBoxEmpty.new()
 	style.content_margin_left = 22.0
 	for state in ["normal", "hover", "pressed", "hover_pressed", "disabled", "focus"]:
@@ -74,12 +74,12 @@ static func _update_selection_color(button: Button) -> void:
 	var high_contrast := bool(AppPreferences.get_value("high_contrast"))
 	var color := COLOR_TEXT if high_contrast else COLOR_TEXT_MUTED
 	if button.has_focus():
-		color = Color.WHITE if high_contrast else COLOR_TEXT
+		color = Tokens.CONTRAST_INK if high_contrast else COLOR_TEXT
 	button.add_theme_color_override("font_color", color)
-	button.add_theme_color_override("font_pressed_color", Color.WHITE if high_contrast else COLOR_GOLD)
-	button.add_theme_color_override("font_hover_pressed_color", Color.WHITE if high_contrast else COLOR_GOLD)
-	button.add_theme_color_override("font_hover_color", Color.WHITE if high_contrast else COLOR_TEXT)
-	button.add_theme_color_override("font_focus_color", Color.WHITE if high_contrast else COLOR_TEXT)
+	button.add_theme_color_override("font_pressed_color", Tokens.CONTRAST_INK if high_contrast else COLOR_GOLD)
+	button.add_theme_color_override("font_hover_pressed_color", Tokens.CONTRAST_INK if high_contrast else COLOR_GOLD)
+	button.add_theme_color_override("font_hover_color", Tokens.CONTRAST_INK if high_contrast else COLOR_TEXT)
+	button.add_theme_color_override("font_focus_color", Tokens.CONTRAST_INK if high_contrast else COLOR_TEXT)
 
 
 static func add_selection_focus(control: Control) -> void:
@@ -95,24 +95,44 @@ static func _focus_selection_entry(control: Control) -> void:
 	if above == null or above.is_ancestor_of(control):
 		control.grab_focus()
 
-const COLOR_BG := Tokens.BG
-const COLOR_PANEL := Tokens.PANEL
-const COLOR_PANEL_SOFT := Tokens.PANEL_SOFT
-const COLOR_PANEL_DARK := Tokens.PANEL_DARK
-const COLOR_GOLD := Tokens.BRASS
-const COLOR_GOLD_SOFT := Tokens.PRIMARY_HOVER
-const COLOR_BLUE := Tokens.TEAL
-const COLOR_ACCENT := Tokens.TEAL
-const COLOR_TEXT := Tokens.TEXT
-const COLOR_TEXT_MUTED := Tokens.MUTED
-const COLOR_BUTTON := Tokens.BUTTON
-const COLOR_BUTTON_HOVER := Tokens.BUTTON_HOVER
-const COLOR_BUTTON_PRESSED := Tokens.BUTTON_PRESSED
-const COLOR_PRIMARY := Tokens.PRIMARY
-const COLOR_PRIMARY_HOVER := Tokens.PRIMARY_HOVER
-const COLOR_PRIMARY_PRESSED := Tokens.PRIMARY_PRESSED
+static var COLOR_BG: Color:
+	get: return Tokens.BG
+const UNTARGETABLE_CARD_OPACITY := 0.5
+static var COLOR_PANEL: Color:
+	get: return Tokens.PANEL
+static var COLOR_PANEL_SOFT: Color:
+	get: return Tokens.PANEL_SOFT
+static var COLOR_PANEL_DARK: Color:
+	get: return Tokens.PANEL_DARK
+static var COLOR_GOLD: Color:
+	get: return Tokens.BRASS
+static var COLOR_GOLD_SOFT: Color:
+	get: return Tokens.PRIMARY_HOVER
+static var COLOR_BLUE: Color:
+	get: return Tokens.TEAL
+static var COLOR_ACCENT: Color:
+	get: return Tokens.TEAL
+static var COLOR_TEXT: Color:
+	get: return Tokens.TEXT
+static var COLOR_TEXT_MUTED: Color:
+	get: return Tokens.MUTED
+static var COLOR_BUTTON: Color:
+	get: return Tokens.BUTTON
+static var COLOR_BUTTON_HOVER: Color:
+	get: return Tokens.BUTTON_HOVER
+static var COLOR_BUTTON_PRESSED: Color:
+	get: return Tokens.BUTTON_PRESSED
+static var COLOR_PRIMARY: Color:
+	get: return Tokens.PRIMARY
+static var COLOR_PRIMARY_HOVER: Color:
+	get: return Tokens.PRIMARY_HOVER
+static var COLOR_PRIMARY_PRESSED: Color:
+	get: return Tokens.PRIMARY_PRESSED
 const COLOR_SHADOW := Tokens.SHADOW
-const COLOR_ARCANE := Tokens.TEAL
+const BLOCK_FACE_BASE := Color("302b22")
+const BLOCK_PRESSED_BASE := Color("211e18")
+static var COLOR_ARCANE: Color:
+	get: return Tokens.TEAL
 const COLOR_ARCANE_SOFT := Color(Tokens.INK,0.94)
 
 static func card_type_accent(card_type: String) -> Color:
@@ -126,10 +146,14 @@ static func strength_score_color(score: int) -> Color:
 	if deviation<=15: return Tokens.SUCCESS
 	if deviation<=40: return Tokens.WARNING
 	return Color("df786b")
-const COLOR_ENEMY := Tokens.ENEMY
-const COLOR_PLAYER := Tokens.TEAL
-const COLOR_SUCCESS := Tokens.SUCCESS
-const COLOR_WARNING := Tokens.WARNING
+static var COLOR_ENEMY: Color:
+	get: return Tokens.ENEMY
+static var COLOR_PLAYER: Color:
+	get: return Tokens.TEAL
+static var COLOR_SUCCESS: Color:
+	get: return Tokens.SUCCESS
+static var COLOR_WARNING: Color:
+	get: return Tokens.WARNING
 
 
 static func apply_app_background(control: Control) -> void:
@@ -144,11 +168,21 @@ static func apply_app_background(control: Control) -> void:
 			control.add_child(backdrop)
 			control.move_child(backdrop, 0)
 			apply_app_background(backdrop)
+	control.set_meta("ui_panel_variant", "background")
 	control.add_theme_stylebox_override("panel", panel_style(COLOR_BG, Tokens.BORDER, 0, 0))
+
+
+static func party_team_accent(team: int) -> Color:
+	if Tokens.light_mode:
+		return Color("a2473a") if team == 1 else Color("2b6493")
+	return Color("e38f7e") if team == 1 else Color("82bce8")
 
 
 static func apply_panel(panel: Control, variant: String = "normal") -> void:
 	if panel == null:
+		return
+	if variant == "background":
+		apply_app_background(panel)
 		return
 	panel.set_meta("ui_panel_variant", variant)
 	var fill := COLOR_PANEL
@@ -211,7 +245,10 @@ static func apply_panel(panel: Control, variant: String = "normal") -> void:
 	var framed := panel.has_meta("ui_popup_frame") or variant == "tooltip"
 	if framed:
 		radius = POPUP_RADIUS
-		width = 0
+		width = 1 if Tokens.light_mode else 0
+		if Tokens.light_mode and variant != "tooltip":
+			border = Tokens.TOOLTIP_BORDER
+			fill = Color("f3e8d4")
 	panel.add_theme_stylebox_override("panel", panel_style(fill, border, width, radius, shadow, shadow_size))
 	if framed:
 		_add_bronze_surface(panel)
@@ -226,12 +263,23 @@ static func _add_bronze_surface(panel: Control) -> void:
 
 static func _draw_bronze_surface(panel: Control) -> void:
 	var battle: bool = panel.get_meta("battle_frame", is_battle_context(panel))
-	var filled: bool = panel.get_meta("ui_panel_variant", "") == "tooltip" or not panel.has_meta("ui_popup_frame")
-	var key := Vector2i(int(battle), int(filled))
+	var filled: bool = panel.get_meta("ui_panel_variant", "") == "tooltip" \
+		or panel.get_meta("ui_popup_fill", not panel.has_meta("ui_popup_frame"))
+	var key := Vector3i(int(battle), int(filled), int(Tokens.light_mode))
 	if not _bronze_surfaces.has(key):
 		var surface := StyleBoxTexture.new()
 		surface.texture = preload("res://res/ui/bronze_battle_panel.png") if battle else preload("res://res/ui/bronze_panel.png")
-		surface.draw_center = filled
+		if Tokens.light_mode:
+			var image := surface.texture.get_image()
+			for y in image.get_height():
+				for x in image.get_width():
+					var pixel := image.get_pixel(x, y)
+					var light_pixel := pixel.lerp(Color("f3dfb9"), 0.58)
+					var edge := mini(mini(x, image.get_width() - 1 - x), mini(y, image.get_height() - 1 - y))
+					light_pixel.a = pixel.a * clampf((7.0 - edge) / 3.0, 0.0, 1.0)
+					image.set_pixel(x, y, light_pixel)
+			surface.texture = ImageTexture.create_from_image(image)
+		surface.draw_center = filled and not Tokens.light_mode
 		for side in [SIDE_LEFT, SIDE_TOP, SIDE_RIGHT, SIDE_BOTTOM]:
 			surface.set_texture_margin(side, 7)
 		_bronze_surfaces[key] = surface
@@ -283,12 +331,13 @@ static func apply_button(button: BaseButton, variant: String = "secondary", anim
 		hover = Color.TRANSPARENT
 		pressed = Color.TRANSPARENT
 		font_color = COLOR_TEXT_MUTED
-	var frame_width := 1 if variant in ["primary", "danger"] else 0
+	var frame_width := 1 if variant in ["primary", "danger", "outlined"] else 0
 	var radius := 4
 	button.add_theme_stylebox_override("normal", panel_style(base, border, frame_width, radius))
 	button.add_theme_stylebox_override("hover", panel_style(hover, border.lightened(0.25), frame_width, radius))
-	button.add_theme_stylebox_override("pressed", panel_style(pressed, border, frame_width, radius))
-	button.add_theme_stylebox_override("hover_pressed", panel_style(pressed.lightened(0.04), border.lightened(0.25), frame_width, radius))
+	var selected_border := COLOR_GOLD if variant == "outlined" else border
+	button.add_theme_stylebox_override("pressed", panel_style(pressed, selected_border, frame_width, radius))
+	button.add_theme_stylebox_override("hover_pressed", panel_style(pressed.lightened(0.04), selected_border.lightened(0.25), frame_width, radius))
 	var utility := variant == "utility"
 	button.add_theme_stylebox_override("disabled", panel_style(Color.TRANSPARENT if utility else Tokens.DISABLED, Tokens.DISABLED, 0, radius))
 	button.add_theme_stylebox_override("focus", panel_style(Color.TRANSPARENT, COLOR_GOLD, 0 if variant == "navigation" else 1, radius))
@@ -302,12 +351,12 @@ static func apply_button(button: BaseButton, variant: String = "secondary", anim
 		button.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		for state in ["normal", "hover", "pressed", "hover_pressed", "disabled", "focus"]:
 			button.get_theme_stylebox(state).set_content_margin(SIDE_LEFT, 22)
-		var active_color := Color.WHITE if high_contrast else Tokens.HEADING_GOLD
+		var active_color := Tokens.CONTRAST_INK if high_contrast else Tokens.HEADING_GOLD
 		button.add_theme_color_override("font_pressed_color", active_color)
 		button.add_theme_color_override("font_hover_pressed_color", active_color)
 		_watch_selection_marker(button, 10.0, true)
 	if high_contrast:
-		button.add_theme_color_override("font_color",Color.WHITE)
+		button.add_theme_color_override("font_color", Tokens.CONTRAST_INK)
 		button.add_theme_color_override("font_disabled_color",Tokens.TEXT)
 		for state in ["normal","hover","pressed","hover_pressed","disabled"]:
 			var style := button.get_theme_stylebox(state).duplicate() as StyleBoxFlat
@@ -315,10 +364,34 @@ static func apply_button(button: BaseButton, variant: String = "secondary", anim
 			style.border_color = Tokens.TEXT
 			style.set_border_width_all(1)
 			button.add_theme_stylebox_override(state,style)
+	elif variant == "secondary":
+		_outline_popup_button(button)
+		if not button.is_inside_tree():
+			# Dynamic dialogs often style controls before parenting them.
+			var outline := _outline_popup_button.bind(button)
+			if not button.ready.is_connected(outline):
+				button.ready.connect(outline, CONNECT_ONE_SHOT)
 	if animated:
 		hook_button_feedback(button)
 	elif button.get_meta("uimotion_hooked",false):
 		_update_button_motion(button)
+
+
+static func _outline_popup_button(button: BaseButton) -> void:
+	if button.get_meta("ui_button_variant", "") != "secondary":
+		return
+	var normal := button.get_theme_stylebox("normal") as StyleBoxFlat
+	if normal == null or normal.bg_color != COLOR_BUTTON or normal.border_width_left != 0:
+		return
+	var surface := button.get_parent()
+	while surface != null:
+		if surface.has_meta("ui_bronze_dialog") or (surface.has_meta("ui_popup_frame") and surface.get_meta("ui_popup_fill", false)):
+			for state in ["normal", "hover", "pressed", "hover_pressed"]:
+				var style := button.get_theme_stylebox(state) as StyleBoxFlat
+				if style != null:
+					style.set_border_width_all(1)
+			return
+		surface = surface.get_parent()
 
 
 static func _watch_selection_marker(control: Control, x: float, navigation_only := false) -> void:
@@ -345,7 +418,7 @@ static func _draw_selection_marker(control: Control, x: float, navigation_only: 
 		var hovered := control.get_viewport().gui_get_hovered_control()
 		if hovered == null or (hovered != control and not control.is_ancestor_of(hovered)): return
 	var center := Vector2(x, control.size.y * 0.5)
-	var color := Color.WHITE if AppPreferences.get_value("high_contrast") else COLOR_GOLD
+	var color := Tokens.CONTRAST_INK if AppPreferences.get_value("high_contrast") else COLOR_GOLD
 	control.draw_colored_polygon(PackedVector2Array([
 		center + Vector2(0, -4), center + Vector2(4, 0),
 		center + Vector2(0, 4), center + Vector2(-4, 0),
@@ -406,14 +479,21 @@ static func apply_title(label: Label, size: int = 24) -> void:
 	if label == null:
 		return
 	label.set_meta("keyword_literal",true)
+	label.set_meta("ui_title_size", size)
 	label.add_theme_font_override("font", display_font())
 	label.add_theme_font_size_override("font_size", size+int(AppPreferences.get_value("text_size"))*2)
-	label.add_theme_color_override("font_color", Tokens.PAPER)
+	label.add_theme_color_override("font_color", Tokens.TITLE)
+
+
+static func apply_room_entry_title(label: Label, scale: float = 1.0) -> void:
+	apply_title(label, maxi(24, roundi(30.0 * scale)))
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 
 
 static func apply_label(label: Label, muted: bool = false) -> void:
 	if label == null:
 		return
+	label.set_meta("ui_label_muted", muted)
 	if not label.has_meta("base_text_size"):
 		label.set_meta("base_text_size",label.get_theme_font_size("font_size") if label.has_theme_font_size_override("font_size") else 16)
 	if not label.has_theme_font_override("font"):
@@ -430,7 +510,7 @@ static func apply_input(control: Control) -> void:
 		targets.append((control as SpinBox).get_line_edit())
 	var high_contrast := bool(AppPreferences.get_value("high_contrast"))
 	var normal_style := panel_style(Tokens.BG, Tokens.TEXT if high_contrast else Tokens.FIELD_BORDER, 1, POPUP_RADIUS)
-	var focus_style := panel_style(Tokens.BG, Color.WHITE if high_contrast else COLOR_GOLD, 2, POPUP_RADIUS)
+	var focus_style := panel_style(Tokens.BG, Tokens.CONTRAST_INK if high_contrast else COLOR_GOLD, 2, POPUP_RADIUS)
 	for target in targets:
 		target.add_theme_stylebox_override("normal", normal_style)
 		target.add_theme_stylebox_override("focus", focus_style)
@@ -439,7 +519,7 @@ static func apply_input(control: Control) -> void:
 		target.add_theme_color_override("font_placeholder_color", COLOR_TEXT_MUTED)
 		target.add_theme_color_override("caret_color", COLOR_TEXT)
 		target.add_theme_color_override("selection_color", COLOR_PRIMARY_HOVER)
-		target.add_theme_color_override("font_selected_color", Color.WHITE)
+		target.add_theme_color_override("font_selected_color", COLOR_TEXT if Tokens.light_mode else Color.WHITE)
 
 
 static func apply_item_list(list: ItemList) -> void:
@@ -477,9 +557,11 @@ static func separator() -> HSeparator:
 	return line
 
 
-static func apply_separator(line: HSeparator) -> void:
+static func apply_separator(line: Separator) -> void:
 	line.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	line.add_theme_stylebox_override("separator", _separator_style())
+	var style := _separator_style()
+	style.vertical = line is VSeparator
+	line.add_theme_stylebox_override("separator", style)
 
 
 static func _separator_style() -> StyleBoxLine:
@@ -498,6 +580,7 @@ static func list_row_style() -> StyleBoxFlat:
 static func apply_dialog(dialog: AcceptDialog, confirm_primary: bool = false) -> void:
 	if dialog == null:
 		return
+	dialog.set_meta("ui_bronze_dialog", true)
 	if dialog is FileDialog:
 		var picker := dialog as FileDialog
 		picker.use_native_dialog = DisplayServer.has_feature(DisplayServer.FEATURE_NATIVE_DIALOG_FILE)
@@ -512,17 +595,18 @@ static func apply_dialog(dialog: AcceptDialog, confirm_primary: bool = false) ->
 		var caption := preload("res://DialogCaption.gd").new()
 		caption.name = "DialogCaption"
 		dialog.add_child(caption)
-	var frame := panel_style(COLOR_PANEL_DARK, COLOR_GOLD, 0, POPUP_RADIUS)
+	var dialog_fill := Color("f3e8d4") if Tokens.light_mode else COLOR_PANEL_DARK
+	var frame := panel_style(dialog_fill, COLOR_GOLD, 0, POPUP_RADIUS)
 	frame.bg_color.a = 1.0
 	frame.expand_margin_top = 0
 	dialog.add_theme_stylebox_override("embedded_border", frame)
 	dialog.add_theme_stylebox_override("embedded_unfocused_border", frame)
-	var body := panel_style(COLOR_PANEL_DARK, Tokens.BORDER, 0, POPUP_RADIUS)
+	var body := panel_style(dialog_fill, Tokens.BORDER, 0, POPUP_RADIUS)
 	body.content_margin_left = DIALOG_INSET
 	body.content_margin_right = DIALOG_INSET
 	body.content_margin_top = 64
 	body.content_margin_bottom = 20
-	dialog.add_theme_color_override("title_color", Tokens.PAPER)
+	dialog.add_theme_color_override("title_color", Tokens.TITLE)
 	dialog.add_theme_font_size_override("title_font_size", 18)
 	# Captions are drawn inside the panel. A native title height leaves
 	# an invisible title strip above an embedded borderless window.
@@ -554,6 +638,18 @@ static func apply_dialog(dialog: AcceptDialog, confirm_primary: bool = false) ->
 		if child is Panel and child not in content:
 			_add_bronze_surface(child)
 			break
+
+
+static func apply_destructive_confirmation(dialog: ConfirmationDialog, action_text: String) -> void:
+	var confirm := dialog.get_ok_button()
+	confirm.text = action_text
+	apply_button(confirm, "danger")
+	var cancel := dialog.get_cancel_button()
+	cancel.text = Locale.t("common.cancel")
+	var actions := confirm.get_parent()
+	if actions == cancel.get_parent() and cancel.get_index() > confirm.get_index():
+		actions.move_child(cancel, confirm.get_index())
+	dialog.set_meta("popup_initial_focus", cancel)
 
 
 static func _localize_file_dialog(dialog: FileDialog) -> void:
@@ -612,8 +708,9 @@ static func apply_overlay(rect: ColorRect) -> void:
 	rect.mouse_filter = Control.MOUSE_FILTER_STOP
 
 
-static func apply_popup_frame(panel: Control, variant: String = "gold", animate: bool = true) -> void:
+static func apply_popup_frame(panel: Control, variant: String = "gold", animate: bool = true, filled: bool = true) -> void:
 	panel.set_meta("ui_popup_frame", true)
+	panel.set_meta("ui_popup_fill", filled)
 	apply_panel(panel, variant)
 	panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	if animate:
@@ -625,7 +722,12 @@ static func theme_tree(root: Node, include_internal: bool = false) -> void:
 		return
 	for child in root.get_children(include_internal):
 		if child is Label:
-			apply_label(child)
+			if child.has_meta("ui_title_size"):
+				apply_title(child, int(child.get_meta("ui_title_size")))
+			else:
+				apply_label(child, bool(child.get_meta("ui_label_muted", false)))
+		elif child is Separator:
+			apply_separator(child)
 		elif child is OptionButton:
 			apply_button(child, str(child.get_meta("ui_button_variant", "secondary")))
 			apply_popup_menu(child.get_popup())

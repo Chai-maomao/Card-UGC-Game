@@ -2,7 +2,8 @@ extends Node
 
 signal changed(key: String)
 const PATH := "user://settings.cfg"
-const DEFAULTS := {"window_mode":0,"fullscreen":true,"vsync":true,"fps":120,"quality":1,"master":0.8,"bgm":0.45,"sfx":0.8,"ui":0.6,"mute":false,"reduced_motion":false,"camera_shake":true,"text_size":0,"high_contrast":false,"title_card_ids":[]}
+const Tokens := preload("res://DesignTokens.gd")
+const DEFAULTS := {"window_mode":0,"fullscreen":true,"vsync":true,"fps":120,"quality":1,"appearance":0,"skill_inspector_ratio":0.0,"master":0.8,"bgm":0.45,"sfx":0.8,"ui":0.6,"mute":false,"reduced_motion":false,"camera_shake":true,"text_size":0,"high_contrast":false,"title_card_ids":[]}
 var values: Dictionary = {}
 var _background_visual_test := false
 
@@ -14,6 +15,7 @@ func _ready() -> void:
 	var config := ConfigFile.new()
 	config.load(PATH)
 	for key in DEFAULTS: values[key] = _validated(key,config.get_value("presentation",key,_default_value(key)))
+	Tokens.set_appearance(values["appearance"] == 1)
 	values["fullscreen"] = values["window_mode"] == 0
 	_load_keys(config)
 	apply_display.call_deferred()
@@ -30,6 +32,9 @@ func _validated(key: String, value: Variant) -> Variant:
 	if key in ["master","bgm","sfx","ui"]: return clampf(float(value),0,1)
 	if key == "text_size": return clampi(int(value),0,2)
 	if key == "quality": return clampi(int(value),0,2)
+	if key == "appearance": return 1 if value == 1 else 0
+	if key == "skill_inspector_ratio":
+		return clampf(float(value), 0.0, 0.62) if value is float or value is int else 0.0
 	if key == "fps": return int(value) if int(value) in [0,30,60,120,144] else 120
 	return bool(value)
 
@@ -54,6 +59,7 @@ func set_value(key: String, value: Variant) -> void:
 		values["fullscreen"] = values[key] == 0
 		config.set_value("presentation","fullscreen",values["fullscreen"])
 	config.save(PATH)
+	if key == "appearance": Tokens.set_appearance(values[key] == 1)
 	if key in ["window_mode","vsync","fps"]: apply_display()
 	changed.emit(key)
 

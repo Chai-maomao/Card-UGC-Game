@@ -1,6 +1,8 @@
 class_name TargetSlot
 extends PanelContainer
 
+const DragPreview := preload("res://SkillDragPreview.gd")
+
 # ============================================
 # Scratch-style target selector slot.
 # Sits at the "target" position of an effect sentence ("对 [友方/敌方]
@@ -173,10 +175,7 @@ func _slot_get_drag_data(_pos: Vector2):
 		preview.size = preview.get_combined_minimum_size()
 		preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		for child in preview.find_children("*","Control",true,false): child.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		var wrap := Control.new()
-		wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		wrap.add_child(preview)
-		set_drag_preview(wrap)
+		DragPreview.show(self, preview)
 		_dragging = true
 		_animate_slot(Vector2.ONE, Color(0.72,0.76,0.84,0.48),0.07)
 	return {
@@ -188,8 +187,14 @@ func _slot_get_drag_data(_pos: Vector2):
 
 
 func _can_drop_var(_pos: Vector2, payload) -> bool:
+	if DragPreview.uses_socket_overlap(self):
+		return false
+	var ok := accepts_reporter(payload)
+	set_reporter_highlight(ok)
+	return ok
+
+func accepts_reporter(payload: Variant) -> bool:
 	if not (payload is Dictionary):
-		_set_drop_highlight(false)
 		return false
 	var t: String = str(payload.get("type", ""))
 	var ok := t == ("target_block" if kind == "target" else "side_block") \
@@ -198,13 +203,15 @@ func _can_drop_var(_pos: Vector2, payload) -> bool:
 	if is_instance_valid(source):
 		var displaced := _current_value()
 		ok = ok and source != self and source.kind == kind and (displaced.is_empty() or displaced in source._ids())
-	_set_drop_highlight(ok)
 	return ok
 
 
 func _drop_var(_pos: Vector2, payload) -> void:
 	if not _can_drop_var(_pos, payload): return
-	_set_drop_highlight(false)
+	drop_reporter(payload)
+
+func drop_reporter(payload: Dictionary) -> void:
+	set_reporter_highlight(false)
 	var source := payload.get("from_slot") as TargetSlot
 	if is_instance_valid(source):
 		var displaced := _current_value()
@@ -237,7 +244,7 @@ func _set_selection(value: String) -> void:
 	selection_updated.emit()
 
 
-func _set_drop_highlight(on: bool) -> void:
+func set_reporter_highlight(on: bool) -> void:
 	if _drop_highlight == on:
 		return
 	_drop_highlight = on
@@ -263,11 +270,11 @@ func _notification(what: int) -> void:
 	if get_meta("drag_preview", false): return
 	if what == NOTIFICATION_DRAG_END:
 		_dragging = false
-		_set_drop_highlight(false)
+		set_reporter_highlight(false)
 		_animate_slot(Vector2.ONE, Color.WHITE, 0.10)
 	elif what == NOTIFICATION_MOUSE_EXIT and _drop_highlight:
 		if not get_global_rect().has_point(get_global_mouse_position()):
-			_set_drop_highlight(false)
+			set_reporter_highlight(false)
 
 
 # Inline parameter controls keep mouse_filter PASS so drag-drop resolution can

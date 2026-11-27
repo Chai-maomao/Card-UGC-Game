@@ -176,6 +176,7 @@ func _ready() -> void:
 			_check(leave != null and leave.visible, "leaving a connected room requires confirmation")
 			if leave != null:
 				_check(leave.get_ok_button().text == Locale.t("wait.leave_room") and leave.get_cancel_button().has_focus(), "leave dialog names the action and defaults focus to cancel")
+				_check(leave.get_cancel_button().position.x < leave.get_ok_button().position.x, "the cancel action belongs on the left, as in the battle forfeit confirmation")
 				await capture("ServerRoomLeaveConfirm.png")
 				leave.get_cancel_button().pressed.emit()
 				await frames()
@@ -183,11 +184,59 @@ func _ready() -> void:
 		lobby._on_rpc_ready(PlayerData.battle_deck.map(func(card): return PlayerData.serialize_card(card)))
 		await get_tree().create_timer(0.15).timeout
 		_check(not lobby.waiting_ui.sidebar.get_node("ViewOpponentDeck").disabled,"opponent deck becomes available after submission")
+		lobby.i_am_ready = true
+		lobby._check_both_ready()
+		var progress := lobby.waiting_ui.find_child("CardArtProgress", true, false) as ProgressBar
+		await get_tree().create_timer(0.15).timeout
+		_check(progress != null and not progress.visible, "waiting for manifests must not show a transfer progress bar")
+		lobby._on_card_art_manifest(2)
+		for art_index in [0, 1, 2, 2]:
+			lobby._on_card_art_ack(art_index, 5)
+		stage.size = Vector2i(1280, 720)
+		await get_tree().create_timer(0.2).timeout
+		_check(progress.visible and not progress.indeterminate and not progress.show_percentage and progress.value == 3 and progress.max_value == 7,
+			"the room must show progress across upload and receipt, without a count label")
+		_check(not lobby.waiting_ui.status.visible and progress.size.y <= 10.0, "the progress track must replace the status text and stay slim")
+		var loading := lobby.waiting_ui.find_child("CardArtLoading", true, false) as Label
+		_check(loading.visible and loading.text == Locale.t("wait.art_loading") + "......", "art transfer must show a six-dot loading label")
+		_check(is_equal_approx(progress.position.x, 0.0) and loading.position.x >= progress.position.x + progress.size.x,
+			"the progress bar must be left aligned with the label on its right")
+		var initial_track := progress.get_global_rect()
+		var counts: Array[int] = []
+		var deadline := Time.get_ticks_msec() + 3500
+		while counts.size() < 8 and Time.get_ticks_msec() < deadline:
+			await get_tree().process_frame
+			var dot_count := loading.visible_characters - Locale.t("wait.art_loading").length()
+			if (counts.is_empty() and dot_count == 0) or (not counts.is_empty() and counts.back() != dot_count):
+				counts.append(dot_count)
+				_check(progress.get_global_rect().is_equal_approx(initial_track), "the dots must not move the progress bar")
+				if dot_count == 6:
+					await capture("CardArtProgress-%s.png" % scene)
+		_check(counts == [0, 1, 2, 3, 4, 5, 6, 0], "loading dots must appear individually and then clear together")
+		lobby._on_card_art_ack(3, 5)
+		lobby._on_card_art_ack(4, 5)
+		await get_tree().create_timer(0.15).timeout
+		_check(progress.visible and loading.visible and progress.value == 5, "the progress bar must remain visible while art is still being received")
+		lobby._opponent_arts_received = 2
+		await get_tree().create_timer(0.15).timeout
+		_check(not progress.visible and not loading.visible, "completing both transfers must hide the loading indicator")
+		lobby.i_am_ready = false
+		lobby._art_wait_deadline = 0.0
+		await get_tree().create_timer(0.15).timeout
+		_check(not progress.visible and not loading.visible and lobby.waiting_ui.status.visible, "leaving art sync must restore the normal room status")
 		lobby.waiting_ui.grid.find_child("InspectRoomCard",true,false).pressed.emit()
 		await frames()
 		var inspectors=lobby.waiting_ui.find_children("TabletopCardInspector","PanelContainer",true,false)
 		_check(inspectors.size()==1 and inspectors[0].visible,"room cards open read-only details")
-		if not inspectors.is_empty(): inspectors[0].get_parent().queue_free()
+		if inspectors.size() == 1:
+			var inspector: PanelContainer = inspectors[0]
+			var abilities := inspector.find_child("CardAbilitiesFrame", true, false) as PanelContainer
+			_check(abilities != null and abilities.is_visible_in_tree(), "room card details must show the shared abilities section")
+			await capture("RoomCardInspector-%s.png" % scene)
+			var close_button := inspector.find_children("*", "Button", true, false).front() as Button
+			close_button.pressed.emit()
+			await frames()
+			_check(not is_instance_valid(inspector), "the close action must dismiss room card details")
 		var dialogs=[]
 		if not dialogs.is_empty(): dialogs[0].queue_free()
 		await frames()

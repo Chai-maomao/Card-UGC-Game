@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400">
+  <defs>
+    <radialGradient id="glow"><stop stop-color="#fff" stop-opacity=".075"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+  </defs>
+  <circle cx="200" cy="200" r="190" fill="url(#glow)"/>
+  <g fill="none" stroke="#fff" stroke-width="1.35">
+    <circle cx="200" cy="200" r="154" opacity=".1"/>
+    <path d="M200 88l97 56v112l-97 56-97-56V144z" opacity=".16"/>
+    <path d="M200 104l83 48v96l-83 48-83-48v-96zM103 144l180 104m14-104L117 248M200 88v224" opacity=".09"/>
+    <g opacity=".16">
+      <rect x="182" y="128" width="36" height="49" rx="4"/>
+      <rect x="182" y="223" width="36" height="49" rx="4"/>
+      <rect x="182" y="128" width="36" height="49" rx="4" transform="rotate(60 200 200)"/>
+      <rect x="182" y="223" width="36" height="49" rx="4" transform="rotate(60 200 200)"/>
+      <rect x="182" y="128" width="36" height="49" rx="4" transform="rotate(-60 200 200)"/>
+      <rect x="182" y="223" width="36" height="49" rx="4" transform="rotate(-60 200 200)"/>
+    </g>
+    <circle cx="200" cy="200" r="13" opacity=".14"/>
+  </g>
+</svg>

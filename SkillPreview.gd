@@ -117,7 +117,7 @@ func _ready() -> void:
 	# Capture the rendered editor UI for visual review.
 	var img := get_viewport().get_texture().get_image()
 	if img != null:
-		var err: int = img.save_png("C:/Users/admin/AppData/Local/Temp/skill_editor_shot.png")
+		var err: int = img.save_png("user://skill_editor_shot.png")
 		print("SCREENSHOT_SAVED err=", err)
 	_run_drag_simulation()
 

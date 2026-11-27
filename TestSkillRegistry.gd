@@ -19,6 +19,7 @@ func _ready() -> void:
 	_test_registry_effect_meta_complete()
 	_test_registry_effect_sentence_templates()
 	_test_registry_buff_meta_complete()
+	_test_editor_status_picker()
 	_test_registry_trigger_meta_complete()
 	_test_registry_queries()
 	_test_change_cost_effect()
@@ -77,6 +78,15 @@ func _assert(cond: bool, message: String) -> void:
 		_fail(message)
 
 
+func _test_editor_status_picker() -> void:
+	var status_picker := preload("res://SkillStatusPicker.gd")
+	var picker := OptionButton.new()
+	for buff: String in SkillRegistry.BUFF_IDS:
+		status_picker.fill(picker, buff)
+		_assert(status_picker.value(picker) == buff, "status picker must show the requested status: %s" % buff)
+	picker.free()
+
+
 # ============================================
 # Registry completeness
 # ============================================
@@ -91,8 +101,8 @@ func _test_registry_effect_meta_complete() -> void:
 		SkillEngine.EFFECT_ZERO_COST, SkillEngine.EFFECT_MANA_DRAIN, SkillEngine.EFFECT_SWAP_ATTACK,
 		SkillEngine.EFFECT_DISCARD_HAND, SkillEngine.EFFECT_COPY_HAND, SkillEngine.EFFECT_CLONE_ENEMY,
 		SkillEngine.EFFECT_MATCH_MAX_HP, SkillEngine.EFFECT_DAMAGE_CAP, SkillEngine.EFFECT_CHANGE_COST,
+		SkillEngine.EFFECT_SWAP_ENEMY_SLOTS,
 	]
-	_assert(expected.size() == 24, "expected 24 skill effects, got %d" % expected.size())
 	_assert(SkillRegistry.EFFECT_IDS.size() == expected.size(), "EFFECT_IDS size mismatch")
 	for effect_id: String in SkillRegistry.EFFECT_IDS:
 		var meta: Dictionary = SkillRegistry.effect_meta(effect_id)
@@ -138,8 +148,9 @@ func _test_registry_buff_meta_complete() -> void:
 		SkillEngine.BUFF_THORNS, SkillEngine.BUFF_DAMAGE_REDUCTION, SkillEngine.BUFF_TAUNT,
 		SkillEngine.BUFF_SILENCE, SkillEngine.BUFF_MISFORTUNE, SkillEngine.BUFF_IMMUNE_LETHAL,
 		SkillEngine.BUFF_POISON, SkillEngine.BUFF_STUN,
+		SkillEngine.BUFF_DODGE, SkillEngine.BUFF_UNTARGETABLE, SkillEngine.BUFF_LUCK,
 	]
-	_assert(SkillRegistry.BUFF_IDS.size() == 11, "BUFF_IDS size mismatch")
+	_assert(SkillRegistry.BUFF_IDS.size() == expected.size(), "BUFF_IDS size mismatch")
 	for buff_id: String in SkillRegistry.BUFF_IDS:
 		var polarity: String = SkillRegistry.buff_polarity(buff_id)
 		_assert(polarity in ["negative", "positive", "neutral"], "buff %s has invalid polarity" % buff_id)
@@ -147,6 +158,7 @@ func _test_registry_buff_meta_complete() -> void:
 	_assert(SkillRegistry.negative_buffs().has(SkillEngine.BUFF_SILENCE), "silence not negative")
 	_assert(SkillRegistry.negative_buffs().has(SkillEngine.BUFF_MISFORTUNE), "misfortune not negative")
 	_assert(SkillRegistry.positive_buffs().has(SkillEngine.BUFF_TAUNT), "taunt not positive")
+	_assert(SkillRegistry.positive_buffs().has(SkillEngine.BUFF_LUCK), "luck not positive")
 	_assert(not SkillRegistry.positive_buffs().has(SkillEngine.BUFF_SILENCE), "silence counted as positive")
 
 
@@ -204,6 +216,24 @@ func _test_change_cost_effect() -> void:
 	_assert(card.cost == 5 and card.match_cost_delta == 2, "positive change_cost must raise the same match-persistent value")
 	var restored := PlayerData.deserialize_card(PlayerData.serialize_card(card))
 	_assert(restored.cost == 5 and restored.match_cost_delta == 2, "match cost change must survive battle serialization")
+	var game := GameStateScript.new()
+	game.quiet = true
+	game.init_game(Callable(), 7)
+	game.shared_deck.clear()
+	var hand_card := CardData.new("手牌", 3, 4, 1)
+	var enemy := CardData.new("敌方单位", 3, 4, 1)
+	game.player_hand = [hand_card]
+	game.player_field.slots[0] = card
+	game.player2_field.slots[0] = enemy
+	var effect := {"effect": SkillEngine.EFFECT_CHANGE_COST, "target": SkillEngine.TARGET_ALL,
+		"target_side": SkillEngine.TARGET_SIDE_ALLY, "value": -1}
+	SkillEngine._execute_skill({"effects": [effect]}, card, game.make_skill_context_for_player(1, 0))
+	_assert(card.cost == 4 and hand_card.cost == 3 and enemy.cost == 3,
+		"all allies must change the cost of allied field units only")
+	game.current_player = 1
+	_assert(game.discard_card(card), "the adjusted unit must enter discard")
+	_assert(game.draw_cards_for_player(1, 1) == [card] and card.cost == 4,
+		"after reshuffle and redraw, the unit must retain the adjusted cost")
 
 
 func _test_board_change_trigger_sides() -> void:

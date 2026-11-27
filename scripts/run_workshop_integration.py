@@ -1,9 +1,29 @@
 """Run real Godot UI/import flows against temporary local workshop servers."""
-import argparse,os,pathlib,shutil,subprocess,sys,tempfile,threading
+import argparse,os,pathlib,shutil,subprocess,sys,tempfile,threading,time
 
 ROOT=pathlib.Path(__file__).resolve().parent.parent
 sys.path.insert(0,str(ROOT))
-from workshop.server import Store,Server
+from workshop.server import Handler,Store,Server
+
+
+class SlowDownloadHandler(Handler):
+    def do_GET(self):
+        waits = {'/v1/packages/' + '1'*32 + '/download': 4,
+                 '/v1/packages/' + '2'*32 + '/download': 14}
+        delay = waits.get(self.path)
+        if delay is None:
+            return super().do_GET()
+        self.send_response(200)
+        self.send_header('Content-Type','application/json')
+        self.send_header('Content-Length','2')
+        self.end_headers()
+        self.wfile.write(b'{')
+        self.wfile.flush()
+        time.sleep(delay)
+        try:
+            self.wfile.write(b'}')
+        except (BrokenPipeError, ConnectionResetError):
+            pass
 
 class ObservingStore(Store):
     def dispatch(self,method,path,query,body,token,ip):
@@ -30,12 +50,14 @@ def main():
             env=os.environ.copy();env.update(APPDATA=str(profile),LOCALAPPDATA=str(profile))
             store=Store(run/'workshop.sqlite3',admin_token='local-test-only',invite='friend-test-invite',require_review=case=='ui')
             servers=[Server(('127.0.0.1',0),store,True),Server(('127.0.0.1',0),ObservingStore(run/'observer.sqlite3'),True)]
+            if case == 'ui':
+                servers[0].RequestHandlerClass = SlowDownloadHandler
             threads=[threading.Thread(target=s.serve_forever,daemon=True) for s in servers]
             for thread in threads:thread.start()
             scene='ui_flow' if case=='ui' else 'import_flow'
             marker='TEST_WORKSHOP_UI_FLOW_OK' if case=='ui' else 'TEST_WORKSHOP_GAME_IMPORT_OK'
             try:
-                result=subprocess.run([args.godot,'--headless','--path',str(ROOT),'--quit-after','1500','--scene','res://tests/integration/workshop/'+scene+'.tscn','--','--no-audio','--workshop-url=http://127.0.0.1:'+str(servers[0].server_port),'--workshop-other-origin=http://127.0.0.1:'+str(servers[1].server_port)],cwd=ROOT,env=env,capture_output=True,timeout=30)
+                result=subprocess.run([args.godot,'--headless','--path',str(ROOT),'--scene','res://tests/integration/workshop/'+scene+'.tscn','--','--no-audio','--workshop-url=http://127.0.0.1:'+str(servers[0].server_port),'--workshop-other-origin=http://127.0.0.1:'+str(servers[1].server_port)],cwd=ROOT,env=env,capture_output=True,timeout=30)
                 content=(result.stdout+result.stderr).decode(errors='replace');(logs/(case+'.log')).write_text(content,encoding='utf-8')
                 if result.returncode or 'ERROR:' in content or marker not in content:
                     print(content[-3000:]);raise SystemExit(case+' failed')

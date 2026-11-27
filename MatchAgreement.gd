@@ -66,11 +66,26 @@ static func valid_config(config: Dictionary) -> bool:
 		if config.has(key):
 			if not config[key] is bool: return false
 			config.erase(key)
+	var clock := preload("res://BattleActionClock.gd")
+	if config.has(clock.KEYS[0]):
+		if not config[clock.KEYS[0]] is bool: return false
+		config.erase(clock.KEYS[0])
+	for key in [clock.KEYS[1], clock.KEYS[2]]:
+		if not config.has(key): continue
+		var seconds: Variant = config[key]
+		if not (seconds is int or seconds is float) or seconds < clock.MIN_SECONDS or seconds > clock.MAX_SECONDS or seconds != floor(seconds):
+			return false
+		config.erase(key)
 	if config.has("mana_increment"):
 		var increment: Variant = config["mana_increment"]
 		if not (increment is int or increment is float) or increment != floor(increment) or increment < 1 or increment > 10:
 			return false
 		config.erase("mana_increment")
+	if config.has("face_damage_compensation_mana"):
+		var mana: Variant = config["face_damage_compensation_mana"]
+		if not (mana is int or mana is float) or mana < 1 or mana > PlayerData.MAX_FACE_DAMAGE_COMPENSATION_MANA or mana != floor(mana):
+			return false
+		config.erase("face_damage_compensation_mana")
 	for item in [["mana_per_turn", 0, 10], ["draw_per_turn", 1, 8], ["starting_hp", 1, 99], ["second_extra_cards", 0, 5], ["second_extra_mana", 0, 10]]:
 		var value: Variant = config.get(item[0])
 		if not (value is int or value is float) or float(value) != floor(float(value)) or value < item[1] or value > item[2]: return false

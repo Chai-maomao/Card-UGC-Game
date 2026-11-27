@@ -80,13 +80,23 @@ func set_selected(value: bool) -> void:
 	selected_label.modulate.a = 1.0 if value else 0.0
 	_update_title_color()
 
+
+func set_locked(value: bool) -> void:
+	if value:
+		var style := get_theme_stylebox("pressed" if chosen else "normal")
+		add_theme_stylebox_override("disabled", style)
+	disabled = value
+	_update_title_color()
+
 func _update_title_color() -> void:
 	var color := UITheme.COLOR_TEXT if has_focus() else (UITheme.COLOR_GOLD if chosen else UITheme.COLOR_TEXT_MUTED)
 	if AppPreferences.get_value("high_contrast"):
-		color = Color.WHITE if has_focus() else UITheme.COLOR_TEXT
+		color = UITheme.Tokens.CONTRAST_INK if has_focus() else UITheme.COLOR_TEXT
 	name_label.add_theme_color_override("font_color", color)
 
 func _on_tile_input(event: InputEvent) -> void:
+	if disabled:
+		return
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed and event.double_click:
 		deck_selected.emit(deck_id)
 		deck_inspected.emit(deck_id)

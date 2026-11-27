@@ -372,7 +372,7 @@
     },
     {
       "id": "stun",
-      "mechanism": "攻击和技能权限检查；consume_stun标记生效回合，finish_stun_turn结束该回合状态"
+      "mechanism": "立即禁止攻击和技能。begin_stun_turn 标记受影响单位的完整回合，finish_stun_turn 在该回合结算完毕后递减时长"
     }
   ],
   "function_prototypes": [

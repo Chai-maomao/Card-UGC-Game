@@ -10,6 +10,7 @@ var art_path_cache := ""
 var shown_attack := 0
 var shown_hp := 0
 var prediction: Dictionary = {}
+var _name_only := ""
 
 func set_prediction(value: Dictionary) -> void:
 	if value == prediction: return
@@ -34,11 +35,17 @@ func bind(value: CardData, opposing: bool, displayed_hp: int = -1, displayed_max
 		art = CardArtwork.texture_for(value, hp, displayed_max_hp)
 	queue_redraw()
 
+func bind_name_only(value: String) -> void:
+	card = null
+	fingerprint = ""
+	_name_only = value
+	queue_redraw()
+
 func _draw() -> void:
-	if card == null: return
+	if card == null and _name_only.is_empty(): return
 	var font := ThemeDB.fallback_font
 	var ink := Color("252c2b")
-	var accent := UITheme.card_type_accent(card.card_type)
+	var accent := UITheme.card_type_accent(card.card_type) if card != null else Color("887b5b")
 	var edge := StyleBoxFlat.new()
 	edge.bg_color = Color("d7c9a7")
 	edge.set_corner_radius_all(6)
@@ -48,10 +55,15 @@ func _draw() -> void:
 	draw_rect(Rect2(21,21,342,486), Color("ede0bd"))
 	draw_rect(Rect2(25,25,334,10), accent)
 	var title_font := UITheme.display_font()
-	var title := card.card_name
-	while title.length() > 1 and title_font.get_string_size(title,HORIZONTAL_ALIGNMENT_LEFT,-1,40).x > 257:
+	var title := card.card_name if card != null else _name_only
+	var title_width := 257 if card != null else 316
+	while title.length() > 1 and title_font.get_string_size(title,HORIZONTAL_ALIGNMENT_LEFT,-1,40).x > title_width:
 		title = title.left(title.length()-2)+"…"
-	draw_string(title_font, Vector2(34,74), title, HORIZONTAL_ALIGNMENT_LEFT, 265, 40, ink)
+	draw_string(title_font, Vector2(34,74), title, HORIZONTAL_ALIGNMENT_LEFT, title_width + 8, 40, ink)
+	if card == null:
+		draw_rect(Rect2(32,93,320,397),Color("e1d3b0"))
+		draw_string(font, Vector2(32,302), Locale.t("history.name_only"), HORIZONTAL_ALIGNMENT_CENTER, 320, 34, ink)
+		return
 	# Match the title's 34px left margin with the badge's outer right edge.
 	var badge_x := 384.0-34.0-24.0
 	draw_circle(Vector2(badge_x,61), 24, accent)

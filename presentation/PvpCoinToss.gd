@@ -19,22 +19,25 @@ func setup(winner: int, viewer: int) -> void:
 	_viewer = viewer
 
 
-func _ready() -> void:
+func _init() -> void:
 	layer = 165
+	set_meta("popup_close_locked", true)
+
+
+func _ready() -> void:
 	add_to_group("battle_modal")
 	_root = Control.new()
 	_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(_root)
 	var shade := ColorRect.new()
-	shade.color = Color(0.03, 0.055, 0.061, 0.81)
-	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	UITheme.apply_overlay(shade)
 	_root.add_child(shade)
 	var center := CenterContainer.new()
 	center.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	center.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_root.add_child(center)
 	var panel := PanelContainer.new()
-	UITheme.apply_panel(panel, "gold")
+	UITheme.apply_popup_frame(panel, "gold", false, true)
 	center.add_child(panel)
 	var margin := MarginContainer.new()
 	for edge in ["left", "right"]:
@@ -51,6 +54,7 @@ func _ready() -> void:
 	UITheme.apply_title(title, 23)
 	body.add_child(title)
 	var line := HSeparator.new()
+	UITheme.apply_separator(line)
 	body.add_child(line)
 	_stage = TextureRect.new()
 	_stage.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
@@ -63,7 +67,8 @@ func _ready() -> void:
 	_result.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_result.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	UITheme.apply_title(_result, 28)
-	_result.add_theme_color_override("font_color", GOLD if _winner == 1 else JADE)
+	var result_color := (UITheme.Tokens.BRASS if _winner == 1 else UITheme.Tokens.TEAL) if UITheme.Tokens.light_mode else (GOLD if _winner == 1 else JADE)
+	_result.add_theme_color_override("font_color", result_color)
 	body.add_child(_result)
 	_create_coin_stage()
 	get_viewport().size_changed.connect(_resize_stage)

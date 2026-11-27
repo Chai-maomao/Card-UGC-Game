@@ -12,7 +12,10 @@ var _prediction_target := -1
 var _prediction_cache := ""
 var _prediction_shown: Array[int] = []
 var _test_add_button: Button
+var _swapping_enemy_slot := -1
+var _enemy_drag_root: Node3D
 var _hand_focus_overlays: Dictionary = {}
+var _hand_lighting_buffer: BackBufferCopy
 var tabletop_selected_hand: CardData
 var opponent_hand_presentation: CanvasLayer
 
@@ -22,6 +25,7 @@ func _ready() -> void:
 	if DisplayServer.get_name() == "headless" and not OS.get_cmdline_user_args().has("--tabletop-test"): return
 	tabletop = Table.new()
 	tabletop.classic_battle_ui = true
+	tabletop.show_center_seal = false
 	tabletop.name = "BattleTable3D"
 	add_child(tabletop)
 	opponent_hand_presentation = preload("res://presentation/OpponentHandPresentation.gd").new()
@@ -39,11 +43,12 @@ func _ready() -> void:
 	status_fx.z_index = 0
 	$CanvasLayer.add_child(status_fx)
 	$CanvasLayer.move_child(status_fx, 0)
-	var hand_lighting_buffer := BackBufferCopy.new()
-	hand_lighting_buffer.name = "HandLightingBuffer"
-	hand_lighting_buffer.copy_mode = BackBufferCopy.COPY_MODE_VIEWPORT
-	$CanvasLayer.add_child(hand_lighting_buffer)
-	$CanvasLayer.move_child(hand_lighting_buffer,0)
+	_hand_lighting_buffer = BackBufferCopy.new()
+	_hand_lighting_buffer.name = "HandLightingBuffer"
+	_hand_lighting_buffer.copy_mode = BackBufferCopy.COPY_MODE_VIEWPORT
+	_hand_lighting_buffer.hide()
+	$CanvasLayer.add_child(_hand_lighting_buffer)
+	$CanvasLayer.move_child(_hand_lighting_buffer,0)
 	var background: Control = $CanvasLayer/MainBackground
 	background.add_theme_stylebox_override("panel",StyleBoxEmpty.new())
 	for name in ["BattleBackdrop2D","EnemyAura","PlayerAura"]:
@@ -70,7 +75,7 @@ func _ready() -> void:
 				tabletop.hover(input.index+(5 if input.opposing else 0),false)
 				_prediction_target = -1)
 			slot.add_child(input)
-	if PlayerData.is_card_playtest_active() and not PlayerData.is_online_battle():
+	if PlayerData.is_card_playtest_active() and not PlayerData.is_online_battle() and not _is_party_battle():
 		_test_add_button = Button.new()
 		_test_add_button.name = "AddTestCard"
 		_test_add_button.text = "添加测试卡到手牌" if Locale.language == "zh" else "Add test card to hand"
@@ -94,6 +99,27 @@ func _do_update_entire_screen() -> void:
 		_update_inspector_actions(true)
 		_sync_tabletop()
 		_style_tabletop_ui()
+
+
+func _on_appearance_preference_changed(key: String) -> void:
+	super._on_appearance_preference_changed(key)
+	if key != "appearance" or not is_instance_valid(tabletop):
+		return
+	$CanvasLayer/MainBackground.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
+	for button in [end_turn_button, face_mana_button, help_btn, field_rules_btn, battle_settings_btn, battle_chat_button, action_log_button, _test_add_button]:
+		if button != null:
+			UITheme.apply_button(button, "primary" if button == end_turn_button else "secondary", bool(button.get_meta("uimotion_enabled", false)))
+	_style_tabletop_ui()
+	var broadcast_style := UITheme.panel_style(UITheme.COLOR_PANEL_DARK, UITheme.Tokens.BORDER, 1, 8)
+	broadcast_style.content_margin_top = 2
+	broadcast_style.content_margin_bottom = 2
+	combat_broadcast_panel.add_theme_stylebox_override("normal", broadcast_style)
+	_refresh_combat_broadcast_color()
+	if is_instance_valid(action_log_panel):
+		UITheme.apply_popup_frame(action_log_panel, "dark", false, true)
+		UITheme.theme_tree(action_log_panel)
+		action_log_text.add_theme_color_override("default_color", UITheme.COLOR_TEXT)
+		_refresh_action_log_text()
 
 func _on_enemy_hand_discarded(actor: int,before_count: int,removed: Array) -> void:
 	if removed.is_empty(): return
@@ -168,6 +194,8 @@ func _apply_hp_presentation_override(value: Dictionary) -> void:
 		tabletop.present_hp(_table_key(int(value.player), int(value.slot)), int(value.hp), int(value.max_hp))
 
 func tabletop_slot_clicked(enemy: bool, index: int) -> void:
+	if _enemy_swap_is_pending():
+		return
 	if not enemy and tabletop_selected_hand != null:
 		var selected := tabletop_selected_hand
 		tabletop_selected_hand = null
@@ -195,15 +223,38 @@ func _show_card_details(card: CardData, enemy: bool, index: int, slot: Control, 
 	card_inspector.add_to_group("battle_modal")
 	card_inspector.set_meta("suppress_hover_hint",true)
 	card_inspector.set_meta("turn",game.current_player)
-	var parent_node: Node = $CanvasLayer if popup_parent == null else popup_parent
+	card_inspector.set_meta("friendly_slot", index if not enemy and hand_source == null else -1)
+	var parent_node: Node = $CanvasLayer
+	var detail_layer: CanvasLayer
+	if popup_parent is CanvasLayer:
+		var popup := UITheme.make_popup_layer(popup_parent, popup_parent.layer + 1)
+		detail_layer = popup.layer
+		detail_layer.name = "CollectionCardDetails"
+		detail_layer.set_meta("popup_close", detail_layer.queue_free)
+		var shade: ColorRect = popup.bg
+		shade.color.a = 0.24
+		shade.gui_input.connect(func(event: InputEvent):
+			if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+				detail_layer.queue_free())
+		parent_node = detail_layer
+	elif popup_parent != null:
+		parent_node = popup_parent
 	parent_node.add_child(card_inspector)
+	if detail_layer != null:
+		var details := card_inspector
+		details.visibility_changed.connect(func():
+			if not details.visible:
+				detail_layer.queue_free())
+		details.tree_exiting.connect(func():
+			if not detail_layer.is_queued_for_deletion():
+				detail_layer.queue_free())
 	card_inspector.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
 	var columns: BoxContainer = HBoxContainer.new() if get_viewport_rect().size.x >= 680 else VBoxContainer.new()
 	columns.add_theme_constant_override("separation",12)
 	card_inspector.add_child(columns)
 	var main_panel := PanelContainer.new()
 	if card.is_parasite(): main_panel.size_flags_vertical = Control.SIZE_SHRINK_BEGIN
-	UITheme.apply_popup_frame(main_panel, "dark", false)
+	UITheme.apply_popup_frame(main_panel, "tooltip", false)
 	columns.add_child(main_panel)
 	var margin := MarginContainer.new()
 	for edge in ["left","right","top","bottom"]: margin.add_theme_constant_override("margin_"+edge,18)
@@ -217,18 +268,14 @@ func _show_card_details(card: CardData, enemy: bool, index: int, slot: Control, 
 	title.set_meta("keyword_literal",true)
 	title.text = card.card_name
 	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	title.add_theme_font_size_override("font_size",22)
+	UITheme.apply_title(title, 22)
 	box.add_child(title)
 	var stats := Label.new()
 	stats.text = Locale.t("tabletop.stats",[card.effective_atk(),card.hp,card.max_hp])
-
+	UITheme.apply_label(stats)
 	box.add_child(stats)
-	var detail_frame := PanelContainer.new()
-	detail_frame.name = "CardAbilitiesFrame"
-	detail_frame.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var detail_style := UITheme.panel_style(UITheme.COLOR_PANEL,UITheme.Tokens.BORDER,1,6)
-	detail_style.set_content_margin_all(12)
-	detail_frame.add_theme_stylebox_override("panel",detail_style)
+	var descriptions := preload("res://presentation/SkillDescription.gd")
+	var detail_frame := descriptions.make_abilities_frame()
 	box.add_child(detail_frame)
 	var detail_box := VBoxContainer.new()
 	detail_box.add_theme_constant_override("separation",12)
@@ -236,18 +283,19 @@ func _show_card_details(card: CardData, enemy: bool, index: int, slot: Control, 
 	var attack: Button
 	var deploy: Button
 	var skill_actions: Dictionary[int, Button] = {}
+	var skill_use_refreshers: Array[Callable] = []
 	if not preview_only and not enemy and hand_source == null and game.battle_config.has("action_base"):
 		attack = Button.new()
 		attack.name = "TabletopAttack"
 		attack.text = Locale.t("tabletop.attack")
-		attack.gui_input.connect(func(event): _inspector_resource_input(event,attack.disabled,false))
+		attack.gui_input.connect(func(event):
+			_inspector_resource_input(event, attack.disabled, false,
+				"tip.no_attack_turn1" if _opening_attack_blocked() else ""))
 		attack.pressed.connect(func(): card_inspector.hide(); _on_attack_requested(index))
 		detail_box.add_child(attack)
 		UITheme.apply_button(attack,"secondary",false)
 	if not card.is_spell() and not card.is_parasite():
-		var attack_description := preload("res://presentation/SkillDescription.gd").build(("[普通攻击]\n对敌方造成%d点伤害" if Locale.language == "zh" else "[Basic attack]\nDeal %d damage to an enemy") % card.effective_atk())
-		attack_description.name = "BasicAttackDescription"
-		detail_box.add_child(attack_description)
+		detail_box.add_child(descriptions.build_basic_attack(card.effective_atk(), _is_party_battle()))
 	if not preview_only and not enemy and hand_source == null:
 		var payment: Dictionary = game.next_action_payment()
 		var price := Label.new()
@@ -256,16 +304,22 @@ func _show_card_details(card: CardData, enemy: bool, index: int, slot: Control, 
 		UITheme.apply_label(price)
 		if not payment.ok: price.add_theme_color_override("font_color",UITheme.COLOR_ENEMY)
 		detail_box.add_child(price)
-	if not card.skills.is_empty() and not card.is_spell() and not card.is_parasite():
-		detail_box.add_child(HSeparator.new())
 	var skill_box: VBoxContainer
 	if not card.skills.is_empty() and not card.is_parasite():
+		var skill_section := VBoxContainer.new()
+		skill_section.add_theme_constant_override("separation", 0)
+		detail_box.add_child(skill_section)
+		if not card.is_spell():
+			var boundary := HSeparator.new()
+			boundary.add_theme_constant_override("separation", 1)
+			UITheme.apply_separator(boundary)
+			skill_section.add_child(boundary)
 		skill_box = VBoxContainer.new()
 		var scroll := ScrollContainer.new()
 		scroll.custom_minimum_size = Vector2(0,minf(220,get_viewport_rect().size.y*0.28))
 		scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 		scroll.follow_focus = true
-		detail_box.add_child(scroll)
+		skill_section.add_child(scroll)
 		skill_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		skill_box.add_theme_constant_override("separation",8)
 		scroll.add_child(skill_box)
@@ -274,22 +328,16 @@ func _show_card_details(card: CardData, enemy: bool, index: int, slot: Control, 
 		var skill: Dictionary = card.skills[i]
 		if skill.is_empty(): continue
 		if skill_box.get_child_count()>0:
-			var separator := HSeparator.new()
-			separator.name = "SkillSeparator%d" % i
-			separator.custom_minimum_size = Vector2(140,12)
-			separator.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
-			var line := StyleBoxLine.new()
-			line.color = Color(UITheme.Tokens.BRASS,0.45)
-			line.thickness = 1
-			separator.add_theme_stylebox_override("separator",line)
-			skill_box.add_child(separator)
+			skill_box.add_child(descriptions.make_skill_separator(i))
 		var button := Button.new()
 		button.name = "TabletopSkill%d" % i
 		button.set_meta("keyword_literal",true)
 		button.text = SkillTextFormatter.skill_display_name(skill,i)
 		button.disabled = preview_only or enemy
 		skill_actions[i] = button
-		button.gui_input.connect(func(event): _inspector_resource_input(event,button.disabled,enemy or preview_only or hand_source != null))
+		button.gui_input.connect(func(event):
+			_inspector_resource_input(event, button.disabled, enemy or preview_only or hand_source != null,
+				_opening_skill_block_reason(skill)))
 		button.pressed.connect(func():
 			card_inspector.hide()
 			if hand_source != null:
@@ -297,7 +345,7 @@ func _show_card_details(card: CardData, enemy: bool, index: int, slot: Control, 
 			else: _on_skill_activated(index,i)
 		)
 		skill_box.add_child(button)
-		var description := preload("res://presentation/SkillDescription.gd").build(SkillTextFormatter.format_skill_tooltip(skill,i))
+		var description := descriptions.build_battle_skill(card, i, skill_use_refreshers)
 		skill_box.add_child(description)
 	if hand_source != null and not card.is_spell() and not preview_only:
 		deploy = Button.new()
@@ -315,8 +363,9 @@ func _show_card_details(card: CardData, enemy: bool, index: int, slot: Control, 
 	close.text = Locale.t("common.close")
 	close.pressed.connect(card_inspector.hide)
 	box.add_child(close)
-	var state_panel := preload("res://presentation/CardStatePanel.gd").build(card)
-	if state_panel != null: columns.add_child(state_panel)
+	var state_panel := preload("res://presentation/CardStatePanel.gd").build(card, skill_use_refreshers)
+	if state_panel != null:
+		columns.add_child(state_panel)
 	var pos := get_viewport().get_mouse_position()
 	var viewport_size := get_viewport_rect().size
 	pos = slot.global_position+Vector2(slot.size.x+12,0)
@@ -328,31 +377,52 @@ func _show_card_details(card: CardData, enemy: bool, index: int, slot: Control, 
 	card_inspector.reset_size()
 	card_inspector.position = Vector2(clampf(pos.x,8,viewport_size.x-card_inspector.size.x-8),clampf(pos.y,8,maxf(8,viewport_size.y-card_inspector.size.y-8)))
 	card_inspector.show()
-	if not preview_only and not enemy:
+	if not preview_only:
 		var in_hand := hand_source != null
 		_inspector_action_refresh = func(can_act: bool):
+			var current := card
 			var readiness := {}
 			if in_hand:
 				if not is_instance_valid(hand_source) or hand_source.current_card_data != card or not _my_hand().has(card):
 					card_inspector.hide()
 					return
 			else:
-				var current: CardData = _my_field().slots[index]
+				current = (_their_field() if enemy else _my_field()).slots[index]
 				if current == null or (current != card and (card.instance_id.is_empty() or current.instance_id != card.instance_id)):
 					card_inspector.hide()
 					return
-				if can_act:
+				if can_act and not enemy:
 					readiness = game.unit_action_readiness(index)
+			for refresh in skill_use_refreshers:
+				refresh.call(current)
 			if attack != null:
 				attack.disabled = not readiness.get("attack", false)
+				attack.tooltip_text = Locale.t("tip.no_attack_turn1") if _opening_attack_blocked() else ""
 			for skill_index in skill_actions:
 				var skill_available: bool = card.is_spell() if in_hand else skill_index in readiness.get("skills", [])
-				skill_actions[skill_index].disabled = not can_act or not skill_available
+				skill_actions[skill_index].disabled = enemy or not can_act or not skill_available
+				if not in_hand and not enemy:
+					var reason := _opening_skill_block_reason(current.skills[skill_index])
+					skill_actions[skill_index].tooltip_text = Locale.t(reason) if not reason.is_empty() else ""
 			if deploy != null:
 				deploy.disabled = not can_act
 		_update_inspector_actions(true)
 	_fit_card_inspector.call_deferred(pos)
-	UIMotion.register_popup(card_inspector)
+	if detail_layer == null:
+		UIMotion.register_popup(card_inspector)
+	else:
+		UIMotion.register_popup(detail_layer, close)
+
+
+func _opening_attack_blocked() -> bool:
+	return game.turn_number <= 1 and not game.allow_first_turn_attacks
+
+
+func _opening_skill_block_reason(skill: Dictionary) -> String:
+	if game.turn_number <= 1 and skill.get("trigger") == SkillEngine.TRIGGER_ON_ACTIVATE \
+			and SkillRegistry.skill_changes_enemy_hp_or_presence(skill):
+		return "tip.no_enemy_hp_effect_turn1"
+	return ""
 
 
 func _update_inspector_actions(force: bool = false) -> void:
@@ -403,7 +473,17 @@ func _process(delta: float) -> void:
 		overlay.face.hide()
 		overlay.shadow.hide()
 	var dragged: Variant = get_viewport().gui_get_drag_data()
+	var enemy_drag := int(dragged.get("enemy_swap_source", -1)) if dragged is Dictionary else -1
+	if enemy_drag != _swapping_enemy_slot:
+		if is_instance_valid(_enemy_drag_root):
+			_enemy_drag_root.show()
+		_enemy_drag_root = null
+		_swapping_enemy_slot = enemy_drag
+		if enemy_drag >= 0 and tabletop.cards.has(enemy_drag + 5):
+			_enemy_drag_root = tabletop.cards[enemy_drag + 5].root
+			_enemy_drag_root.hide()
 	_reindex_tabletop_hand()
+	var needs_hand_lighting := false
 	for i in range(hand_container.get_child_count()):
 		var card_ui: Control = hand_container.get_child(i)
 		tabletop.sync_slot(card_ui,10+i,card_ui.current_card_data,false,false)
@@ -416,6 +496,7 @@ func _process(delta: float) -> void:
 				for point in points: bounds = bounds.expand(point)
 				if card_ui.get_meta("hand_focused",false) or card_ui.get_meta("hand_returning",false) or _hand_lift_phase(entry,card_ui)>.015 or bounds.intersects(player_status_hud.get_global_rect()):
 					_sync_hand_focus_overlay(entry,card_ui,points)
+					needs_hand_lighting = true
 				else: card_ui.set_meta("hand_foreground",false)
 		card_ui.modulate.a = 0
 		if not card_ui.has_node("TabletopHandInput"):
@@ -429,6 +510,8 @@ func _process(delta: float) -> void:
 			card_ui.add_child(input)
 			card_ui.move_child(input,card_ui.get_child_count()-1)
 	tabletop.remove_hand_after(hand_container.get_child_count())
+	# Only the raised hand overlays sample the pre-HUD screen texture.
+	_hand_lighting_buffer.visible = needs_hand_lighting
 
 func _hand_face_points(entry: Dictionary) -> PackedVector2Array:
 	var quad: QuadMesh = entry.top.mesh
@@ -438,13 +521,6 @@ func _hand_face_points(entry: Dictionary) -> PackedVector2Array:
 		points.append(tabletop.camera.unproject_position(world))
 	return points
 
-
-func _pointer_on_hand_face(source: Control) -> bool:
-	if tabletop == null or source.get_parent() != hand_container:
-		return false
-	var entry: Dictionary = tabletop.cards.get(10 + source.get_index(), {})
-	return not entry.is_empty() and entry.root.visible and entry.card_object_id == source.current_card_data.get_instance_id() \
-		and Geometry2D.is_point_in_polygon(get_viewport().get_mouse_position(), _hand_face_points(entry))
 
 func _hand_lift_phase(entry: Dictionary,source: Control) -> float:
 	var parent_transform: Transform2D = source.get_parent_control().get_global_transform()
@@ -488,20 +564,27 @@ func _sync_hand_focus_overlay(entry: Dictionary, source: Control, points: Packed
 
 
 func _sync_card_outlines() -> void:
+	var swapping := _enemy_swap_is_pending()
 	for side in [player_side_ui, enemy_side_ui]:
 		for slot in side.get_children():
 			var card: CardData = slot.current_card_data
 			var color := Color.TRANSPARENT
+			var key: int = slot.get_index() + (5 if side == enemy_side_ui else 0)
+			var swap_hint := Color.TRANSPARENT
+			if swapping and side == enemy_side_ui and slot._target_hint != "none":
+				swap_hint = Color("f0c747") if slot._target_hint == "hover" else Color("40c8df")
 			if card != null:
-				if slot._lethal_hint: color = Color("ff5144")
-				elif card.has_taunt(): color = Color("d6ad58")
+				if swap_hint.a > 0.0: color = swap_hint
+				elif slot._lethal_hint: color = Color("ff5144")
+				elif card.is_selectable() and card.has_taunt(): color = Color("d6ad58")
 				elif slot._target_hint != "none": color = Color("f0c747") if slot._target_hint == "hover" else Color("40c8df")
-			tabletop.set_card_outline(slot.get_index() + (5 if side == enemy_side_ui else 0), color)
+			tabletop.set_card_outline(key, color)
+			tabletop.set_swap_highlight(key, swap_hint if card == null else Color.TRANSPARENT)
 
 
 func _prepare_hand_entry_ui(card_ui: Control, data: CardData) -> void:
 	card_ui.set_meta("tabletop_proxy",true)
-	card_ui.set_meta("hand_hover_hit_test", _pointer_on_hand_face)
+	card_ui.set_meta("suppress_hover_hint", true)
 	super._prepare_hand_entry_ui(card_ui,data)
 
 
@@ -583,7 +666,7 @@ func _style_tabletop_ui() -> void:
 	$CanvasLayer/MainBackground/MainLayout/MiddleInfoBar.add_theme_stylebox_override("panel", status_surface)
 	hand_area.get_node("HandBackdrop").add_theme_stylebox_override("panel",StyleBoxEmpty.new())
 	for hud in [enemy_status_hud,player_status_hud]: _style_tabletop_status_hud(hud)
-	for button in [end_turn_button,face_mana_button,help_btn,field_rules_btn,battle_settings_btn,battle_chat_button,action_log_button,abandon_battle_button]:
+	for button in [end_turn_button,face_mana_button,help_btn,field_rules_btn,battle_settings_btn,battle_chat_button,action_log_button,_test_add_button]:
 		if button == null: continue
 		var primary: bool = button == end_turn_button
 		for state in ["normal","hover","pressed","disabled"]:
@@ -694,10 +777,13 @@ func _show_toast(key: String, args := []) -> void:
 		AppAudio.play("denied")
 	super._show_toast(key,args)
 
-func _inspector_resource_input(event: InputEvent, disabled: bool, read_only: bool) -> void:
+func _inspector_resource_input(event: InputEvent, disabled: bool, read_only: bool, reason: String = "") -> void:
 	if read_only or not disabled or not is_my_turn(): return
-	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed and not game.can_pay_action():
-		_show_toast("tip.insufficient_action")
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
+		if not reason.is_empty():
+			_show_toast(reason)
+		elif not game.can_pay_action():
+			_show_toast("tip.insufficient_action")
 
 func _play_hero_attack_feedback(player: int, source_slot: int) -> void:
 	if tabletop == null:
@@ -720,7 +806,7 @@ func _refresh_target_prediction() -> void:
 	var target_player := _opponent_player() if enemy else _view_player()
 	var field := _field_for_player(target_player)
 	var target: CardData = field.slots[slot]
-	if target == null: return
+	if target == null or not target.is_selectable(): return
 	var skill := _current_targeting_skill()
 	if _prediction_is_random(skill): return
 	var copy = game.copy_for_simulation()
@@ -735,13 +821,13 @@ func _refresh_target_prediction() -> void:
 	EventBus.set_block_signals(true)
 	var accepted := false
 	if current_attacker_idx >= 0 and enemy:
-		accepted = not copy.execute_attack(current_attacker_idx,slot).is_empty()
-	elif activate_targeting and enemy != _targeting_skill_wants_ally():
+		accepted = not copy.execute_attack(current_attacker_idx, slot, _skill_target_is_hostile(target_player)).is_empty()
+	elif activate_targeting and _can_target_skill_slot(target_player, slot):
 		accepted = copy.trigger_activate_skills(activate_source_slot,slot,activate_skill_idx,target_player)
-	elif summon_targeting and enemy != _targeting_skill_wants_ally():
+	elif summon_targeting and _can_target_skill_slot(target_player, slot):
 		copy.trigger_summon_skills(summon_source_slot,slot,summon_skill_idx,target_player)
 		accepted = true
-	elif cast_targeting and enemy != _targeting_skill_wants_ally():
+	elif cast_targeting and _can_target_skill_slot(target_player, slot):
 		accepted = copy.cast_spell(cast_hand_index,cast_skill_index,slot,target_player)
 	elif parasite_targeting:
 		accepted = copy.attach_parasite(parasite_hand_index,target_player,slot)
@@ -765,7 +851,7 @@ func _set_face_prediction(key: int, value: Dictionary) -> void:
 
 func _prediction_is_random(value: Variant) -> bool:
 	if value is CardData:
-		return value.get_misfortune()>0 or _prediction_is_random(value.skills) or _prediction_is_random(value.parasite_cards)
+		return value.skill_activation_probability(100)<100 or _prediction_is_random(value.skills) or _prediction_is_random(value.parasite_cards)
 	if value is Dictionary:
 		if value.get("effect","") in ["draw_cards","clone_enemy","clone_random"]: return true
 		if int(value.get("probability",100)) < 100 or int(value.get("random_count",0)) > 0 or value.get("op","")=="rand" or value.has("value_min"): return true

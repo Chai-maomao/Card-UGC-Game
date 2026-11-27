@@ -4,6 +4,7 @@ extends "res://presentation/BattleFeedbackTimeline.gd"
 # The presentation layer is the sole owner of the battle log implementation.
 const ACTION_LOG_MAX := 60
 const TARGETING_ARROW_REFRESH_MS := 250
+const DamagePreviewAmount = preload("res://presentation/DamagePreviewAmount.gd")
 var _action_log_entries: Array = []
 var _action_log_latest: Button
 var _action_log_close: Button
@@ -43,6 +44,7 @@ var _discard_pile_rest_scale := Vector2.ONE
 @onready var combat_broadcast_panel: Label = $CanvasLayer/MainBackground/MainLayout/MiddleInfoBar/InfoHBox/CombatBroadcastStrip
 @onready var combat_broadcast_label: Label = combat_broadcast_panel
 var _action_log_unread := 0
+var _combat_broadcast_kind := "system"
 
 const FEED_KIND_COLOR := {
 	"attack": UITheme.Tokens.ENEMY,
@@ -67,20 +69,20 @@ func _show_combat_broadcast(text: String, kind: String = "system", recovered_tur
 	_append_action_log(text, kind, recovered_turn)
 	if not is_instance_valid(combat_broadcast_panel):
 		return
-	var tint: Color = FEED_KIND_COLOR.get(kind, FEED_KIND_COLOR["system"])
+	_combat_broadcast_kind = kind
 	combat_broadcast_panel.text = BattleLogFormatter.summary(text.strip_edges().replace("\n", " "))
 	combat_broadcast_panel.tooltip_text = text.strip_edges()
-	combat_broadcast_panel.add_theme_color_override("font_color", tint.lightened(0.28))
+	_refresh_combat_broadcast_color()
 	if turn_wait_hint != null and not battle_finished:
 		_toggle_turn_cover()
 
 
+func _refresh_combat_broadcast_color() -> void:
+	var tint: Color = FEED_KIND_COLOR.get(_combat_broadcast_kind, FEED_KIND_COLOR["system"])
+	combat_broadcast_panel.add_theme_color_override("font_color", tint.darkened(0.45) if UITheme.Tokens.light_mode else tint.lightened(0.28))
+
+
 func _build_action_log() -> void:
-	abandon_battle_button = Button.new()
-	abandon_battle_button.text = Locale.t("battle.abandon_battle")
-	UITheme.apply_button(abandon_battle_button, "secondary")
-	abandon_battle_button.pressed.connect(_show_abandon_confirmation)
-	$CanvasLayer.add_child(abandon_battle_button)
 	action_log_button = Button.new()
 	action_log_button.text = Locale.t("battle.action_log")
 	UITheme.apply_button(action_log_button, "secondary")
@@ -104,7 +106,7 @@ func _build_action_log() -> void:
 	action_log_panel.name = "ActionLogPanel"
 	action_log_panel.visible = false
 	action_log_panel.mouse_filter = Control.MOUSE_FILTER_STOP
-	UITheme.apply_popup_frame(action_log_panel, "dark", false)
+	UITheme.apply_popup_frame(action_log_panel, "dark", false, true)
 	var margin := MarginContainer.new()
 	for side in ["margin_left", "margin_top", "margin_right", "margin_bottom"]:
 		margin.add_theme_constant_override(side, 18)
@@ -125,9 +127,9 @@ func _build_action_log() -> void:
 		add_child(inspector)
 		inspector.setup(self, header)
 	if not _active_challenge_id.is_empty():
-		var challenge := ChallengeController.new()
-		add_child(challenge)
-		challenge.setup(self, header, _active_challenge_id)
+		_challenge_controller = ChallengeController.new()
+		add_child(_challenge_controller)
+		_challenge_controller.setup(self, header, _active_challenge_id)
 	var clear_btn := Button.new()
 	clear_btn.text = Locale.t("battle.clear_log")
 	clear_btn.custom_minimum_size = Vector2(64, 26)
@@ -245,7 +247,8 @@ func _refresh_action_log_text() -> void:
 	for entry in _action_log_entries:
 		var turn := int(entry.get("turn", 1))
 		if turn != previous_turn:
-			parts.append("[b][color=#c9a965]%s[/color][/b]" % Locale.t("battle.log.turn_header", [turn]))
+			var turn_color := UITheme.Tokens.BRASS if UITheme.Tokens.light_mode else Color("c9a965")
+			parts.append("[b][color=#%s]%s[/color][/b]" % [turn_color.to_html(false), Locale.t("battle.log.turn_header", [turn])])
 			previous_turn = turn
 		var kind := str(entry.get("kind", "system"))
 		var color: Color = FEED_KIND_COLOR.get(kind, FEED_KIND_COLOR["system"])
@@ -258,7 +261,8 @@ func _refresh_action_log_text() -> void:
 		var details := ""
 		for index in range(1, lines.size()):
 			details += "\n" + str(lines[index]).strip_edges()
-		parts.append("[b][color=#%s]%s[/color][/b]%s" % [color.lightened(0.42).to_html(false), heading, details])
+		var heading_color := color.darkened(0.45) if UITheme.Tokens.light_mode else color.lightened(0.42)
+		parts.append("[b][color=#%s]%s[/color][/b]%s" % [heading_color.to_html(false), heading, details])
 	action_log_text.clear()
 	action_log_text.append_text("\n".join(parts))
 	action_log_text.scroll_to_line(0)
@@ -869,7 +873,6 @@ func _show_result(result: String):
 	var hp_bar := losing_hud.get_node("Margin/Content/HpBar") as ProgressBar
 	if _has_result_feedback_pending() or _result_hp_animating(hp_bar):
 		_result_waiting_for_feedback = true
-		abandon_battle_button.disabled = true
 		update_entire_screen()
 		while is_inside_tree() and not battle_finished and (_has_result_feedback_pending() or _result_hp_animating(hp_bar)):
 			await get_tree().process_frame
@@ -880,7 +883,7 @@ func _show_result(result: String):
 	AppAudio.play("victory" if _did_local_player_win(result) else "defeat")
 	practice_ai_running = false
 	cancel_attack()
-	if not NetworkManager.has_live_server_room() and not NetworkManager.can_return_to_lan_room() and not PlayerData.is_card_playtest_active():
+	if not _is_party_battle() and not NetworkManager.has_live_server_room() and not NetworkManager.can_return_to_lan_room() and not PlayerData.is_card_playtest_active():
 		NetworkManager.clear_room_session()
 	if _end_turn_pulse and _end_turn_pulse.is_valid():
 		_end_turn_pulse.kill()
@@ -1110,6 +1113,12 @@ func _result_mode_text() -> String:
 	return Locale.t("result.mode_hotseat")
 
 
+func _result_summary_text() -> String:
+	if PlayerData.is_online_battle() or PlayerData.battle_mode == "practice":
+		return Locale.t("result.summary_personal", [game.turn_number, _my_field().player_hp, _their_field().player_hp])
+	return Locale.t("result.summary", [game.turn_number, game.player_field.player_hp, game.player2_field.player_hp])
+
+
 func _show_battle_result_page(result: String) -> void:
 	_prepare_finished_battle_result()
 	_record_match_history("victory" if _did_local_player_win(result) else ("finished" if not PlayerData.is_online_battle() and PlayerData.battle_mode != "practice" else "defeat"), result)
@@ -1159,7 +1168,7 @@ func _show_battle_result_page(result: String) -> void:
 
 	var mode_label := Label.new()
 	var mode_text := _result_mode_text()
-	if PlayerData.battle_mode == "practice":
+	if not _is_party_battle() and PlayerData.battle_mode == "practice":
 		mode_text = "%s（%s）" % [mode_text, Locale.t("menu.ai_%s" % PlayerData.practice_ai_difficulty)]
 	mode_label.text = mode_text
 	mode_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
@@ -1167,10 +1176,7 @@ func _show_battle_result_page(result: String) -> void:
 	box.add_child(mode_label)
 
 	var summary := Label.new()
-	if PlayerData.is_online_battle() or PlayerData.battle_mode == "practice":
-		summary.text = Locale.t("result.summary_personal", [game.turn_number, _my_field().player_hp, _their_field().player_hp])
-	else:
-		summary.text = Locale.t("result.summary", [game.turn_number, game.player_field.player_hp, game.player2_field.player_hp])
+	summary.text = _result_summary_text()
 	summary.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	UITheme.apply_label(summary)
@@ -1204,7 +1210,7 @@ func _show_battle_result_page(result: String) -> void:
 	UITheme.apply_selection_entry(again_btn)
 	again_btn.add_theme_font_size_override("font_size", 20 + 2 * int(AppPreferences.get_value("text_size")))
 	actions.add_child(again_btn)
-	if PlayerData.is_online_battle():
+	if PlayerData.is_online_battle() or _is_party_battle():
 		_online_result_back_btn = again_btn
 		again_btn.pressed.connect(_on_online_result_back_pressed)
 		_refresh_online_result_destination()
@@ -1369,39 +1375,34 @@ func _refresh_end_turn_damage_preview() -> void:
 	if game == null or not is_instance_valid(enemy_status_hud): return
 	var content: HBoxContainer = enemy_status_hud.get_node("Margin/Content")
 	var hp_bar: ProgressBar = content.get_node("HpBar")
-	var active: bool = game.is_player_turn and game.current_player == _view_player() and not battle_finished
+	var active: bool = game.is_player_turn and game.current_player == _view_player() and not battle_finished \
+		and not (_challenge_controller != null and _challenge_controller.finished)
 	var damage := int(game.preview_end_turn_attacks(face_mana_button.button_pressed).total_damage) if active else 0
 	preload("res://presentation/ResourceCostPreview.gd").update(hp_bar,damage,_their_field().player_hp,false,Color("f4cf61"))
 	var overlay := hp_bar.get_node_or_null("ResourceCostPreview") as Control
 	if damage<=0 or overlay==null: return
-	var amount := overlay.get_node_or_null("DamageAmount") as Label
-	if amount==null:
-		amount = Label.new()
+	var amount := overlay.get_node_or_null("DamageAmount") as DamagePreviewAmount
+	if amount == null:
+		amount = DamagePreviewAmount.new()
 		amount.name = "DamageAmount"
 		amount.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		amount.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		amount.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		amount.add_theme_font_override("font",UITheme.medium_font())
-		amount.add_theme_color_override("font_color",Color("fff0bc"))
-		amount.add_theme_color_override("font_outline_color",Color("a63730"))
 		overlay.add_child(amount)
-	var font_size := maxi(10,roundi(11*_ui_scale()))
-	amount.add_theme_font_size_override("font_size",font_size)
-	amount.add_theme_constant_override("outline_size",maxi(2,roundi(2*_ui_scale())))
-	amount.text = str(damage)
-	amount.size = Vector2(maxf(32*_ui_scale(),amount.get_minimum_size().x),amount.get_theme_font("font").get_height(font_size)+4)
-	amount.position = Vector2((overlay.size.x-amount.size.x)*0.5,maxf(2,hp_bar.global_position.y-amount.size.y-1)-overlay.global_position.y)
+	amount.update(damage, overlay, hp_bar, _ui_scale())
 
+
+func _opponent_hand_count() -> int:
+	return _hand_for_player(_opponent_player()).size()
 
 
 func _update_battle_status_huds() -> void:
 	if game == null:
 		return
-	var my_turn_active: bool = game.is_player_turn and game.current_player == _view_player()
-	var enemy_turn_active: bool = game.is_player_turn and not my_turn_active
+	var turn_active: bool = game.is_player_turn and not (_challenge_controller != null and _challenge_controller.finished)
+	var my_turn_active: bool = turn_active and game.current_player == _view_player()
+	var enemy_turn_active: bool = turn_active and not my_turn_active
 	var preview := _deployment_preview()
 	_update_status_hud(player_status_hud, _my_field(), preview["hand"].size(), false, my_turn_active, _view_player(), preview["mana"])
-	_update_status_hud(enemy_status_hud, _their_field(), _hand_for_player(_opponent_player()).size(), true, enemy_turn_active, _opponent_player())
+	_update_status_hud(enemy_status_hud, _their_field(), _opponent_hand_count(), true, enemy_turn_active, _opponent_player())
 	_refresh_end_turn_damage_preview()
 	_suppress_status_feedback_once = false
 
@@ -1426,8 +1427,12 @@ func _do_update_entire_screen() -> void:
 	if _web_playback_allows_input() and not is_resolution_locked() and is_instance_valid(_resolution_blocker):
 		_resolution_blocker.hide()
 	if turn_label:
-		if _result_waiting_for_feedback:
+		if _challenge_controller != null and _challenge_controller.finished:
+			turn_label.text = Locale.t("battle.challenge_finished")
+		elif _result_waiting_for_feedback:
 			turn_label.text = Locale.t("battle.finishing_match")
+		elif _enemy_swap_is_pending():
+			turn_label.text = Locale.t("battle.swap_drag")
 		elif not game.pending_cost_choices.is_empty() and game.pending_cost_choices.front().player != _view_player():
 			turn_label.text = Locale.t("battle.waiting_card_choice")
 		elif game.is_player_turn:
@@ -1438,7 +1443,7 @@ func _do_update_entire_screen() -> void:
 	_update_battle_status_huds()
 	if end_turn_button:
 		end_turn_button.disabled = _turn_ending or not _owns_current_turn()
-		end_turn_button.tooltip_text = _end_turn_preview_text()
+		end_turn_button.tooltip_text = "" if _challenge_controller != null and _challenge_controller.finished else _end_turn_preview_text()
 
 	var my_slots := _random_visible_slots(_view_player(),_visible_player_slots())
 	var their_field = _their_field()
@@ -1447,17 +1452,8 @@ func _do_update_entire_screen() -> void:
 	var e_slots = enemy_side_ui.get_children()
 
 	for i in range(5):
-		_scale_control(p_slots[i], BASE_SLOT_SIZE)
-		_scale_control(e_slots[i], BASE_SLOT_SIZE)
 		p_slots[i].set_card(my_slots[i])
-		if my_slots[i] != null and p_slots[i].current_card_ui != null:
-			p_slots[i].current_card_ui.set_card(my_slots[i])
-			_scale_control(p_slots[i].current_card_ui, BASE_CARD_SIZE)
-
 		e_slots[i].set_card(their_slots[i])
-		if their_slots[i] != null and e_slots[i].current_card_ui != null:
-			e_slots[i].current_card_ui.set_card(their_slots[i])
-			_scale_control(e_slots[i].current_card_ui, BASE_CARD_SIZE)
 	for slot_index in range(p_slots.size()):
 		var card_ui = p_slots[slot_index].current_card_ui
 		if card_ui == null: continue
@@ -1548,22 +1544,24 @@ func _process(_delta):
 			else:
 				var slot_ui = _my_slots_ui()[source]
 				start_pos = slot_ui.global_position + slot_ui.size / 2
-			var end_pos = get_global_mouse_position()
+			var end_pos := _targeting_pointer_position()
 			attack_arrow.points = [start_pos, end_pos]
 			attack_arrow.visible = true
 
 			var hovered := -1
-			for i in range(5):
-				var e_slot = _their_slots_ui()[i]
-				var rect := Rect2(e_slot.global_position, e_slot.size)
-				if rect.has_point(get_global_mouse_position()):
+			var hover_slots := _their_slots_ui()
+			if _is_party_battle() and (summon_targeting or activate_targeting):
+				hover_slots.append_array(_my_slots_ui())
+			for i in hover_slots.size():
+				var slot: Control = hover_slots[i]
+				if slot.get_global_rect().has_point(end_pos):
 					hovered = i
 					break
 			# Hand-cast aiming is private; only field-source arrows sync to the opponent.
 			if not from_hand:
 				var hovering_changed := hovered != last_hovered_target
 				last_hovered_target = hovered
-				if PlayerData.is_online_battle():
+				if PlayerData.is_online_battle() or _is_party_battle():
 					var now := Time.get_ticks_msec()
 					if hovering_changed or (hovered >= 0 and now >= _next_targeting_refresh):
 						_next_targeting_refresh = now + TARGETING_ARROW_REFRESH_MS
@@ -1572,18 +1570,25 @@ func _process(_delta):
 			attack_arrow.visible = false
 			last_hovered_target = -1
 	else:
-		if remote_arrow_source >= 0 and remote_arrow_target >= 0:
-			var src_slots = _their_slots_ui()
-			var src_ui = src_slots[remote_arrow_source]
-			var start_pos = src_ui.global_position + src_ui.size / 2
-			var tgt_slots = _my_slots_ui()
-			var tgt_ui = tgt_slots[remote_arrow_target]
-			var end_pos = tgt_ui.global_position + tgt_ui.size / 2
-			attack_arrow.points = [start_pos, end_pos]
-			attack_arrow.visible = true
-		else:
-			attack_arrow.visible = false
+		var points := _remote_targeting_points()
+		attack_arrow.visible = not points.is_empty()
+		if attack_arrow.visible:
+			attack_arrow.points = points
 	_update_slot_highlights()
+
+
+func _targeting_pointer_position() -> Vector2:
+	return get_global_mouse_position()
+
+
+func _remote_targeting_points() -> PackedVector2Array:
+	if remote_arrow_source < 0 or remote_arrow_target < 0:
+		return PackedVector2Array()
+	return _targeting_points(_their_slots_ui()[remote_arrow_source], _my_slots_ui()[remote_arrow_target])
+
+
+func _targeting_points(source: Control, target: Control) -> PackedVector2Array:
+	return PackedVector2Array([source.get_global_rect().get_center(), target.get_global_rect().get_center()])
 
 
 func _can_show_remote_targeting() -> bool:

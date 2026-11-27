@@ -1,6 +1,8 @@
 class_name ValueSlot
 extends PanelContainer
 
+const DragPreview := preload("res://SkillDragPreview.gd")
+
 # ============================================
 # Scratch-style number slot.
 # Starts with an empty rounded literal field. Dropping a variable reporter
@@ -415,13 +417,17 @@ func _set_drag_preview_label(_text: String, at: Vector2) -> void:
 	preview.size = preview.get_combined_minimum_size()
 	preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	for child in preview.find_children("*", "Control", true, false): child.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var wrap := Control.new()
-	wrap.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	wrap.add_child(preview)
-	set_drag_preview(wrap)
+	DragPreview.show(self, preview)
 
 
 func _can_drop_var(_pos: Vector2, payload) -> bool:
+	if DragPreview.uses_socket_overlap(self):
+		return false
+	var ok := accepts_reporter(payload)
+	set_reporter_highlight(ok)
+	return ok
+
+func accepts_reporter(payload: Variant) -> bool:
 	if not accept_reporters: return false
 	var ok: bool = payload is Dictionary and payload.get("type", "") in ["var_block", "expr_block"]
 	if ok:
@@ -433,7 +439,6 @@ func _can_drop_var(_pos: Vector2, payload) -> bool:
 		if ok and is_instance_valid(source):
 			var displaced := source._reporter_expression(_current_reporter())
 			if not displaced.is_empty() and not source._fits_expression(displaced): ok = false
-	_set_drop_highlight(ok)
 	return ok
 
 func _fits_expression(expression: Dictionary) -> bool:
@@ -474,7 +479,10 @@ static func _expression_depth(expression: Dictionary) -> int:
 
 func _drop_var(_pos: Vector2, payload) -> void:
 	if not _can_drop_var(_pos, payload): return
-	_set_drop_highlight(false)
+	drop_reporter(payload)
+
+func drop_reporter(payload: Dictionary) -> void:
+	set_reporter_highlight(false)
 	# Filled numeric reporters trade places as one change. Copy before writing
 	# either binding: the two slots may be operands in the same expression.
 	var src: Object = payload.get("from_slot", null)
@@ -542,7 +550,7 @@ func _drop_expr(expression: Dictionary, notify := true) -> void:
 	_play_drop_pulse()
 
 
-func _set_drop_highlight(on: bool) -> void:
+func set_reporter_highlight(on: bool) -> void:
 	if _drop_highlight == on:
 		return
 	_drop_highlight = on
@@ -568,11 +576,11 @@ func _notification(what: int) -> void:
 	if get_meta("drag_preview", false): return
 	if what == NOTIFICATION_DRAG_END:
 		_dragging = false
-		_set_drop_highlight(false)
+		set_reporter_highlight(false)
 		_animate_slot(Vector2.ONE, Color.WHITE, 0.10)
 	elif what == NOTIFICATION_MOUSE_EXIT and _drop_highlight:
 		if not get_global_rect().has_point(get_global_mouse_position()):
-			_set_drop_highlight(false)
+			set_reporter_highlight(false)
 
 
 # ============================================

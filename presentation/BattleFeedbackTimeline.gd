@@ -14,7 +14,8 @@ func _queue_presentation_feedback(events: Array) -> void:
 	if events.is_empty() or battle_finished:
 		return
 	var first_event: Dictionary = events[0]
-	if not _hp_feedback_running and _random_board_override.is_empty() and first_event.get("projectile", false):
+	if not AppPreferences.get_value("reduced_motion") and not _hp_feedback_running \
+			and _random_board_override.is_empty() and first_event.get("projectile", false):
 		_set_random_board(first_event.get("board_before", {}))
 	var rolls := events.filter(func(event): return str(event.get("kind",""))=="random")
 	if not rolls.is_empty():
@@ -105,9 +106,10 @@ func _drain_hp_feedback() -> void:
 			elif str(event.get("kind","")) == "enemy_hand":
 				await _play_enemy_hand_event(event)
 			elif str(event.get("kind",""))=="attack_motion":
-				if bool(event.get("projectile", false)):
+				if bool(event.get("projectile", false)) and not AppPreferences.get_value("reduced_motion"):
 					_set_random_board(event.get("board_before", {}))
-					await _play_ai_attack_aim(event)
+					if bool(event.get("ai", false)):
+						await _play_ai_attack_aim(event)
 				_playing_random_action = true
 				# Projectile attacks recoil at the source now; target hit feedback
 				# belongs to the HP event after the projectile reaches it.
@@ -115,9 +117,13 @@ func _drain_hp_feedback() -> void:
 				_play_attack_feedback(int(event.get("player",1)),int(event.get("source_slot",0)),motion_target)
 				_playing_random_action = false
 				if bool(event.get("projectile", false)):
-					await _play_ai_attack_projectile(event)
+					await _play_directed_projectile(event)
 				else:
 					await get_tree().create_timer(.12*GamePreferences.battle_animation_duration_scale()).timeout
+			elif str(event.get("kind", "")) == "directed_motion":
+				if not AppPreferences.get_value("reduced_motion"):
+					_set_random_board(event.get("board_before", {}))
+				await _play_directed_projectile(event)
 			else:
 				_play_presentation_event(event)
 			previous_group = group
@@ -136,26 +142,19 @@ func _drain_hp_feedback() -> void:
 		update_entire_screen()
 
 
-func _play_ai_attack_projectile(event: Dictionary) -> void:
+func _play_directed_projectile(event: Dictionary) -> void:
 	var player := int(event.get("player", 2))
 	var source := _slot_ui_for_player(player, int(event.get("source_slot", -1)))
 	var target := _slot_ui_for_player(3 - player, int(event.get("target_slot", -1)))
-	if source == null or target == null: return
-	var start := source.get_global_rect().get_center()
+	if target == null: return
+	var start := get_viewport_rect().size * Vector2(0.5, 0.88 if player == _view_player() else 0.12)
+	if source != null:
+		start = source.get_global_rect().get_center()
+	elif player == _view_player() and event.get("origin", []) is Array and event.get("origin", []).size() == 2:
+		start = get_viewport_rect().size * Vector2(float(event.origin[0]), float(event.origin[1]))
 	var finish := target.get_global_rect().get_center()
-	var trail := Line2D.new()
-	trail.name = "AiStrikeTrail"
-	trail.set_meta("battle_fx_kind", "ai_strike")
-	trail.width = 2.5 * _ui_scale()
-	trail.default_color = UITheme.COLOR_GOLD
-	trail.z_index = 35
-	$CanvasLayer.add_child(trail)
-	var tween := trail.create_tween()
-	tween.tween_method(func(t: float):
-		trail.points = PackedVector2Array([start.lerp(finish, maxf(0, t - 0.18)), start.lerp(finish, t)])
-	, 0.0, 1.0, 0.22 * GamePreferences.battle_animation_duration_scale()).set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
-	await tween.finished
-	trail.queue_free()
+	var tint := UITheme.COLOR_GOLD if event.kind == "attack_motion" else Color("8fcbc8")
+	await BattleFx.directed_trail($CanvasLayer, start, finish, tint, _ui_scale(), bool(event.get("ai", false)))
 
 
 func _play_ai_attack_aim(event: Dictionary) -> void:

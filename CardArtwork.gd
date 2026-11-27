@@ -25,7 +25,13 @@ static func texture_for(card: CardData, displayed_hp: int = -1, displayed_max_hp
 	return null
 
 
-static func deck_cover(cards: Array) -> Texture2D:
+static func deck_cover(deck: Dictionary) -> Texture2D:
+	var cards: Array = deck.get("cards", [])
+	var cover_id: String = deck.get("cover_instance_id", "")
+	if not cover_id.is_empty():
+		for card: CardData in cards:
+			if card.instance_id == cover_id:
+				return texture_for(card, card.max_hp, card.max_hp)
 	for item in cards:
 		var card := item as CardData
 		if card != null and not card.art_path.is_empty():

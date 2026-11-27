@@ -2,7 +2,9 @@ class_name BattleStatusHud
 extends RefCounted
 
 static func resource_color(word: String) -> Color:
-	return Color(preload("res://presentation/SkillDescription.gd").KEYWORDS[word][0])
+	var words := preload("res://presentation/SkillDescription.gd")
+	var color: String = words.KEYWORDS[word][0]
+	return Color(words.LIGHT_KEYWORD_COLORS.get(color, color) if UITheme.Tokens.light_mode else color)
 
 static func _apply_status_hud_theme(hud: Panel, enemy: bool, active: bool) -> void:
 	if hud == null:

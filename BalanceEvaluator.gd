@@ -259,7 +259,7 @@ static func _buff_score(eff: Dictionary) -> float:
 			return 1.2 * duration
 		SkillEngine.BUFF_SILENCE:
 			return 2.0 * min(duration, 2.0)
-		SkillEngine.BUFF_MISFORTUNE:
+		SkillEngine.BUFF_MISFORTUNE, SkillEngine.BUFF_LUCK:
 			return max(1.0, value / 18.0) * duration
 		SkillEngine.BUFF_POISON:
 			return value * 0.9 * duration

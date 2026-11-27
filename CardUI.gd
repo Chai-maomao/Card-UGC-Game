@@ -468,6 +468,8 @@ func set_card(card_data: CardData):
 	if action_buttons:
 		action_buttons.visible = _actions_visible and not card_data.has_stun() and _has_visible_action_buttons()
 	self.modulate = Color.WHITE.darkened(0.2) if card_data.skills_disabled() else Color.WHITE
+	if _embedded_in_slot and card_data.has_untargetable():
+		modulate.a = UITheme.UNTARGETABLE_CARD_OPACITY
 	_auto_hide_if_enemy()
 	_sync_printed_face()
 
@@ -573,14 +575,15 @@ func _update_status_icons() -> void:
 		"neutral": [],
 	}
 	for eff in current_card_data.status_effects:
-		var val: int = eff.get("value", 0)
-		if val <= 0:
-			continue
 		var buff_id: String = eff.get("buff_id", "")
+		if buff_id == SkillEngine.BUFF_IMMUNE_LETHAL or (int(eff.get("value", 0)) <= 0 and SkillRegistry.buff_uses_value(buff_id)):
+			continue
 		var polarity: String = SkillRegistry.buff_polarity(buff_id)
 		if not grouped.has(polarity):
 			polarity = "neutral"
 		(grouped[polarity] as Array).append(eff)
+	if current_card_data.immune_lethal:
+		(grouped["positive"] as Array).append({"buff_id": SkillEngine.BUFF_IMMUNE_LETHAL})
 	for polarity in ["positive", "negative", "neutral"]:
 		var effects: Array = grouped[polarity]
 		if effects.is_empty():
@@ -714,12 +717,14 @@ func _format_parasite_attachment_tooltip(parasite: CardData) -> String:
 
 func _format_buff_tooltip(eff: Dictionary) -> String:
 	var bid: String = eff.get("buff_id", "")
-	var val: int = eff.get("value", 0)
-	var dur: int = eff.get("duration", 0)
 	var name: String = Locale.term("buff", bid)
-	if not SkillRegistry.buff_uses_value(bid): return Locale.t("card.buff_tooltip_status", [name, dur])
-	var detail := SkillEngine.format_buff_value(bid, str(val))
-	return Locale.t("card.buff_tooltip_detail", [name, detail, dur])
+	var time_left := _TextFormatter.status_time_left(eff)
+	if bid == SkillEngine.BUFF_IMMUNE_LETHAL:
+		return Locale.t("card.buff_tooltip_detail", [name, Locale.t("card.status_lethal_detail"), time_left])
+	if not SkillRegistry.buff_uses_value(bid):
+		return Locale.t("card.buff_tooltip_status", [name, time_left])
+	var detail := _TextFormatter.format_buff_value(bid, str(eff.get("value", 0)))
+	return Locale.t("card.buff_tooltip_detail", [name, detail, time_left])
 
 
 func _parasite_tooltip(card_data: CardData) -> String:

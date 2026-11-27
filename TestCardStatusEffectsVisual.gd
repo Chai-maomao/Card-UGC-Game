@@ -14,8 +14,13 @@ func _verify() -> void:
 	battle.game.turn_number = 2
 	check(battle.game.trigger_activate_skills(0,4,0,2),"real skill must successfully apply all three statuses")
 	battle.game.player_field.slots[1].apply_buff("regen",2,2,1)
+	var warded: CardData = battle.game.player_field.slots[2]
+	warded.apply_buff(SkillEngine.BUFF_UNTARGETABLE, 0, 1, 1)
 	battle.update_entire_screen()
 	await get_tree().create_timer(0.4).timeout
+	var warded_ink: StandardMaterial3D = battle.tabletop.cards[2].top.material_override
+	check(is_equal_approx(warded_ink.albedo_color.a, 0.5) and warded_ink.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA,
+		"an untargetable card must render at 50 percent opacity")
 	var fx = battle.get_node("CanvasLayer/BattleCardStatusFx")
 	check(fx.effects.has(target.get_instance_id()),"actual skill application must show status visuals on its target")
 	check(fx.effects[target.get_instance_id()].statuses.size()==3,"silence, stun and poison must remain distinct when combined")
@@ -24,6 +29,11 @@ func _verify() -> void:
 		await get_tree().create_timer(0.3).timeout
 		await RenderingServer.frame_post_draw
 		get_viewport().get_texture().get_image().save_png("res://artifacts/hand-overlap-20261115/status-%d.png" % dimensions.x)
+	warded.tick_buffs(1)
+	battle.update_entire_screen()
+	await get_tree().process_frame
+	check(is_equal_approx(warded_ink.albedo_color.a, 1.0) and warded_ink.transparency == BaseMaterial3D.TRANSPARENCY_ALPHA_SCISSOR,
+		"the card must return to full opacity when the status expires")
 	var before := BattleRepro.hash_state(battle.game.export_initial_state())
 	AppPreferences.set_value("reduced_motion",true)
 	await get_tree().create_timer(0.3).timeout

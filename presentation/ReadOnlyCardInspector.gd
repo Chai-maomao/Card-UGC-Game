@@ -1,4 +1,6 @@
 extends RefCounted
+const Descriptions = preload("res://presentation/SkillDescription.gd")
+
 static func show_card(parent: Node, card: CardData, source: Control) -> CanvasLayer:
 	var popup := UITheme.make_popup_layer(parent, 130)
 	var layer: CanvasLayer = popup.layer
@@ -6,7 +8,7 @@ static func show_card(parent: Node, card: CardData, source: Control) -> CanvasLa
 		if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT and event.pressed: layer.queue_free())
 	var panel := PanelContainer.new()
 	panel.name = "TabletopCardInspector"
-	UITheme.apply_popup_frame(panel, "dark", false)
+	UITheme.apply_popup_frame(panel, "tooltip", false)
 	layer.add_child(panel)
 	var columns := HBoxContainer.new()
 	columns.add_theme_constant_override("separation",12)
@@ -24,35 +26,25 @@ static func show_card(parent: Node, card: CardData, source: Control) -> CanvasLa
 	if not card.is_spell():
 		var stats := Label.new()
 		stats.text = Locale.t("tabletop.stats",[card.effective_atk(),card.hp,card.max_hp])
+		UITheme.apply_label(stats)
 		box.add_child(stats)
-	var frame := PanelContainer.new()
-	frame.name = "CardAbilitiesFrame"
-	UITheme.apply_panel(frame,"soft")
+	var frame := Descriptions.make_abilities_frame()
 	box.add_child(frame)
 	var scroll := ScrollContainer.new()
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.custom_minimum_size.y = minf(220,parent.get_viewport().get_visible_rect().size.y*0.35)
+	UITheme.apply_scrollbar(scroll.get_v_scroll_bar())
 	frame.add_child(scroll)
-	var skills := VBoxContainer.new()
-	skills.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	skills.add_theme_constant_override("separation",12)
+	var skills := VBoxContainer.new() if card.is_parasite() else Descriptions.build_read_only_abilities(card)
 	scroll.add_child(skills)
-	if not card.is_spell() and not card.is_parasite():
-		var attack := Label.new()
-		attack.text = ("[普通攻击]\n对敌方造成%d点伤害" if Locale.language == "zh" else "[Basic attack]\nDeal %d damage to an enemy") % card.effective_atk()
-		skills.add_child(attack)
-	for i in range(card.skills.size()):
-		if card.skills[i].is_empty(): continue
-		var label := preload("res://presentation/SkillDescription.gd").build(SkillTextFormatter.format_skill_tooltip(card.skills[i],i))
-		skills.add_child(label)
-	var state_panel := preload("res://presentation/CardStatePanel.gd").build(card)
+	frame.visible = skills.get_child_count() > 0
+	var state_panel := preload("res://presentation/CardStatePanel.gd").build(card, [])
 	if state_panel != null: columns.add_child(state_panel)
 	var close := Button.new()
 	close.text = Locale.t("common.close")
 	UITheme.apply_button(close,"secondary",false)
 	close.pressed.connect(layer.queue_free)
 	box.add_child(close)
-	UITheme.theme_tree(skills)
 	panel.reset_size()
 	var viewport := parent.get_viewport().get_visible_rect().size
 	var origin := source.global_position+Vector2(source.size.x+12,0) if is_instance_valid(source) else viewport*0.5-panel.size*0.5

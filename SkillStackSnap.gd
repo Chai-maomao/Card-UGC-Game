@@ -70,7 +70,7 @@ func preview(data: Variant) -> bool:
 		if not is_instance_valid(box): continue
 		var blocks: Array = target.blocks
 		var rect: Rect2 = target.rect
-		var inside_empty_socket := blocks.is_empty() and rect.has_point(pointer)
+		var inside_empty_socket := blocks.is_empty() and rect.has_point(leading + Vector2(18, 12))
 		var index := 0
 		var anchor := rect.position
 		var below_terminal := false
@@ -94,7 +94,7 @@ func preview(data: Variant) -> bool:
 			score = -10000.0 - float(target.path.size()) * 1000.0 + absf(distance.y)
 		if score < best:
 			best = score
-			chosen = {"box": box, "path": target.path, "index": index}
+			chosen = {"box": box, "path": target.path, "index": index, "anchor": anchor}
 			if not source.is_empty() and source_parent == target.path:
 				chosen["unchanged"] = index == int(source.back())
 	active = chosen
@@ -103,9 +103,11 @@ func preview(data: Variant) -> bool:
 		return false
 	if active.get("unchanged", false):
 		editor._hide_insertion_line()
+		canvas.show_snap_marker(active.anchor)
 		return true
 	editor._activate_slot_highlight(active.box)
 	editor._show_insertion_line(active.box, active.index)
+	canvas.show_snap_marker(active.anchor)
 	return true
 
 func commit(data: Dictionary) -> bool:

@@ -9,7 +9,7 @@ func _ready() -> void:
 	add_to_group("battle_modal")
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	layer = 180
-	paused_here = not PlayerData.is_online_battle()
+	paused_here = not PlayerData.is_online_battle() and (battle == null or not battle._is_party_battle())
 	if paused_here: get_tree().paused = true
 	if settings_only:
 		_show_settings_on(self)
@@ -22,8 +22,16 @@ func _ready() -> void:
 	add_choice(Locale.t("preferences.settings"), _settings)
 	add_choice(Locale.t("preferences.leave"), _confirm_leave)
 	finish(false)
+	AppPreferences.changed.connect(_on_appearance_changed)
 	UITheme.fade_enter(surface, 0.16)
 	UIMotion.register_popup(self)
+
+func _on_appearance_changed(key: String) -> void:
+	if key == "appearance":
+		_apply_heading()
+		for child in entries.get_children():
+			if child is Button:
+				UITheme._update_selection_color(child)
 
 
 func viewport_changed() -> void:

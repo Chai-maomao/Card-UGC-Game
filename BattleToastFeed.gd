@@ -12,6 +12,8 @@ const KIND_STYLE := {
 
 func _init() -> void:
 	name = "ToastStack"
+	# Keep feedback from disabled actions visible above the card inspector.
+	z_index = 60
 	anchor_left = 0.5
 	anchor_right = 0.5
 	anchor_top = 0.14
@@ -32,11 +34,18 @@ func show_message(text: String, kind: String = "system", hold: float = 1.8, ui_s
 		remove_child(oldest)
 		oldest.queue_free()
 	var style_cfg: Dictionary = KIND_STYLE.get(kind, KIND_STYLE["system"])
+	var border: Color = style_cfg["border"]
+	var text_color: Color = style_cfg["text"]
+	var fill := Color(0.045, 0.055, 0.08, 0.88)
+	if UITheme.Tokens.light_mode:
+		var light_colors := {"warn": UITheme.Tokens.WARNING, "attack": UITheme.Tokens.ENEMY, "skill": UITheme.Tokens.TEAL, "system": UITheme.Tokens.TEXT}
+		text_color = light_colors.get(kind, UITheme.Tokens.TEXT)
+		border = UITheme.Tokens.TOOLTIP_BORDER
+		fill = UITheme.Tokens.TOOLTIP_FILL
 	var panel := PanelContainer.new()
 	panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	panel.add_theme_stylebox_override("panel", UITheme.panel_style(
-		Color(0.045, 0.055, 0.08, 0.88), style_cfg["border"], 1, 8,
-		Color(style_cfg["border"].r, style_cfg["border"].g, style_cfg["border"].b, 0.28), 5
+		fill, border, 1, 8, Color(border.r, border.g, border.b, 0.28), 5
 	))
 	var label := Label.new()
 	label.text = text
@@ -44,8 +53,8 @@ func show_message(text: String, kind: String = "system", hold: float = 1.8, ui_s
 	label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	label.add_theme_font_size_override("font_size", max(11, int(17 * ui_scale)))
-	label.add_theme_color_override("font_color", style_cfg["text"])
-	label.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.5))
+	label.add_theme_color_override("font_color", text_color)
+	label.add_theme_color_override("font_shadow_color", Color.TRANSPARENT if UITheme.Tokens.light_mode else Color(0, 0, 0, 0.5))
 	label.add_theme_constant_override("shadow_offset_x", 1)
 	label.add_theme_constant_override("shadow_offset_y", 1)
 	label.custom_minimum_size = Vector2(min(560, 380 * ui_scale), 0)

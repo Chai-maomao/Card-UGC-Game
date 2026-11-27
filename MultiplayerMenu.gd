@@ -79,14 +79,12 @@ func _on_viewport_size_changed() -> void:
 func _ready():
 	_apply_theme()
 	dedicated_btn.pressed.connect(func():
-		PlayerData.prepare_online_selection("res://DedicatedLobby.tscn")
-		UIMotion.change_scene("res://BattleDeckSelect.tscn")
+		UIMotion.replace_scene("res://MainMenu.tscn", true, "online:mp.dedicated")
 	)
 	# Web relay entries are temporarily withdrawn; keep their implementation
 	# and scene nodes for a future reopening, without active navigation hooks.
 	direct_btn.pressed.connect(func():
-		PlayerData.prepare_online_selection("res://DirectLobby.tscn")
-		UIMotion.change_scene("res://BattleDeckSelect.tscn")
+		UIMotion.replace_scene("res://MainMenu.tscn", true, "online:mp.direct")
 	)
 	back_btn.pressed.connect(func(): UIMotion.go_back("res://MainMenu.tscn"))
 	_apply_texts()

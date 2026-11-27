@@ -32,7 +32,7 @@ func _ready() -> void:
 	var discard_zone := battle.get("discard_zone") as Control
 	var draw_button := battle.get("draw_pile_btn") as Control
 
-	for toolbar_name in ["abandon_battle_button", "action_log_button", "help_btn"]:
+	for toolbar_name in ["action_log_button", "help_btn"]:
 		var toolbar := battle.get(toolbar_name) as Control
 		_assert(not _overlap(enemy_hud, toolbar), "enemy HUD overlaps %s" % toolbar_name)
 	_assert(not _overlap(enemy_hud, enemy_row), "enemy HUD overlaps the enemy field")

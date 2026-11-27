@@ -250,6 +250,10 @@ layout_mode = 2
 [node name="SlotUI5" parent="CanvasLayer/MainBackground/MainLayout/PlayerSide" unique_id=9990004 instance=ExtResource("2_0xm2m")]
 layout_mode = 2
 
+[node name="PlayerStatusSpacer" type="Control" parent="CanvasLayer/MainBackground/MainLayout"]
+custom_minimum_size = Vector2(0, 12)
+layout_mode = 2
+
 [node name="PlayerStatusRow" type="HBoxContainer" parent="CanvasLayer/MainBackground/MainLayout"]
 custom_minimum_size = Vector2(0, 40)
 layout_mode = 2
@@ -365,6 +369,7 @@ grow_vertical = 2
 mouse_filter = 2
 
 [node name="HandRail" type="ColorRect" parent="CanvasLayer/MainBackground/MainLayout/BottomDockMargin/BottomDock/HandArea"]
+visible = false
 layout_mode = 1
 anchors_preset = 10
 anchor_right = 1.0

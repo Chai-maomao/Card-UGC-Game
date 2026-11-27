@@ -42,28 +42,7 @@ func collect_issues() -> Array:
 static func collect_semantic_issues(effects: Array, trigger_id: String = "", talent_mode: bool = false) -> Array:
 	var issues: Array = []
 	_walk_semantic_issues(effects, trigger_id, issues, [], talent_mode)
-	var directed_sides: Dictionary = {}
-	_collect_directed_sides(effects, directed_sides)
-	if directed_sides.has(SkillEngine.TARGET_SIDE_ENEMY) and directed_sides.has(SkillEngine.TARGET_SIDE_ALLY):
-		issues.append({"message": Locale.t("skill_editor.error_mixed_directed_sides"), "path": [], "kind": "target_side"})
 	return issues
-
-
-static func _collect_directed_sides(effects: Array, found: Dictionary) -> void:
-	for value in effects:
-		if not value is Dictionary:
-			continue
-		var eff: Dictionary = value
-		var effect_id := str(eff.get("effect", ""))
-		if SkillRegistry.requires_live_target(effect_id) \
-				and str(eff.get("target", "")) in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES]:
-			var side := str(eff.get("target_side", ""))
-			if side in [SkillEngine.TARGET_SIDE_ENEMY, SkillEngine.TARGET_SIDE_ALLY]:
-				found[side] = true
-		for branch in ["then_effects", "else_effects"]:
-			var nested = eff.get(branch, [])
-			if nested is Array:
-				_collect_directed_sides(nested, found)
 
 
 static func _walk_semantic_issues(effects: Array, trigger_id: String, issues: Array, base_path: Array, talent_mode: bool = false) -> void:
@@ -95,7 +74,7 @@ static func _walk_semantic_issues(effects: Array, trigger_id: String, issues: Ar
 		if effect_id == SkillEngine.EFFECT_CLONE_ENEMY:
 			if str(eff.get("target", "")) not in SkillRegistry.allowed_targets(effect_id):
 				issues.append({"message": Locale.t("skill_editor.error_clone_target"), "path": path, "kind": "target"})
-			if str(eff.get("target_side", "")) != SkillEngine.TARGET_SIDE_ENEMY:
+			if not SkillTargetResolver.uses_selected_unit(str(eff.get("target", ""))) and str(eff.get("target_side", "")) != SkillEngine.TARGET_SIDE_ENEMY:
 				issues.append({"message": Locale.t("skill_editor.error_clone_side"), "path": path, "kind": "target_side"})
 		if effect_id == SkillEngine.EFFECT_CHARM and trigger_id == SkillEngine.TRIGGER_ON_DEATH \
 				and str(eff.get("target", "")) in [SkillEngine.TARGET_SELF, SkillEngine.TARGET_SELF_SIDES]:
@@ -223,15 +202,14 @@ func walk_issues(list: Array, issues: Array, base_path: Array, talent_mode: bool
 					if side == "":
 						issues.append({"message": Locale.t("skill_editor.error_missing_target_side"), "path": path, "kind": "target_side"})
 					elif _target_side_ineffective(tgt, side):
-						var message_key := "skill_editor.error_player_target_side" if tgt == SkillEngine.TARGET_PLAYER else "skill_editor.error_target_ineffective"
-						issues.append({"message": Locale.t(message_key), "path": path, "kind": "target_side"})
+						issues.append({"message": Locale.t("skill_editor.error_player_target_side"), "path": path, "kind": "target_side"})
 			if effect_id == SkillEngine.EFFECT_ZERO_COST \
 					and str(eff_dict.get("cost_reduction_mode", SkillRegistry.COST_REDUCTION_TURN)) not in SkillRegistry.COST_REDUCTION_MODES:
 				issues.append({"message": Locale.t("skill_editor.error_cost_reduction_mode"), "path": path, "kind": "cost_mode"})
 
 
 static func _target_needs_side(target: String) -> bool:
-	return target in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES, SkillEngine.TARGET_ALL,
+	return target in [SkillEngine.TARGET_ALL,
 			SkillEngine.TARGET_PLAYER, SkillEngine.TARGET_MALE, SkillEngine.TARGET_FEMALE, SkillEngine.TARGET_NONHUMAN]
 
 static func _number_issues(operand: Dictionary, issues: Array, path: Array, kind := "value") -> void:
@@ -250,12 +228,8 @@ static func _number_issues_in_condition(condition: Dictionary, issues: Array, pa
 		_number_issues(condition.get("rhs", {}), issues, path)
 
 
-# A directed target ("单体" / "目标+相邻") with the side left at 全体 only
-# ever resolves to the enemy field (see SkillTargetResolver), so the config
-# silently never targets allies — surface it as a compile error.
 static func _target_side_ineffective(target: String, side: String) -> bool:
-	return target in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES, SkillEngine.TARGET_PLAYER] \
-			and side == SkillEngine.TARGET_SIDE_ALL
+	return target == SkillEngine.TARGET_PLAYER and side == SkillEngine.TARGET_SIDE_ALL
 
 
 # Kept as a cleanup hook for an already-open editor; errors are shown on demand.

@@ -80,6 +80,6 @@ func _place_prop(prop: MeshInstance3D, center: Vector2, projected_width: float, 
 	(prop.mesh as PlaneMesh).size = Vector2(1.0, depth_scale) * left.distance_to(right)
 	prop.position = plane_point(center, PROP_HEIGHT)
 
-func _physics_process(delta: float) -> void:
-	super._physics_process(delta)
+func _process(delta: float) -> void:
+	super._process(delta)
 	camera.h_offset = sin(elapsed*0.17)*0.07

@@ -11,6 +11,10 @@ static func state_hash(game: RefCounted) -> String:
 
 
 static func hash_state(state: Dictionary) -> String:
+	state = state.duplicate()
+	# The timer does not change the outcome of a recorded, explicit action.
+	state.erase("effective_actions_this_turn")
+	state.erase("_action_clock_ms")
 	var context := HashingContext.new()
 	context.start(HashingContext.HASH_SHA256)
 	context.update(_canonical(state).to_utf8_buffer())
@@ -245,8 +249,11 @@ static func _auto_resolve_summon_skills(game: RefCounted, source_slot: int) -> v
 			continue
 		if card.skills_disabled():
 			continue
-		var target_player: int = int(game.current_player) if _summon_manual_target_side(skill) == SkillEngine.TARGET_SIDE_ALLY else 3 - int(game.current_player)
-		var target_slot := _first_legal_summon_target(game, skill, target_player)
+		var target_player: int = 3 - game.current_player
+		var target_slot := _first_legal_summon_target(game, skill, card, target_player)
+		if target_slot < 0:
+			target_player = game.current_player
+			target_slot = _first_legal_summon_target(game, skill, card, target_player)
 		card.skills_used.append(skill_index)
 		game.trigger_summon_skills(source_slot, target_slot, skill_index, target_player)
 		card = game.active_field().slots[source_slot]
@@ -254,40 +261,14 @@ static func _auto_resolve_summon_skills(game: RefCounted, source_slot: int) -> v
 			return
 
 
-static func _summon_manual_target_side(skill: Dictionary) -> String:
-	return _manual_target_side_in_effects(skill.get("effects", []))
-
-
-static func _manual_target_side_in_effects(effects: Variant) -> String:
-	if not effects is Array:
-		return SkillEngine.TARGET_SIDE_ENEMY
-	for value in effects:
-		if not value is Dictionary:
-			continue
-		var effect: Dictionary = value
-		if str(effect.get("target", "")) in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES]:
-			return str(effect.get("target_side", SkillEngine.TARGET_SIDE_ENEMY))
-		for branch in ["then_effects", "else_effects"]:
-			var nested: Variant = effect.get(branch, [])
-			if nested is Array and SpellRules._effects_need_target(nested):
-				return _manual_target_side_in_effects(nested)
-	return SkillEngine.TARGET_SIDE_ENEMY
-
-
-static func _first_legal_summon_target(game: RefCounted, skill: Dictionary, target_player: int) -> int:
+static func _first_legal_summon_target(game: RefCounted, skill: Dictionary, source: CardData, target_player: int) -> int:
 	if not SpellRules.needs_target(skill):
 		return -1
 	var field: BattleField = game.player_field if target_player == 1 else game.player2_field
-	var candidates: Array[int] = []
-	for slot in range(field.slots.size()):
-		var candidate: CardData = field.slots[slot]
-		if candidate != null and candidate.is_alive():
-			candidates.append(slot)
-	if target_player != game.current_player and field.has_any_taunt():
-		for slot in candidates:
-			if field.slots[slot].has_taunt():
-				return slot
-	return candidates[0] if not candidates.is_empty() else -1
+	for slot in field.slots.size():
+		if SpellRules.can_select_unit(skill, source, field, slot, target_player != game.current_player, game.turn_number):
+			return slot
+	return -1
 
 
 static func _canonical(value: Variant) -> String:

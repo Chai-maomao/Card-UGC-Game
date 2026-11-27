@@ -6,56 +6,55 @@ extends "res://BattleMainActions.gd"
 func _update_slot_highlights() -> void:
 	var my_ui: Array = _my_slots_ui()
 	var their_ui: Array = _their_slots_ui()
-	var targets: Array = []  # [slots_ui, index, hovered]
+	var targets := {}
 	var mouse := get_global_mouse_position()
-	if get_viewport().gui_is_dragging():
+	if _enemy_swap_is_pending():
+		var swap: Variant = get_viewport().gui_get_drag_data()
+		for i in their_ui.size():
+			var legal: bool = can_drop_enemy_swap(swap, i) if swap is Dictionary else not enemy_swap_drag_payload(i).is_empty()
+			if legal:
+				var slot: Control = their_ui[i]
+				targets[slot] = slot.get_global_rect().has_point(mouse)
+	elif get_viewport().gui_is_dragging():
 		# Field moves and minion summons can only land on our empty slots.
 		for i in range(my_ui.size()):
 			var s: Control = my_ui[i]
 			if s.get("current_card_data") == null:
-				targets.append([my_ui, i, Rect2(s.global_position, s.size).has_point(mouse)])
+				targets[s] = Rect2(s.global_position, s.size).has_point(mouse)
 	elif current_attacker_idx != -1 or summon_targeting or activate_targeting or cast_targeting or parasite_targeting:
-		var sides: Array = []
-		if parasite_targeting:
-			sides = [my_ui, their_ui]
-		elif _targeting_skill_wants_ally():
-			sides = [my_ui]
-		else:
-			sides = [their_ui]
-		for slots_ui in sides:
+		var choosing_skill := summon_targeting or activate_targeting or cast_targeting
+		for slots_ui in [my_ui, their_ui]:
+			if slots_ui == my_ui and not parasite_targeting and not choosing_skill:
+				continue
 			var player: int = _view_player() if slots_ui == my_ui else _opponent_player()
-			for i in range(slots_ui.size()):
+			var field := _field_for_player(player)
+			for i in slots_ui.size():
 				var s: Control = slots_ui[i]
-				var card: CardData = _field_for_player(player).slots[i]
-				if card == null:
+				var card: CardData = field.slots[i]
+				if card == null or not card.is_selectable():
 					continue
-				var legal := true
-				if slots_ui == their_ui and not parasite_targeting and _their_field().has_any_taunt():
-					legal = card.has_taunt()
-				if legal:
-					targets.append([slots_ui, i, Rect2(s.global_position, s.size).has_point(mouse)])
+				if choosing_skill and not _can_target_skill_slot(player, i):
+					continue
+				if current_attacker_idx >= 0 and (field.player_hp <= 0 or (_skill_target_is_hostile(player) and field.has_any_taunt() and not card.has_taunt())):
+					continue
+				targets[s] = s.get_global_rect().has_point(mouse)
 	for slots_ui in [my_ui, their_ui]:
-		for s in slots_ui:
-			if s.has_method("set_target_hint"):
-				s.set_target_hint(false)
+		for index in slots_ui.size():
+			var slot: Control = slots_ui[index]
+			var valid := targets.has(slot)
+			var hovered: bool = targets.get(slot, false)
+			if slot.has_method("set_target_hint"):
+				slot.set_target_hint(valid, hovered)
 			else:
-				s.set_highlighted(false)
-			if s.has_method("set_lethal_hint"):
-				s.set_lethal_hint(false)
-	for entry in targets:
-		var slot = entry[0][entry[1]]
-		if slot.has_method("set_target_hint"):
-			slot.set_target_hint(true, bool(entry[2]))
-		else:
-			slot.set_highlighted(bool(entry[2]))
-		var target_player: int = _view_player() if entry[0] == my_ui else _opponent_player()
-		var target_card: CardData = _field_for_player(target_player).slots[int(entry[1])]
-		if slot.has_method("set_lethal_hint") and _targeting_action_can_kill(target_card, target_player, int(entry[1])):
-			slot.set_lethal_hint(true)
+				slot.set_highlighted(hovered)
+			if slot.has_method("set_lethal_hint"):
+				var target_player: int = _view_player() if slots_ui == my_ui else _opponent_player()
+				var lethal := valid and _targeting_action_can_kill(_field_for_player(target_player).slots[index], target_player, index)
+				slot.set_lethal_hint(lethal)
 
 
 func _targeting_action_can_kill(target: CardData, target_player: int, target_slot: int) -> bool:
-	if target == null or parasite_targeting:
+	if target == null or not target.is_selectable() or parasite_targeting or target.get_dodge_chance() > 0:
 		return false
 	if current_attacker_idx >= 0:
 		var attacker: CardData = _my_field().slots[current_attacker_idx]

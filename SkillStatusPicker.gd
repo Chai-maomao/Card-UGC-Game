@@ -1,9 +1,10 @@
 extends RefCounted
 
 const GROUPS := {
-	"protection": [SkillRegistry.BUFF_ATK_BOOST, SkillRegistry.BUFF_THORNS, SkillRegistry.BUFF_DAMAGE_REDUCTION, SkillRegistry.BUFF_TAUNT, SkillRegistry.BUFF_IMMUNE_LETHAL],
+	"protection": [SkillRegistry.BUFF_ATK_BOOST, SkillRegistry.BUFF_THORNS, SkillRegistry.BUFF_DAMAGE_REDUCTION,
+		SkillRegistry.BUFF_DODGE, SkillRegistry.BUFF_UNTARGETABLE, SkillRegistry.BUFF_TAUNT, SkillRegistry.BUFF_IMMUNE_LETHAL],
 	"recovery": [SkillRegistry.BUFF_REGEN, SkillRegistry.BUFF_MANA_REFUND],
-	"control": [SkillRegistry.BUFF_SILENCE, SkillRegistry.BUFF_STUN, SkillRegistry.BUFF_MISFORTUNE, SkillRegistry.BUFF_POISON],
+	"control": [SkillRegistry.BUFF_SILENCE, SkillRegistry.BUFF_STUN, SkillRegistry.BUFF_MISFORTUNE, SkillRegistry.BUFF_LUCK, SkillRegistry.BUFF_POISON],
 }
 
 static func fill(picker: OptionButton, selected_buff: String) -> void:

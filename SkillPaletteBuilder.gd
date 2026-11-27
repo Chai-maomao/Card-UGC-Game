@@ -15,6 +15,7 @@ var editor: Control
 func build() -> void:
 	var palette_vbox: VBoxContainer = editor.palette_vbox
 	for child in palette_vbox.get_children():
+		palette_vbox.remove_child(child)
 		child.queue_free()
 
 	# Trigger hat blocks. (Spells are locked to on_cast and have no hats.)
@@ -140,8 +141,11 @@ func _add_section(palette_vbox: VBoxContainer, title_text: String, default_open:
 	header.text = "%s %s" % ["-" if default_open else "+", title_text]
 	header.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	header.add_theme_font_size_override("font_size", 13)
-	header.add_theme_color_override("font_color", Color(0.85, 0.9, 1.0))
-	header.add_theme_color_override("font_hover_color", Color(1.0, 0.94, 0.72))
+	header.add_theme_color_override("font_color", Color("3b465b") if UITheme.Tokens.light_mode else Color(0.85, 0.9, 1.0))
+	header.add_theme_color_override("font_hover_color", UITheme.COLOR_TEXT if UITheme.Tokens.light_mode else Color(1.0, 0.94, 0.72))
+	if UITheme.Tokens.light_mode:
+		header.add_theme_color_override("font_pressed_color", UITheme.COLOR_TEXT)
+		header.add_theme_color_override("font_focus_color", UITheme.COLOR_TEXT)
 	var st := StyleBoxFlat.new()
 	st.bg_color = Color(0.35, 0.42, 0.58, 0.20)
 	st.set_corner_radius_all(4)
@@ -309,7 +313,7 @@ func _apply_palette_style(btn: Button, color: Color, radius: int, _left_accent: 
 	btn.clip_text = true
 	btn.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	var normal := StyleBoxFlat.new()
-	normal.bg_color = UITheme.COLOR_PANEL_SOFT.lerp(color, 0.78)
+	normal.bg_color = UITheme.BLOCK_FACE_BASE.lerp(color, 0.78)
 	normal.border_color = color.darkened(0.28)
 	normal.set_border_width_all(1)
 	normal.set_corner_radius_all(radius)
@@ -321,13 +325,13 @@ func _apply_palette_style(btn: Button, color: Color, radius: int, _left_accent: 
 	btn.add_theme_stylebox_override("normal", normal)
 
 	var hover: StyleBoxFlat = normal.duplicate()
-	hover.bg_color = UITheme.COLOR_PANEL_SOFT.lerp(color, 0.87)
+	hover.bg_color = UITheme.BLOCK_FACE_BASE.lerp(color, 0.87)
 	hover.border_color = color.darkened(0.18)
 	hover.shadow_size = 0
 	btn.add_theme_stylebox_override("hover", hover)
 
 	var pressed: StyleBoxFlat = normal.duplicate()
-	pressed.bg_color = UITheme.COLOR_PANEL_DARK.lerp(color, 0.3)
+	pressed.bg_color = UITheme.BLOCK_PRESSED_BASE.lerp(color, 0.3)
 	pressed.border_color = color.lightened(0.08)
 	pressed.shadow_size = 0
 	pressed.content_margin_top = 6

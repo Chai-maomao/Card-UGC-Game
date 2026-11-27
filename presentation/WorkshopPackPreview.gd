@@ -3,12 +3,13 @@ extends ConfirmationDialog
 
 signal report_requested
 signal withdraw_requested
+const Descriptions = preload("res://presentation/SkillDescription.gd")
 var _cards: Array[CardData] = []
 var _details: VBoxContainer
 var _grid: GridContainer
 var _selection := ButtonGroup.new()
 
-func build(entry: Dictionary, package: Dictionary, own: bool) -> void:
+func build(entry: Dictionary, package: Dictionary, own: bool, local: bool = false) -> void:
 	UITheme.apply_dialog(self,true)
 	title = str(entry.get("title",_t("卡包")))
 	var box := VBoxContainer.new()
@@ -46,6 +47,7 @@ func build(entry: Dictionary, package: Dictionary, own: bool) -> void:
 	_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.add_child(_grid)
 	var divider := VSeparator.new()
+	UITheme.apply_separator(divider)
 	row.add_child(divider)
 	var info_scroll := ScrollContainer.new()
 	info_scroll.custom_minimum_size.x = 250
@@ -92,6 +94,7 @@ func build(entry: Dictionary, package: Dictionary, own: bool) -> void:
 		_show_card(_cards[0])
 	get_ok_button().text = _t("导入为新卡组")
 	get_cancel_button().text = _t("返回")
+	if local: return
 	var extra := add_button(_t("下架") if own else _t("举报"),true,"withdraw" if own else "report")
 	UITheme.apply_button(extra,"secondary")
 	custom_action.connect(func(action: String):
@@ -110,18 +113,16 @@ func _show_card(card: CardData) -> void:
 	_details.add_child(title)
 	if not card.is_spell():
 		var stats := Label.new()
-		stats.text = "HP %d    ATK %d" % [card.max_hp,card.atk]
+		stats.text = Locale.t("tabletop.stats", [card.effective_atk(), card.hp, card.max_hp])
 		UITheme.apply_label(stats)
 		_details.add_child(stats)
-	if not card.is_spell() and not card.is_parasite():
-		var attack := Label.new()
-		attack.text = _t("[普通攻击]\n对敌方造成 %d 点伤害") % card.atk
-		attack.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		UITheme.apply_label(attack)
-		_details.add_child(attack)
-	for index in range(card.skills.size()):
-		var label := preload("res://presentation/SkillDescription.gd").build(SkillTextFormatter.format_skill_tooltip(card.skills[index],index))
-		_details.add_child(label)
+	var abilities := Descriptions.build_read_only_abilities(card)
+	if abilities.get_child_count() == 0:
+		abilities.free()
+		return
+	var frame := Descriptions.make_abilities_frame()
+	frame.add_child(abilities)
+	_details.add_child(frame)
 
 
 func _t(text: String) -> String:

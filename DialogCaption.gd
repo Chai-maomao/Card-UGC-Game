@@ -43,5 +43,5 @@ func _draw() -> void:
 	var font_size := 19
 	while text.length()>1 and font.get_string_size(text,HORIZONTAL_ALIGNMENT_LEFT,-1,font_size).x>width:
 		text = text.left(text.length()-2)+"…"
-	draw_string(font, Vector2(inset, 18 + font.get_ascent(font_size)), text, HORIZONTAL_ALIGNMENT_LEFT, width, font_size, UITheme.Tokens.PAPER)
+	draw_string(font, Vector2(inset, 18 + font.get_ascent(font_size)), text, HORIZONTAL_ALIGNMENT_LEFT, width, font_size, UITheme.Tokens.TITLE)
 	draw_line(Vector2(inset, 52), Vector2(inset + width, 52), Color(UITheme.Tokens.TOOLTIP_BORDER, 0.62))

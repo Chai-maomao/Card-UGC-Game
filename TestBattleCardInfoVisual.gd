@@ -20,7 +20,7 @@ func _verify() -> void:
 	card.skills = [{"skill_name":"", "trigger":SkillEngine.TRIGGER_ON_ACTIVATE,"effects":[{"effect":SkillEngine.EFFECT_DAMAGE,"value":1,"target":SkillEngine.TARGET_SINGLE,"target_side":SkillEngine.TARGET_SIDE_ENEMY}]},{"skill_name":"   ","trigger":SkillEngine.TRIGGER_ON_ATTACK,"effects":[]}]
 	card.temp_hp = 4
 	card.apply_buff(SkillEngine.BUFF_POISON,2,3,1)
-	var parasite := CardData.new("共生芽",1,3,0,[{"skill_name":"汲取","trigger":"on_damaged","effects":[{"effect":"heal","target":"self","value":1}]}])
+	var parasite := CardData.new("共生芽",1,3,0,[{"skill_name":"汲取","trigger":"on_damaged","max_uses":1,"effects":[{"effect":"heal","target":"self","value":1}]}])
 	parasite.card_type = "parasite"
 	card.parasite_cards.append(parasite)
 	battle.update_entire_screen()
@@ -36,6 +36,10 @@ func _verify() -> void:
 		await get_tree().process_frame
 		assert(attack_button.get_node_or_null("KeywordText")==null,"普通攻击 stays an unmodified action name")
 		assert(abilities.is_ancestor_of(attack_button) and attack_button.get_parent()==battle.card_inspector.find_child("BasicAttackDescription",true,false).get_parent(),"attack button and description must share the abilities section")
+		var skill_scroll := abilities.find_children("*", "ScrollContainer", true, false).front() as ScrollContainer
+		var boundary := skill_scroll.get_parent().get_child(skill_scroll.get_index() - 1) as HSeparator
+		assert(boundary != null and is_equal_approx(boundary.get_global_rect().end.y, skill_scroll.get_global_rect().position.y),
+			"the fixed divider must touch the skill text's clipping edge")
 		assert(preload("res://presentation/SkillDescription.gd").plain(battle.card_inspector.find_child("BasicAttackDescription",true,false).get_parsed_text()).contains("%d点伤害"%card.effective_atk()))
 		assert(battle.card_inspector.find_child("TabletopSkill0",true,false).text == "技能1")
 		assert(preload("res://UIHoverHints.gd").hint_for(battle.card_inspector.find_child("TabletopSkill0",true,false)).is_empty(),"inspector must not repeat descriptions in a hover popup")
@@ -45,6 +49,8 @@ func _verify() -> void:
 		var text := ""
 		for label in panel.find_children("*","Label",true,false): text += label.text+"\n"
 		assert(text.contains("护盾") and text.contains("+4") and text.contains("3 回合"))
+		assert(text.contains("下个己方回合开始时清除") and text.contains("己方回合结束时失去 2 点生命"),
+			"status details must show the shield and poison timing")
 		var parasite_skills: Control = panel.find_child("ParasiteSkills",true,false)
 		assert(parasite_skills!=null and panel.is_ancestor_of(parasite_skills),"attached parasite abilities belong in the status panel")
 		assert(not abilities.is_ancestor_of(parasite_skills),"parasite skills must not become host action buttons")
@@ -52,6 +58,14 @@ func _verify() -> void:
 		assert(battle.get_viewport_rect().encloses(battle.card_inspector.get_global_rect()),"whole inspector must fit viewport")
 		await RenderingServer.frame_post_draw
 		get_viewport().get_texture().get_image().save_png("res://artifacts/ui-refinement-20261113/card-info-%d.png"%dimensions.x)
+		var skill_bar := skill_scroll.get_v_scroll_bar()
+		assert(skill_bar.visible, "the fixture must have enough skill text to scroll")
+		skill_scroll.scroll_vertical = roundi((skill_bar.max_value - skill_bar.page) * 0.5)
+		await get_tree().process_frame
+		assert(skill_scroll.scroll_vertical > 0 and is_equal_approx(boundary.get_global_rect().end.y, skill_scroll.get_global_rect().position.y),
+			"the divider must stay at the clipping edge while skills scroll")
+		await RenderingServer.frame_post_draw
+		get_viewport().get_texture().get_image().save_png("res://artifacts/ui-refinement-20261113/card-info-scrolled-%d.png"%dimensions.x)
 		battle.card_inspector.hide()
 	battle._show_card_details(parasite,false,-1,battle.player_side_ui.get_child(0),null,true)
 	await get_tree().process_frame
@@ -133,11 +147,24 @@ func _verify() -> void:
 	get_viewport().push_input(motion,true)
 	await get_tree().process_frame
 	assert(not shade.visible and field.current_mana==2,"leaving must clear forecast without spending resources")
+	source.current_card_data.skills = [{
+		"skill_name": "架盾", "trigger": SkillEngine.TRIGGER_ON_SUMMON,
+		"effects": [CardDatabase._fx(SkillEngine.TARGET_SELF, SkillEngine.EFFECT_ADD_BUFF, 50, SkillEngine.BUFF_DAMAGE_REDUCTION, 2)],
+	}]
+	source.set_card(source.current_card_data)
 	motion.position = _center(source)
 	get_viewport().push_input(motion,true)
-	await get_tree().create_timer(0.2).timeout
+	await get_tree().create_timer(0.6).timeout
+	var hints = UIMotion.get_node("HoverHints")
+	assert(not hints.panel.visible, "hovering a hand card must not open the skill preview")
 	await _click(_center(source))
 	assert(battle.card_inspector.visible and battle.game.player_hand.size()==count,"single-click must inspect without playing")
+	var skill_button := battle.card_inspector.find_child("TabletopSkill0",true,false) as Button
+	assert(skill_button != null,"clicking still shows the hand card's skills")
+	var skill_description := skill_button.get_parent().get_child(skill_button.get_index() + 1) as RichTextLabel
+	var displayed := preload("res://presentation/SkillDescription.gd").plain(skill_description.get_parsed_text())
+	assert(displayed.contains("减伤 50%，持续 2 回合"), "the rendered skill should state the reduction percentage directly")
+	await _check_keyword_hover(skill_description, hints)
 	await get_tree().process_frame
 	var raised_card: Polygon2D = battle._hand_focus_overlays[source.get_instance_id()].face
 	assert(raised_card.is_visible_in_tree() and raised_card.z_index < battle.card_inspector.z_index,
@@ -153,7 +180,9 @@ func _verify() -> void:
 	var inspect = dialog.card_uis[0].get_node("InspectCard")
 	await _click(_center(inspect))
 	await get_tree().create_timer(0.2).timeout
-	assert(battle.card_inspector.visible and battle.card_inspector.get_parent()==dialog,"pile cards use the same inspector above their collection")
+	var details := battle.card_inspector.get_parent() as CanvasLayer
+	assert(battle.card_inspector.visible and details != null and details.get_parent() == dialog and details.layer > dialog.layer,
+		"pile cards use the same inspector above their collection")
 	assert(battle.card_inspector.find_child("TabletopSkill0",true,false).disabled,"collection inspection must be read only")
 	assert(snapshot==BattleRepro.hash_state(battle.game.export_initial_state()),"inspection must not change battle state")
 	dialog.queue_free()
@@ -162,7 +191,6 @@ func _verify() -> void:
 	get_viewport().push_input(motion,true)
 	await get_tree().create_timer(0.65).timeout
 	assert(is_instance_valid(battle.end_turn_button._preview_panel) and battle.end_turn_button._preview_panel.is_visible_in_tree())
-	var hints = UIMotion.get_node("HoverHints")
 	assert(not hints.panel.is_visible_in_tree(),"End Turn must not open a second global tooltip")
 	await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png("res://artifacts/ui-refinement-20261113/end-turn-single.png")
@@ -194,6 +222,7 @@ func _verify() -> void:
 	await get_tree().create_timer(0.5).timeout
 	assert(not action_bar.get_node("ResourceRejection").visible and action_bar.position.is_equal_approx(rest_action) and mana_bar.position.is_equal_approx(rest_mana),"denial shake and border must restore cleanly")
 	battle.card_inspector.hide()
+	await _verify_skill_uses(card, field)
 	# A real empty-field settlement emits per-attacker hit feedback at the hero HUD.
 	for i in range(5): battle.game.player2_field.slots[i] = null
 	battle.game.turn_number = 2
@@ -217,6 +246,29 @@ func _verify() -> void:
 	get_viewport().get_texture().get_image().save_png("res://artifacts/ui-refinement-20261113/hero-hit-origin.png")
 	assert(battle.get_node("CanvasLayer").find_child("HeroStrikeTrail",true,false)!=null,"automatic hits must connect the attacking card to the hero HUD")
 	assert(battle.game.player2_field.player_hp==maxi(0,hp_before-int(result.total_damage)),"feedback must not apply damage a second time")
+
+
+func _check_keyword_hover(description: RichTextLabel, hints: CanvasLayer) -> void:
+	await RenderingServer.frame_post_draw
+	var hits: Array[Vector2] = []
+	for y in range(0, int(description.size.y), 2):
+		for x in range(int(description.size.x)):
+			if description.get_tooltip(Vector2(x, y)) == SkillHelp.KEYWORD_PREFIX + "reduction":
+				hits.append(Vector2(x, y))
+		if hits.size() > description.get_theme_font_size("normal_font_size") * 2:
+			break
+	assert(hits.size() > description.get_theme_font_size("normal_font_size") * 2,
+		"the reduction icon and its two Chinese characters must all accept hover")
+	for point in [hits[2], hits[-3]]:
+		var motion := InputEventMouseMotion.new()
+		motion.position = description.get_global_transform_with_canvas() * point
+		get_viewport().push_input(motion, true)
+		await get_tree().create_timer(0.55).timeout
+		assert(hints.panel.visible and hints.current_text == SkillHelp.keyword_description("reduction"),
+			"battle hover must show the same explanation on the icon and colored word")
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png("res://artifacts/battle-keyword-hover.png")
+	print("TEST_BATTLE_KEYWORD_HOVER_OK")
 	await get_tree().create_timer(0.2).timeout
 	await RenderingServer.frame_post_draw
 	get_viewport().get_texture().get_image().save_png("res://artifacts/ui-refinement-20261113/hero-hit-midpoint.png")
@@ -226,6 +278,45 @@ func _verify() -> void:
 	await get_tree().process_frame
 	print("TEST_BATTLE_CARD_INFO_VISUAL_OK click,numbered-skills,status-values,durations,plain-card,pile,read-only,viewport")
 	get_tree().quit(0)
+
+func _verify_skill_uses(card: CardData, field: BattleField) -> void:
+	field.actions_taken = 0
+	field.action_points = 10
+	field.current_mana = 5
+	card.skills[0] = {"skill_name":"固守", "trigger":"on_activate", "max_uses":2,
+		"effects":[{"effect":"shield", "target":"self", "value":1}]}
+	var slot: Control = battle.player_side_ui.get_child(0)
+	await _click(_center(slot))
+	var skill: Button = battle.card_inspector.find_child("TabletopSkill0",true,false)
+	var description := skill.get_parent().get_child(skill.get_index()+1) as RichTextLabel
+	assert(description.get_parsed_text().begins_with("[固守] 主动，剩余 2 次"))
+	var unlimited: Button = battle.card_inspector.find_child("TabletopSkill1",true,false)
+	var unlimited_description := unlimited.get_parent().get_child(unlimited.get_index()+1) as RichTextLabel
+	assert(not unlimited_description.get_parsed_text().contains("剩余"))
+	var parasite_description := battle.card_inspector.find_child("ParasiteSkills",true,false).get_child(0) as RichTextLabel
+	assert(parasite_description.get_parsed_text().contains("剩余 1 次"))
+	ParasiteRules.trigger_host_passives("on_damaged", card, battle.game.make_skill_context(0))
+	battle.update_entire_screen()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	assert(parasite_description.get_parsed_text().contains("次数已用完"), "an attached passive must refresh in the open inspector")
+	assert(not skill.disabled)
+	await _click(_center(skill))
+	await get_tree().create_timer(0.65).timeout
+	await _click(_center(slot))
+	skill = battle.card_inspector.find_child("TabletopSkill0",true,false)
+	description = skill.get_parent().get_child(skill.get_index()+1) as RichTextLabel
+	assert(description.get_parsed_text().begins_with("[固守] 主动，剩余 1 次"), "clicking the skill must visibly consume a use")
+	await RenderingServer.frame_post_draw
+	get_viewport().get_texture().get_image().save_png("res://artifacts/battle-skill-uses.png")
+	SkillEngine.trigger_single_skill(card, 0, battle.game.make_skill_context(0))
+	battle.update_entire_screen()
+	await get_tree().process_frame
+	await get_tree().process_frame
+	assert(description.get_parsed_text().begins_with("[固守] 主动，次数已用完"))
+	assert(skill.disabled)
+	battle.card_inspector.hide()
+	print("TEST_BATTLE_SKILL_USES_VISIBLE_OK")
 
 func _pixel_diff(a: Color,b: Color) -> float:
 	return Vector3(a.r-b.r,a.g-b.g,a.b-b.b).length()

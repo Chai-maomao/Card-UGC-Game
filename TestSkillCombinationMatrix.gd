@@ -34,6 +34,8 @@ func _fail(message: String) -> void:
 
 
 func _valid_target_sides(target_id: String, effect_id: String = "") -> Array:
+	if SkillTargetResolver.uses_selected_unit(target_id):
+		return [SkillEngine.TARGET_SIDE_ALL]
 	var forced := SkillRegistry.forced_target_side(effect_id)
 	if forced != "":
 		return [forced]
@@ -90,11 +92,10 @@ func _test_registry_cartesian_matrix() -> void:
 							matrix_cases += 1
 							if text == "" or text.contains("{") or text.contains("}"):
 								_fail("unrendered text: %s/%s/%s/%s => %s" % [effect_id, target_id, side_id, language, text])
-						if SkillRegistry.requires_live_target(effect_id) and target_id in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES]:
-							var should_name_side := Locale.term("target_side", side_id)
-							var text := _Formatter.format_effect_sentence(eff)
-							if should_name_side != "" and not text.contains(should_name_side):
-								_fail("directed target text omitted side: %s" % text)
+							if SkillRegistry.requires_live_target(effect_id) and target_id in [SkillEngine.TARGET_SINGLE, SkillEngine.TARGET_SIDES]:
+								var side_text: Dictionary = {"enemy": "敌方", "ally": "友方"} if language == "zh" else {"enemy": "enemy", "ally": "allied"}
+								if side_text.has(side_id) and not text.containsn(side_text[side_id]):
+									_fail("directed target text omitted side: %s" % text)
 	Locale.language = old_language
 
 
@@ -356,8 +357,8 @@ func _test_semantic_guards() -> void:
 		{"effect": SkillEngine.EFFECT_DAMAGE, "target": SkillEngine.TARGET_SINGLE, "target_side": SkillEngine.TARGET_SIDE_ENEMY, "value": 1},
 		{"effect": SkillEngine.EFFECT_HEAL, "target": SkillEngine.TARGET_SINGLE, "target_side": SkillEngine.TARGET_SIDE_ALLY, "value": 1},
 	]
-	if _ErrorChecker.collect_semantic_issues(mixed_sides, SkillEngine.TRIGGER_ON_ACTIVATE).is_empty():
-		_fail("one-click skill accepted conflicting directed sides")
+	if not _ErrorChecker.collect_semantic_issues(mixed_sides, SkillEngine.TRIGGER_ON_ACTIVATE).is_empty():
+		_fail("Legacy side fields must not conflict on a chosen target")
 	for card: CardData in CardDatabase.starter_library():
 		for skill in card.skills:
 			var issues := _ErrorChecker.collect_semantic_issues(SkillEngine.legacy_skill_effects(skill), str(skill.get("trigger", "")))
@@ -423,6 +424,8 @@ func _test_turn_one_rule_scope() -> void:
 	var spell := CardData.new("spell", 1, 0, 0, source.skills.duplicate(true))
 	spell.card_type = "spell"
 	spell.skills[0]["trigger"] = SkillEngine.TRIGGER_ON_CAST
-	if SpellRules.can_cast(spell, 10, 0, 1).get("ok", true):
+	game.active_hand().append(spell)
+	game.active_field().current_mana = 10
+	if game.cast_spell(game.active_hand().size() - 1, 0, 0, 2) or enemy.hp != 5:
 		_fail("enemy-targeting spell was not blocked on turn one")
 	matrix_cases += 2

@@ -26,6 +26,7 @@ const EN := {
 	"%s    %d 张卡牌":"%s    %d cards", "导入为新卡组":"Import as New Deck", "举报":"Report",
 	"加载失败，请重试":"Couldn't load packs. Please try again.", "登录失败，请重试":"Couldn't sign in. Please try again.",
 	"上传失败，请重试":"Upload failed. Please try again.", "下载失败，请重试":"Download failed. Please try again.",
+	"请求超时，请重试":"Request timed out. Please try again.", "下载超时，请重试":"Download timed out. Please try again.",
 	"操作失败，请重试":"Couldn't complete that action. Please try again.", "提交失败，请重试":"Couldn't submit. Please try again.",
 	"工坊暂时未开放":"Workshop isn't open yet", "工坊暂时不可用":"Workshop is unavailable",
 	"暂时无法连接工坊，请稍后再试":"Can't reach Workshop. Please try again later.", "正在处理，请稍候":"Please wait for the current action to finish",

@@ -12,13 +12,17 @@ static func format_buff_value(buff_id: String, value_text: String, is_zh: bool =
 		SkillEngine.BUFF_ATK_BOOST:
 			return "攻击 +%s" % value_text if is_zh else "+%s attack" % value_text
 		SkillEngine.BUFF_REGEN:
-			return "每回合恢复 %s" % value_text if is_zh else "restore %s HP each turn" % value_text
+			return "在效果来源一方的回合开始时回复 %s 点生命" % value_text if is_zh else "Restore %s HP at the start of the turn of the player who granted Regeneration" % value_text
 		SkillEngine.BUFF_MANA_REFUND:
-			return "回合结束返还 %s 圣水" % value_text if is_zh else "refund %s elixir at turn end" % value_text
+			return "施加者回合结束时获得 %s 点圣水" % value_text if is_zh else "The caster gains %s elixir at the end of their turn" % value_text
 		SkillEngine.BUFF_THORNS:
-			return "反伤 %s" % value_text if is_zh else "%s thorns damage" % value_text
+			return "受到普通攻击时反弹 %s 点伤害" % value_text if is_zh else "Reflect %s damage when hit by a basic attack" % value_text
 		SkillEngine.BUFF_DAMAGE_REDUCTION:
-			return "减伤 %s%%" % value_text if is_zh else "%s%% damage reduction" % value_text
+			return "受到的伤害减少 %s%%" % value_text if is_zh else "Take %s%% less damage" % value_text
+		SkillEngine.BUFF_DODGE:
+			return "有 %s%% 概率使指向自己的行动失效" % value_text if is_zh else "%s%% chance to dodge an action targeting this unit" % value_text
+		SkillEngine.BUFF_UNTARGETABLE:
+			return "无法被指向性行动选中" if is_zh else "Cannot be chosen by targeted actions"
 		SkillEngine.BUFF_TAUNT:
 			return "嘲讽" if is_zh else "taunt"
 		SkillEngine.BUFF_SILENCE:
@@ -26,10 +30,24 @@ static func format_buff_value(buff_id: String, value_text: String, is_zh: bool =
 		SkillEngine.BUFF_STUN:
 			return "眩晕" if is_zh else "stun"
 		SkillEngine.BUFF_MISFORTUNE:
-			return "技能发动概率 -%s%%" % value_text if is_zh else "-%s%% skill activation chance" % value_text
+			return "技能发动概率降低 %s 个百分点" % value_text if is_zh else "Skill activation chance drops by %s percentage points" % value_text
+		SkillEngine.BUFF_LUCK:
+			return "技能发动概率提高 %s 个百分点" % value_text if is_zh else "Skill activation chance rises by %s percentage points" % value_text
+		SkillEngine.BUFF_POISON:
+			return "己方回合结束时失去 %s 点生命" % value_text if is_zh else "Lose %s HP at the end of this unit's turn" % value_text
 		SkillEngine.BUFF_IMMUNE_LETHAL:
 			return "免疫致命伤害" if is_zh else "immune to lethal damage"
 	return value_text
+
+
+static func status_time_left(effect: Dictionary) -> String:
+	var buff: String = effect.get("buff_id", "")
+	if buff == SkillEngine.BUFF_IMMUNE_LETHAL:
+		return Locale.t("card.status_lethal_once")
+	var duration := int(effect.get("duration", 0))
+	if buff == SkillEngine.BUFF_STUN:
+		duration = maxi(1, duration)
+	return Locale.t("card.status_turn_left" if duration == 1 else "card.status_turns_left", [duration])
 
 
 static func format_effect_sentence(eff: Dictionary) -> String:
@@ -42,35 +60,44 @@ static func format_effect_sentence(eff: Dictionary) -> String:
 		return format_control_sentence(normalized)
 	var target: String = _format_target_name(normalized)
 	var vstr: String = describe_value(normalized)
-	var probability: int = int(normalized.get("probability", 100))
-	var is_zh := Locale.language == "zh"
 	var sentence := ""
 
-	# Sentence templates are registered per effect in Locale (effect_sentence),
-	# with {target}/{value}/{draw}/{keep}/{buff}/{buff_value}/{duration} placeholders.
-	var template_key := _sentence_template_key(normalized)
-	var template: String = _value_template(Locale.term("effect_sentence", template_key), normalized)
-	if template == template_key:
-		# No template registered — fallback: "{target} {effect_name} {value}".
-		sentence = "%s %s %s" % [target, Locale.term("effect", effect_id), vstr]
+	if effect_id == SkillEngine.EFFECT_ADD_BUFF:
+		sentence = _format_status_sentence(normalized, target, vstr)
 	else:
-		var buff_name: String = ""
-		var buff_value_text: String = ""
-		if effect_id == SkillEngine.EFFECT_ADD_BUFF:
-			buff_name = Locale.term("buff", normalized.get("buff_id", ""))
-			buff_value_text = format_buff_value(normalized.get("buff_id", ""), vstr, is_zh)
-		sentence = _render_sentence(template, normalized, target, vstr, buff_name, buff_value_text)
+		var template_key := _sentence_template_key(normalized)
+		var prose_key := template_key
+		if effect_id in [SkillEngine.EFFECT_GAIN_MANA, SkillEngine.EFFECT_GAIN_ATTACK,
+				SkillEngine.EFFECT_GAIN_MAX_HP, SkillEngine.EFFECT_CHANGE_COST] and vstr.is_valid_int():
+			prose_key += "_loss" if vstr.begins_with("-") else "_gain"
+		var template := Locale.term("effect_prose", prose_key)
+		if template != prose_key:
+			sentence = _render_sentence(template, normalized, target, vstr.trim_prefix("-") if prose_key.ends_with("_loss") else vstr)
+		else:
+			template = Locale.term("effect_sentence", template_key)
+			sentence = "%s %s %s" % [target, Locale.term("effect", effect_id), vstr] if template == template_key \
+				else _render_sentence(template, normalized, target, vstr)
+	return sentence + _sentence_suffix(normalized)
 
-	var rcount: int = int(eff.get("random_count", 0))
-	var random_zero_cost: bool = effect_id == SkillEngine.EFFECT_ZERO_COST \
-			and eff.get("target", SkillEngine.TARGET_SELF) == SkillEngine.TARGET_SINGLE
-	if rcount > 0 and SkillRegistry.supports_random_count(effect_id) and not random_zero_cost:
-		sentence += "，%s" % Locale.t("skill.max_targets", [rcount]) if is_zh else ", %s" % Locale.t("skill.max_targets", [rcount])
-	var condition_text := format_condition_sentence(normalized)
-	if condition_text != "":
-		sentence += "，%s" % condition_text if is_zh else ", %s" % condition_text
-	if probability < 100:
-		sentence += " %s" % Locale.t("skill.chance", [probability])
+
+static func _format_status_sentence(effect: Dictionary, target: String, value: String) -> String:
+	var buff_id: String = effect.get("buff_id", "")
+	var name := Locale.term("buff", buff_id)
+	var template := Locale.term("status_sentence", buff_id)
+	if template == buff_id:
+		template = _value_template(Locale.term("effect_sentence", "add_buff"), effect)
+		return _render_sentence(template, effect, target, value, name, format_buff_value(buff_id, value))
+	if Locale.language == "zh" and effect.get("target") == SkillEngine.TARGET_SELF:
+		target = ""
+	if value.is_empty() and SkillRegistry.buff_uses_value(buff_id):
+		template = Locale.term("status_sentence", "name_only")
+	var sentence := _render_sentence(template, effect, target, value, name)
+	if buff_id != SkillEngine.BUFF_IMMUNE_LETHAL:
+		var duration := int(effect.get("duration", 1))
+		if buff_id == SkillEngine.BUFF_STUN:
+			duration = maxi(1, duration)
+		var timing := "duration_one" if duration == 1 else "duration"
+		sentence += Locale.term("status_sentence", timing).replace("{duration}", str(duration))
 	return sentence
 
 
@@ -84,13 +111,16 @@ static func format_control_sentence(eff: Dictionary) -> String:
 		SkillEngine.EFFECT_IF:
 			return Locale.t("skill_editor.if_sentence") % [format_condition_sentence(eff), _format_sub_effects(eff.get("then_effects", []))]
 		SkillEngine.EFFECT_IF_ELSE:
+			var otherwise := _format_sub_effects(eff.get("else_effects", []))
+			if otherwise.is_empty():
+				return Locale.t("skill_editor.if_sentence") % [format_condition_sentence(eff), _format_sub_effects(eff.get("then_effects", []))]
 			return Locale.t("skill_editor.if_else_sentence") \
-					% [format_condition_sentence(eff), _format_sub_effects(eff.get("then_effects", [])), _format_sub_effects(eff.get("else_effects", []))]
+					% [format_condition_sentence(eff), _format_sub_effects(eff.get("then_effects", [])), otherwise]
 		SkillEngine.EFFECT_REPEAT:
 			return Locale.t("skill_editor.repeat_sentence") \
 					% [describe_repeat_count(eff), _format_sub_effects(eff.get("then_effects", []))]
 		SkillEngine.EFFECT_STOP:
-			return Locale.t("skill_editor.stop_word")
+			return Locale.t("skill_editor.stop_sentence")
 	return ""
 
 
@@ -132,11 +162,19 @@ static func _sentence_template_key(eff: Dictionary) -> String:
 	return effect_id
 
 
-static func _render_sentence(template: String, eff: Dictionary, target: String, vstr: String, buff_name: String, buff_value_text: String) -> String:
+static func _render_sentence(template: String, eff: Dictionary, target: String, vstr: String, buff_name: String = "", buff_value_text: String = "") -> String:
 	var s := template
+	var count := int(eff.get("random_count", 0))
+	# These placeholders describe pile inspection, not battlefield targets.
+	if s.contains("{look}"):
+		var look := str(int(vstr) * 2) if vstr.is_valid_int() else "(%s) × 2" % vstr
+		s = s.replace("{look}", look)
+	if s.contains("card(s)"):
+		var single := count == 1 if s.contains("{draw}") and not s.contains("{keep}") else vstr == "1"
+		s = s.replace("card(s)", "card" if single else "cards")
 	s = s.replace("{target}", target)
 	s = s.replace("{value}", vstr)
-	s = s.replace("{draw}", str(int(eff.get("random_count", 0))))
+	s = s.replace("{draw}", str(count))
 	s = s.replace("{keep}", vstr)
 	s = s.replace("{buff}", buff_name)
 	s = s.replace("{buff_value}", buff_value_text)
@@ -156,8 +194,6 @@ static func _render_sentence(template: String, eff: Dictionary, target: String, 
 # controls. "value"/"keep"/"buff_value" all edit the "value" field; "draw"
 # edits "random_count".
 static func _value_template(template: String, effect: Dictionary) -> String:
-	if effect.get("effect") == SkillEngine.EFFECT_ADD_BUFF and not SkillRegistry.buff_uses_duration(str(effect.get("buff_id", ""))):
-		template = template.replace("，持续 {duration} 回合", "，至下个己方回合结束").replace(" for {duration} turn(s)", " until the end of the target's next turn")
 	if effect.get("effect") == SkillEngine.EFFECT_ADD_BUFF and not SkillRegistry.effect_uses_value(effect):
 		return template.replace("（{buff_value}）", "").replace(" ({buff_value})", "").replace("({buff_value})", "")
 	return template
@@ -195,7 +231,9 @@ static func effect_sentence_tokens(eff: Dictionary) -> Array:
 			last_end = m.get_end()
 		if last_end < template.length():
 			tokens.append({"type": "text", "text": template.substr(last_end)})
-	_append_sentence_suffix(tokens, normalized)
+	var suffix := _sentence_suffix(normalized)
+	if not suffix.is_empty():
+		tokens.append({"type": "text", "text": suffix})
 	return tokens
 
 
@@ -228,19 +266,25 @@ static func _value_token(eff: Dictionary) -> Dictionary:
 	return {"type": "value"}
 
 
-static func _append_sentence_suffix(tokens: Array, eff: Dictionary) -> void:
-	var is_zh := Locale.language == "zh"
-	var rcount: int = int(eff.get("random_count", 0))
-	var random_zero_cost: bool = str(eff.get("effect", "")) == SkillEngine.EFFECT_ZERO_COST \
-			and eff.get("target", SkillEngine.TARGET_SELF) == SkillEngine.TARGET_SINGLE
-	if rcount > 0 and SkillRegistry.supports_random_count(str(eff.get("effect", ""))) and not random_zero_cost:
-		tokens.append({"type": "text", "text": ("，%s" if is_zh else ", %s") % Locale.t("skill.max_targets", [rcount])})
+static func _sentence_suffix(eff: Dictionary) -> String:
+	var suffix := ""
+	var separator := "，" if Locale.language == "zh" else ", "
+	if _has_random_battlefield_targets(eff):
+		suffix += separator + Locale.t("skill.random_targets", [int(eff.random_count)])
 	var condition_text := format_condition_sentence(eff)
 	if condition_text != "":
-		tokens.append({"type": "text", "text": ("，%s" if is_zh else ", %s") % condition_text})
+		var condition_prefix := "若%s" if Locale.language == "zh" else "if %s"
+		suffix += separator + condition_prefix % condition_text
 	var probability: int = int(eff.get("probability", 100))
 	if probability < 100:
-		tokens.append({"type": "text", "text": " %s" % Locale.t("skill.chance", [probability])})
+		suffix += " " + Locale.t("skill.chance", [probability])
+	return suffix
+
+
+static func _has_random_battlefield_targets(effect: Dictionary) -> bool:
+	return (int(effect.get("random_count", 0)) > 0 and SkillRegistry.requires_live_target(str(effect.get("effect", "")))
+		and effect.get("target") in [SkillEngine.TARGET_ALL, SkillEngine.TARGET_SIDES, SkillEngine.TARGET_SELF_SIDES,
+			SkillEngine.TARGET_MALE, SkillEngine.TARGET_FEMALE, SkillEngine.TARGET_NONHUMAN])
 
 
 static func format_condition_sentence(eff: Dictionary) -> String:
@@ -252,16 +296,15 @@ static func format_condition_sentence(eff: Dictionary) -> String:
 	var condition_type: String = cond.get("condition_type", SkillEngine.CONDITION_NONE)
 	if condition_type == "" or condition_type == SkillEngine.CONDITION_NONE:
 		return ""
-	var is_zh := Locale.language == "zh"
 	if condition_type == SkillEngine.CONDITION_TARGET_HAS_BUFF:
 		var buff_name := Locale.term("buff", cond.get("condition_buff_id", ""))
-		return "若目标拥有%s" % buff_name if is_zh else "if the target has %s" % buff_name
+		return "目标拥有%s" % buff_name if Locale.language == "zh" else "the target has %s" % buff_name
 	var cname := Locale.term("condition", condition_type)
 	var opname := Locale.term("condition_op", cond.get("condition_op", SkillEngine.CONDITION_OP_GTE))
 	var value_text := str(int(cond.get("condition_value", 0)))
 	if condition_type in [SkillEngine.CONDITION_SOURCE_HP_PCT, SkillEngine.CONDITION_TARGET_HP_PCT]:
 		value_text += "%"
-	return "若%s %s %s" % [cname, opname, value_text] if is_zh else "if %s %s %s" % [cname, opname, value_text]
+	return "%s %s %s" % [cname, opname, value_text]
 
 
 # Renders a Scratch-style boolean reporter: operands may be fixed numbers or
@@ -325,16 +368,38 @@ static func skill_display_name(skill: Dictionary, index: int = -1) -> String:
 	return value if not value.is_empty() else (Locale.t("mycards.skill_fallback", [index+1]) if index >= 0 else Locale.t("editor.unnamed"))
 
 
-static func format_skill_tooltip(skill: Dictionary, index: int = -1) -> String:
+static func remaining_skill_uses(card: CardData, skill: Dictionary, index: int) -> int:
+	var limit := int(skill.get("max_uses", 0))
+	return maxi(0, limit - int(card.skills_used_count.get(index, 0))) if limit > 0 else -1
+
+
+static func format_remaining_skill_uses(remaining: int) -> String:
+	if remaining < 0:
+		return ""
+	if remaining == 0:
+		return Locale.t("card.skill_uses_spent")
+	return Locale.t("card.skill_use_left" if remaining == 1 else "card.skill_uses_left", [remaining])
+
+
+static func format_skill_tooltip(skill: Dictionary, index: int = -1, remaining_uses: int = -1) -> String:
 	if skill.is_empty():
 		return ""
 
 	var sname := skill_display_name(skill, index)
-	var trig: String = Locale.term("trigger", skill.get("trigger", ""))
-	var result: String = "[%s] %s\n" % [sname, trig]
+	var trigger: String = skill.get("trigger", "")
+	var trig := Locale.term("trigger", trigger)
+	if trigger == SkillEngine.TRIGGER_ON_BOARD_CHANGED:
+		trig = Locale.t("skill_editor.board_change_trigger", [Locale.term("board_side", str(skill.get("trigger_side", SkillEngine.TARGET_SIDE_ALL)))])
+	var heading := "[%s] %s" % [sname, trig]
+	if remaining_uses >= 0:
+		heading += ("，" if Locale.language == "zh" else ", ") + format_remaining_skill_uses(remaining_uses)
+	var result := heading + "\n"
 	var skill_probability: int = int(skill.get("probability", 100))
 	if skill_probability < 100:
 		result += "  %s\n" % Locale.t("skill.chance", [skill_probability])
+	var max_uses := int(skill.get("max_uses", 0))
+	if max_uses > 0 and remaining_uses < 0:
+		result += "  %s\n" % Locale.t("skill_editor.limited_uses", [max_uses])
 
 	var effects: Array = SkillEngine.legacy_skill_effects(skill)
 
@@ -355,6 +420,10 @@ static func _format_target_name(eff: Dictionary) -> String:
 	if target_id == "":
 		return Locale.t("skill_editor.target_unset")
 	var side_id: String = normalized.get("target_side", _TargetResolver.default_target_side(target_id))
+	var description_key := "random" if target_id == SkillEngine.TARGET_ALL and _has_random_battlefield_targets(normalized) else target_id
+	var description := Locale.term("target_description", description_key)
+	if description != description_key:
+		return description.replace("{side}", Locale.term("target_description_side", side_id))
 	var target_name := Locale.term("target", target_id)
 	var side_name := Locale.term("target_side", side_id)
 	if side_id == SkillEngine.TARGET_SIDE_ALL:

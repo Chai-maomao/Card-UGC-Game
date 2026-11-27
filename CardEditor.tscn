@@ -53,7 +53,7 @@ theme_override_font_sizes/font_size = 22
 [node name="Separator0" type="HSeparator" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9360002]
 layout_mode = 2
 
-[node name="TemplateButton" type="Button" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9600001]
+[node name="TemplateButton" type="MenuButton" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9600001]
 layout_mode = 2
 text = "Use Template"
 
@@ -185,8 +185,6 @@ layout_mode = 2
 size_flags_horizontal = 3
 text = "(empty)"
 autowrap_mode = 3
-max_lines_visible = 3
-text_overrun_behavior = 3
 
 [node name="Skill1TalentRow" type="HBoxContainer" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer"]
 layout_mode = 2
@@ -207,8 +205,6 @@ layout_mode = 2
 size_flags_horizontal = 3
 text = "Talent: (empty)"
 autowrap_mode = 3
-max_lines_visible = 2
-text_overrun_behavior = 3
 
 [node name="Separator2" type="HSeparator" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9360020]
 layout_mode = 2
@@ -222,8 +218,6 @@ layout_mode = 2
 size_flags_horizontal = 3
 text = "(empty)"
 autowrap_mode = 3
-max_lines_visible = 3
-text_overrun_behavior = 3
 
 [node name="EditSkill2Button" type="Button" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9360023]
 layout_mode = 2
@@ -238,8 +232,6 @@ layout_mode = 2
 size_flags_horizontal = 3
 text = "(empty)"
 autowrap_mode = 3
-max_lines_visible = 3
-text_overrun_behavior = 3
 
 [node name="EditSkill3Button" type="Button" parent="Panel/MarginContainer/ScrollContainer/VBoxContainer" unique_id=9360026]
 layout_mode = 2
@@ -295,7 +287,6 @@ filters = PackedStringArray("*.png ; PNG Image", "*.jpg ; JPEG Image", "*.jpeg ;
 [connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/Skill1TalentRow/EditTalentButton" to="." method="_on_edit_talent_pressed"]
 [connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/EditSkill2Button" to="." method="_on_edit_skill2_pressed"]
 [connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/EditSkill3Button" to="." method="_on_edit_skill3_pressed"]
-[connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/TemplateButton" to="." method="_on_template_pressed"]
 [connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/AnalysisActionsRow/SimulationButton" to="." method="_on_balance_simulation_pressed"]
 [connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/AnalysisActionsRow/VersionHistoryButton" to="." method="_on_version_history_pressed"]
 [connection signal="pressed" from="Panel/MarginContainer/ScrollContainer/VBoxContainer/SaveButton" to="." method="_on_save_button_pressed"]

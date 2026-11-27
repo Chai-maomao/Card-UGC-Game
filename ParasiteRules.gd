@@ -16,7 +16,7 @@ static func is_parasite(card: CardData) -> bool:
 static func can_attach(card: CardData, target: CardData, current_mana: int) -> Dictionary:
 	if not is_parasite(card):
 		return {"ok": false, "reason": REASON_NOT_PARASITE}
-	if target == null or not target.is_alive():
+	if target == null or not target.is_selectable():
 		return {"ok": false, "reason": REASON_NO_TARGET}
 	if card.cost > current_mana:
 		return {"ok": false, "reason": REASON_NO_MANA}

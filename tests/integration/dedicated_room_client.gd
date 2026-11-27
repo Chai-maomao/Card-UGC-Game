@@ -2172,8 +2172,9 @@ func _finish_with_lethal_skill(battle: Node, caster: int) -> bool:
 	if battle.get_node_or_null(result_path) != null or battle.is_my_turn() or hp_bar.value <= 0:
 		_fail("the lethal skill must block input and present the health change before opening results"); return false
 	await get_tree().process_frame
+	battle._show_abandon_confirmation()
 	if (battle.turn_wait_hint.visible or battle.turn_label.text != Locale.t("battle.finishing_match")
-			or not battle.abandon_battle_button.disabled):
+			or battle.has_node("AbandonBattleConfirmation")):
 		_fail("settled lethal damage must replace pending command and turn hints with match completion"); return false
 	if not screenshot_path.is_empty():
 		await get_tree().create_timer(0.18).timeout

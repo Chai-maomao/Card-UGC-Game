@@ -28,6 +28,7 @@ var _sort_direction: Button
 var _selection_count: Label
 var _selection_actions: Array[Button] = []
 var _collection_tools: VBoxContainer
+var _content_margin: MarginContainer
 var action_bar: HFlowContainer
 var mode: String = "decks"
 var selected_deck_id: String = ""
@@ -45,16 +46,25 @@ func _ready():
 	get_viewport().size_changed.connect(_on_viewport_size_changed)
 	scroll_container.follow_focus = true
 	_apply_theme()
+	var collection_list := VBoxContainer.new()
+	collection_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	collection_list.add_theme_constant_override("separation", 0)
+	root_box.add_child(collection_list)
 	_collection_tools = VBoxContainer.new()
 	_collection_tools.add_theme_constant_override("separation", UITheme.Tokens.SPACING[2])
-	root_box.add_child(_collection_tools)
-	root_box.move_child(_collection_tools, 1)
+	collection_list.add_child(_collection_tools)
+	scroll_container.reparent(collection_list, false)
+	_content_margin = MarginContainer.new()
+	scroll_container.add_child(_content_margin)
+	card_grid.reparent(_content_margin, false)
 	action_bar = HFlowContainer.new()
 	action_bar.name = "CollectionActions"
 	action_bar.add_theme_constant_override("h_separation", 10)
 	action_bar.add_theme_constant_override("v_separation", 8)
 	_collection_tools.add_child(action_bar)
-	_collection_tools.add_child(UITheme.separator())
+	var divider := UITheme.separator()
+	divider.add_theme_constant_override("separation", 1)
+	_collection_tools.add_child(divider)
 	_ensure_deck_state()
 	var deck_id := PlayerData.return_to_deck_id
 	PlayerData.return_to_deck_id = ""
@@ -64,7 +74,6 @@ func _ready():
 		_show_deck_cards(deck_id)
 		if restore_state.begins_with("collection_create:"):
 			_create_card_button.grab_focus()
-			_on_create_new_pressed.call_deferred(restore_state.get_slice(":", 1))
 	else:
 		var focus_deck_id := restore_state.trim_prefix(DECK_MANAGER_ROUTE) if restore_state.begins_with(DECK_MANAGER_ROUTE) else ""
 		_show_deck_manager(focus_deck_id)
@@ -158,19 +167,17 @@ func _show_deck_cards(deck_id: String) -> void:
 	_clear_grid()
 	var deck := PlayerData.get_deck(deck_id)
 	_set_title(Locale.t("deck.cards_title") % PlayerData.deck_display_name(deck))
-	_add_deck_files_menu()
+	_add_deck_file_buttons()
 	_create_card_button = _add_top_button(Locale.t("mycards.create_new"), _on_create_new_pressed, "primary")
 	_create_card_button.reparent(top_bar, false)
 	_selection_count = Label.new()
 	_selection_count.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	UITheme.apply_label(_selection_count, true)
 	action_bar.add_child(_selection_count)
-	_selection_actions = [
-		_add_top_button(Locale.t("share.export_selected"), _on_export_selected_pressed, "utility"),
-		_add_top_button(Locale.t("mycards.delete_selected"), _on_delete_selected_pressed, "utility"),
-		_add_top_button(Locale.t("deck.copy_to"), _on_copy_selected_pressed, "utility"),
-	]
-	_selection_actions[2].set_meta("keyword_literal", true)
+	_selection_actions.append(_add_top_button(Locale.t("mycards.delete_selected"), _on_delete_selected_pressed, "utility"))
+	var copy_button := _add_top_button(Locale.t("deck.copy_to"), _on_copy_selected_pressed, "utility")
+	copy_button.set_meta("keyword_literal", true)
+	_selection_actions.append(copy_button)
 	for button in _selection_actions:
 		button.custom_minimum_size.x = 0
 		button.add_theme_color_override("font_disabled_color", UITheme.COLOR_TEXT_MUTED.darkened(0.20))
@@ -186,22 +193,14 @@ func _show_deck_cards(deck_id: String) -> void:
 		UITheme.animate_list_enter(card_grid, UITheme.Tokens.SPACING[4] * _ui_scale())
 
 
-func _add_deck_files_menu() -> void:
-	var button := MenuButton.new()
-	button.text = Locale.t("share.deck_files")
-	button.custom_minimum_size.y = 40 * _ui_scale()
-	button.icon = button.get_theme_icon("arrow", "OptionButton")
-	button.icon_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	UITheme.apply_button(button, "utility")
-	top_bar.add_child(button)
-	var file_menu := button.get_popup()
-	file_menu.add_item(Locale.t("share.import_append"), 0)
-	file_menu.add_item(Locale.t("share.export_deck"), 1)
-	file_menu.id_pressed.connect(func(id: int):
-		if id == 0:
-			_on_import_append_pressed()
-		else:
-			_on_export_current_deck_pressed())
+func _add_deck_file_buttons() -> void:
+	var import_button := _add_top_button(Locale.t("share.import_append"), _on_import_append_pressed, "utility")
+	var export_deck := _add_top_button(Locale.t("share.export_deck"), _on_export_current_deck_pressed, "utility")
+	var export_selected := _add_top_button(Locale.t("share.export_selected"), _on_export_selected_pressed, "utility")
+	for button in [import_button, export_deck, export_selected]:
+		button.custom_minimum_size.x = 0
+		button.reparent(top_bar, false)
+	_selection_actions.append(export_selected)
 
 
 func _refresh_selection_actions() -> void:
@@ -279,10 +278,11 @@ func _add_deck_slot(deck: Dictionary, restore_focus := false) -> void:
 	content.add_theme_constant_override("separation", 16)
 	slot.add_child(content)
 	var cover := TextureRect.new()
+	cover.name = "DeckCover"
 	cover.custom_minimum_size = Vector2(96, 96) * s
 	cover.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	cover.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
-	cover.texture = CardArtwork.deck_cover(deck.get("cards", []))
+	cover.texture = CardArtwork.deck_cover(deck)
 	cover.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	if cover.texture != null:
 		content.add_child(cover)
@@ -312,7 +312,7 @@ func _add_deck_slot(deck: Dictionary, restore_focus := false) -> void:
 	box.add_child(row)
 	var open := _add_row_button(row, Locale.t("deck.open"), _open_deck.bind(deck.get("id", "")))
 	open.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
-	UITheme.apply_button(open, "secondary", false)
+	UITheme.apply_button(open, "outlined", false)
 	if restore_focus:
 		open.grab_focus.call_deferred()
 	row.add_spacer(false)
@@ -324,25 +324,55 @@ func _add_deck_slot(deck: Dictionary, restore_focus := false) -> void:
 	row.add_child(more)
 	var menu := more.get_popup()
 	menu.add_item(Locale.t("deck.rename"), 0)
+	menu.add_item(Locale.t("deck.set_cover"), 3)
+	menu.set_item_disabled(menu.get_item_index(3), deck.get("cards", []).is_empty())
 	menu.add_item(Locale.t("share.export_deck"), 1)
 	menu.add_separator()
 	menu.add_item(Locale.t("mycards.delete"), 2)
+	var deck_id: String = deck.get("id", "")
 	menu.id_pressed.connect(func(id: int):
+		var current := PlayerData.get_deck(deck_id)
+		if current.is_empty(): return
 		match id:
 			0:
-				_show_rename_deck_popup(deck)
+				_show_rename_deck_popup(current)
 			1:
-				_export_deck(deck)
+				_export_deck(current)
 			2:
-				_delete_deck(deck.get("id", ""))
+				_delete_deck(deck_id)
+			3:
+				_choose_deck_cover(current, cover)
 	)
 
+func _choose_deck_cover(deck: Dictionary, preview: TextureRect) -> void:
+	var deck_id: String = deck["id"]
+	var dialog := preload("res://CardCollectionDialog.gd").new()
+	dialog.cards = deck.get("cards", []).duplicate()
+	dialog.heading = Locale.t("deck.set_cover")
+	dialog.pick_limit = 1
+	dialog.allow_empty_selection = true
+	dialog.replace_single_selection = true
+	dialog.empty_selection_text = Locale.t("deck.auto_cover")
+	dialog.on_confirm = func(chosen: Array):
+		var cover_id: String = "" if chosen.is_empty() else chosen[0].instance_id
+		if not PlayerData.set_deck_cover(deck_id, cover_id):
+			_show_message(Locale.t("deck.cover_save_failed"))
+		elif is_instance_valid(preview):
+			preview.texture = CardArtwork.deck_cover(PlayerData.get_deck(deck_id))
+	add_child(dialog)
+	var current: String = deck.get("cover_instance_id", "")
+	if current.is_empty(): return
+	var index := PlayerData.find_deck_card_index(deck_id, current)
+	if index >= 0:
+		dialog._select(true, index)
+		dialog.scroll.ensure_control_visible.call_deferred(dialog.card_uis[index])
 
-func _add_row_button(row: HBoxContainer, text: String, callback: Callable) -> Button:
+
+func _add_row_button(row: HBoxContainer, text: String, callback: Callable, variant: String = "utility") -> Button:
 	var btn := Button.new()
 	btn.text = text
 	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	UITheme.apply_button(btn, "utility")
+	UITheme.apply_button(btn, variant)
 	btn.pressed.connect(callback)
 	row.add_child(btn)
 	return btn
@@ -388,10 +418,12 @@ func _apply_responsive_layout() -> void:
 	panel.offset_bottom = 0
 	var inset := maxi(16, int(24 * s))
 	root_box.offset_left = inset
-	root_box.offset_top = inset
+	root_box.offset_top = 0
 	root_box.offset_right = -inset
 	root_box.offset_bottom = -maxi(10, roundi(12 * s))
-	root_box.add_theme_constant_override("separation", max(12, int(20 * s)))
+	var section_gap := maxi(12, int(20 * s))
+	root_box.add_theme_constant_override("separation", section_gap)
+	_content_margin.add_theme_constant_override("margin_top", section_gap if mode == "cards" else 0)
 	card_grid.add_theme_constant_override("h_separation", int(24 * s))
 	card_grid.add_theme_constant_override("v_separation", int(24 * s))
 	card_grid.columns = maxi(1, int((get_viewport_rect().size.x - margin * 2 - inset * 2) / ((160 if mode == "cards" else 464) * s)))
@@ -440,22 +472,24 @@ func _delete_deck(deck_id: String) -> void:
 	)
 
 
-func _on_create_new_pressed(restore_focus := "") -> void:
+func _on_create_new_pressed() -> void:
 	var page := preload("res://SelectionMenu.gd").new()
 	page.name = "CollectionCardType"
 	page.layer = 110
 	page.heading = Locale.t("editor.create_new_card")
-	page.backdrop = UITheme.COLOR_BG
+	page.backdrop = Color(Color.BLACK, 0.68)
+	page.blur_backdrop = true
+	_create_card_button.grab_focus()
 	add_child(page)
-	page.add_choice(Locale.t("editor.create_minion"), _create_card_in_deck.bind(PlayerData.init_card_draft, "editor.create_minion"),
+	var first_choice := page.add_choice(Locale.t("editor.create_minion"), _create_card_in_deck.bind(PlayerData.init_card_draft, "editor.create_minion"),
 		SkillHelp.description("card_type", "minion"))
 	page.add_choice(Locale.t("editor.create_spell"), _create_card_in_deck.bind(PlayerData.init_spell_draft, "editor.create_spell"),
 		SkillHelp.description("card_type", "spell"))
 	page.add_choice(Locale.t("editor.create_parasite"), _create_card_in_deck.bind(PlayerData.init_parasite_draft, "editor.create_parasite"),
 		SkillHelp.description("card_type", "parasite"))
+	UIMotion.register_popup(page, first_choice)
 	page.finish()
-	if not restore_focus.is_empty():
-		page.focus_choice(Locale.t(restore_focus))
+	UITheme.fade_enter(page.surface, 0.16)
 
 
 func _create_card_in_deck(initialize: Callable, entry: String) -> void:
@@ -470,11 +504,18 @@ func _create_card_in_deck(initialize: Callable, entry: String) -> void:
 
 
 func _on_edit_card(instance_id: String):
+	if UIMotion.is_transitioning():
+		return
+	var index := PlayerData.find_deck_card_index(selected_deck_id, instance_id)
+	if index < 0:
+		return
+	var card: CardData = PlayerData.get_cards_for_deck(selected_deck_id)[index]
 	PlayerData.editing_deck_id = selected_deck_id
 	PlayerData.editing_instance_id = instance_id
-	PlayerData.editing_index = PlayerData.find_deck_card_index(selected_deck_id, instance_id)
+	PlayerData.editing_index = index
 	PlayerData.card_editor_return_scene = "res://MyCards.tscn"
 	PlayerData.return_to_deck_id = selected_deck_id
+	PlayerData.load_card_to_draft(card)
 	UIMotion.change_scene("res://CardEditor.tscn")
 
 
@@ -589,11 +630,57 @@ func _show_copy_to_decks_popup() -> void:
 	var row := HBoxContainer.new()
 	box.add_child(row)
 	_add_row_button(row, Locale.t("battle.confirm"), func():
-		var result := PlayerData.copy_cards_between_decks(selected_deck_id, selected_instance_ids.keys(), target_ids.keys())
-		_show_message(Locale.t("deck.copy_done") % [result.get("added", 0), result.get("skipped", 0)])
 		layer.queue_free()
+		var batch := PlayerData.prepare_card_copies(selected_deck_id, selected_instance_ids.keys(), target_ids.keys())
+		_show_next_copy_conflict(batch)
 	)
 	_add_row_button(row, Locale.t("skill_editor.cancel"), layer.queue_free)
+
+
+func _show_next_copy_conflict(batch: Dictionary) -> void:
+	var conflicts: Array = batch.conflicts
+	while not conflicts.is_empty():
+		var conflict: Dictionary = conflicts.pop_front()
+		var deck_id: String = conflict.target_deck_id
+		var incoming: CardData = conflict.incoming
+		var cards: Array = batch.card_lists[deck_id]
+		var current := PlayerData.find_card_conflict(cards, incoming)
+		match current.kind:
+			"none":
+				cards.append(PlayerData.prepare_deck_card(incoming))
+				batch.added += 1
+			"same":
+				batch.skipped += 1
+			"conflict":
+				var local: CardData = current.card
+				conflict["local"] = local
+				_show_card_conflict_popup(conflict, false, _apply_copy_choice.bind(batch, cards, local, incoming), batch)
+				return
+	if batch.added + batch.overwritten > 0 and not PlayerData.save_deck_card_lists(batch.card_lists):
+		_show_message(Locale.t("deck.copy_failed"))
+		return
+	_show_message(Locale.t("deck.copy_done") % [batch.added, batch.overwritten, batch.skipped])
+
+
+func _apply_copy_choice(action: String, new_name: String, batch: Dictionary, cards: Array, local: CardData, incoming: CardData) -> void:
+	var copy := PlayerData.prepare_deck_card(incoming)
+	if action == "replace":
+		copy.instance_id = local.instance_id
+		copy.set_meta(&"modified_at", int(Time.get_unix_time_from_system()))
+		cards[cards.find(local)] = copy
+		batch.overwritten += 1
+	else:
+		copy.card_name = new_name
+		cards.append(copy)
+		batch.added += 1
+	_show_next_copy_conflict(batch)
+
+
+func _copy_name_taken(card_name: String, batch: Dictionary, deck_id: String) -> bool:
+	for card: CardData in batch.card_lists[deck_id]:
+		if card.card_name == card_name:
+			return true
+	return false
 
 
 func _export_deck(deck: Dictionary) -> void:
@@ -671,12 +758,9 @@ func _import_from_file(path: String) -> void:
 		_show_message(Locale.t("share.import_failed"))
 		return
 	pending_import_package = parsed.get("package", {})
-	var local: Array = []
-	for card in PlayerData.get_cards_for_deck(selected_deck_id):
-		local.append(PlayerData.serialize_card(card))
 	var preview := ConfirmationDialog.new()
 	preview.title = "导入预览" if Locale.language == "zh" else "Import preview"
-	preview.dialog_text = SharePackage.summary(pending_import_package, local)
+	preview.dialog_text = SharePackage.summary(pending_import_package)
 	preview.get_ok_button().text = "继续导入" if Locale.language == "zh" else "Continue"
 	preview.get_cancel_button().text = "取消" if Locale.language == "zh" else "Cancel"
 	preview.confirmed.connect(func():
@@ -729,7 +813,7 @@ func _show_next_conflict() -> void:
 		if local == null:
 			pending_import_prepared["incoming"].append({"card": incoming, "share_id": conflict["share_id"]})
 			continue
-		if PlayerData.card_content_fingerprint(local) == PlayerData.card_content_fingerprint(incoming):
+		if PlayerData.cards_have_same_content(local, incoming):
 			pending_import_prepared["skipped"].append(incoming)
 			if staged.is_empty():
 				pending_import_prepared["id_map"][conflict["share_id"]] = local.instance_id
@@ -812,9 +896,13 @@ func _import_name_taken(card_name: String) -> bool:
 	return false
 
 
-func _show_card_conflict_popup(conflict: Dictionary, replace_pending: bool, callback: Callable) -> void:
+func _show_card_conflict_popup(conflict: Dictionary, replace_pending: bool, callback: Callable, copy_batch: Dictionary = {}) -> void:
 	var local: CardData = conflict.get("local")
 	var incoming: CardData = conflict.get("incoming")
+	var copying := not copy_batch.is_empty()
+	var name_taken := _import_name_taken
+	if copying:
+		name_taken = _copy_name_taken.bind(copy_batch, str(conflict.target_deck_id))
 	var popup := UITheme.make_popup_layer(self, 120)
 	var layer: CanvasLayer = popup["layer"]
 	var panel_box := Panel.new()
@@ -826,6 +914,16 @@ func _show_card_conflict_popup(conflict: Dictionary, replace_pending: bool, call
 	panel_box.offset_top = -240
 	panel_box.offset_right = 330
 	panel_box.offset_bottom = 240
+	if copying:
+		for index in range(mini(2, copy_batch.conflicts.size()), 0, -1):
+			var behind := panel_box.duplicate() as Panel
+			var offset := Vector2(10, 8) * index
+			behind.offset_left += offset.x
+			behind.offset_right += offset.x
+			behind.offset_top += offset.y
+			behind.offset_bottom += offset.y
+			UITheme.apply_popup_frame(behind, "gold", false, false)
+			layer.add_child(behind)
 	UITheme.apply_popup_frame(panel_box, "gold")
 	layer.add_child(panel_box)
 	var margin := MarginContainer.new()
@@ -841,16 +939,24 @@ func _show_card_conflict_popup(conflict: Dictionary, replace_pending: bool, call
 	margin.add_child(box)
 	var title := Label.new()
 	title.text = Locale.t("share.name_conflict")
+	if copying:
+		var deck_name := PlayerData.deck_display_name(PlayerData.get_deck(conflict.target_deck_id))
+		title.text = Locale.t("deck.copy_conflict_title") % deck_name
+		title.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	UITheme.apply_title(title, 20)
 	box.add_child(title)
-	var cards_row := HBoxContainer.new()
-	cards_row.add_theme_constant_override("separation", 16)
-	box.add_child(cards_row)
-	cards_row.add_child(_make_conflict_summary(Locale.t("share.pending_card" if replace_pending else "share.local_card"), local))
-	cards_row.add_child(_make_conflict_summary(Locale.t("share.incoming_card"), incoming))
+	if copying and not copy_batch.conflicts.is_empty():
+		var remaining := Label.new()
+		remaining.text = Locale.t("deck.copy_conflicts_left") % copy_batch.conflicts.size()
+		remaining.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		UITheme.apply_label(remaining, true)
+		box.add_child(remaining)
+	box.add_child(preload("res://CardCollectionDialog.gd").make_comparison(
+		Locale.t("share.pending_card" if replace_pending else "share.local_card"), local,
+		Locale.t("share.incoming_card"), incoming))
 	var name_edit := LineEdit.new()
-	name_edit.text = PlayerData.available_card_copy_name(incoming.card_name, _import_name_taken)
+	name_edit.text = PlayerData.available_card_copy_name(incoming.card_name, name_taken)
 	UITheme.apply_input(name_edit)
 	box.add_child(name_edit)
 	var name_error := Label.new()
@@ -864,8 +970,8 @@ func _show_card_conflict_popup(conflict: Dictionary, replace_pending: bool, call
 		if layer.is_queued_for_deletion():
 			return
 		var new_name := name_edit.text.strip_edges()
-		if new_name.is_empty() or _import_name_taken(new_name):
-			name_error.text = Locale.t("share.rename_empty" if new_name.is_empty() else "share.rename_taken")
+		if new_name.is_empty() or name_taken.call(new_name):
+			name_error.text = Locale.t("share.rename_empty" if new_name.is_empty() else ("editor.sync_name_conflict" if copying else "share.rename_taken"))
 			name_error.show()
 			name_edit.grab_focus()
 			return
@@ -874,51 +980,30 @@ func _show_card_conflict_popup(conflict: Dictionary, replace_pending: bool, call
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	box.add_child(row)
-	_add_row_button(row, Locale.t("share.rename_pending" if replace_pending else "share.rename_local"), func():
-		rename.call("rename_local")
-	)
-	_add_row_button(row, Locale.t("share.rename_incoming"), func():
-		rename.call("rename_incoming")
-	)
-	_add_row_button(row, Locale.t("share.replace_pending" if replace_pending else "share.replace_local"), func():
+	if not copying:
+		_add_row_button(row, Locale.t("share.rename_pending" if replace_pending else "share.rename_local"), rename.bind("rename_local"), "outlined")
+	_add_row_button(row, Locale.t("share.rename_incoming"), rename.bind("rename_incoming"), "outlined")
+	var overwrite_key := "share.overwrite" if copying else ("share.replace_pending" if replace_pending else "share.replace_local")
+	var replace := func():
 		if layer.is_queued_for_deletion():
 			return
 		layer.queue_free()
 		callback.call("replace", "")
-	)
+	_add_row_button(row, Locale.t(overwrite_key), replace, "danger")
 	var cancel := func():
 		if layer.is_queued_for_deletion():
 			return
 		layer.queue_free()
-		_clear_pending_import()
-		_show_message(Locale.t("share.import_cancelled"))
+		if not copying:
+			_clear_pending_import()
+			_show_message(Locale.t("share.import_cancelled"))
 	layer.set_meta("popup_close", cancel)
 	var cancel_row := HBoxContainer.new()
 	cancel_row.alignment = BoxContainer.ALIGNMENT_END
 	box.add_child(cancel_row)
-	_add_row_button(cancel_row, Locale.t("share.cancel_import"), cancel).size_flags_horizontal = Control.SIZE_SHRINK_END
+	var cancel_button := _add_row_button(cancel_row, Locale.t("common.cancel" if copying else "share.cancel_import"), cancel, "outlined")
+	cancel_button.size_flags_horizontal = Control.SIZE_SHRINK_END
 	name_edit.grab_focus()
-
-
-func _make_conflict_summary(label_text: String, card: CardData) -> VBoxContainer:
-	var box := VBoxContainer.new()
-	box.custom_minimum_size = Vector2(260, 0)
-	box.add_theme_constant_override("separation", 6)
-	var label := Label.new()
-	label.text = label_text
-	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	UITheme.apply_label(label)
-	box.add_child(label)
-	var preview_holder := CenterContainer.new()
-	preview_holder.custom_minimum_size = Vector2(120, 150)
-	box.add_child(preview_holder)
-	var card_ui = card_ui_scene.instantiate()
-	preview_holder.add_child(card_ui)
-	card_ui.set_card(card)
-	card_ui.apply_ui_scale(0.82)
-	card_ui.set_battle_layout_preview(true)
-	card_ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	return box
 
 
 func _show_text_input_popup(title_text: String, label_text: String, default_text: String, callback: Callable) -> void:
@@ -1013,7 +1098,7 @@ func _show_confirm_dialog(text: String, on_confirm: Callable) -> void:
 	var cancel := Button.new()
 	cancel.text = Locale.t("common.cancel")
 	cancel.custom_minimum_size = Vector2(120,40)
-	UITheme.apply_button(cancel, "utility")
+	UITheme.apply_button(cancel, "secondary")
 	cancel.pressed.connect(popup.layer.queue_free)
 	popup.buttons.add_child(cancel)
 	var confirm := Button.new()

@@ -1,7 +1,9 @@
 extends RefCounted
 
+const ActionClock = preload("res://BattleActionClock.gd")
+
 # Both solo preparation and online rooms build this same form.
-static func open(parent: Control, config: Dictionary, locked: Callable, on_confirm: Callable, on_close: Callable = Callable()) -> CanvasLayer:
+static func open(parent: Control, config: Dictionary, locked: Callable, on_confirm: Callable, on_close: Callable = Callable(), timing_only: bool = false, party: bool = false) -> CanvasLayer:
 	var popup := UITheme.make_popup_layer(parent, 115)
 	var layer: CanvasLayer = popup["layer"]
 	layer.name = "AdvancedSettings"
@@ -18,7 +20,7 @@ static func open(parent: Control, config: Dictionary, locked: Callable, on_confi
 	panel_box.offset_top = -minf(300, parent.get_viewport_rect().size.y * 0.44)
 	panel_box.offset_right = 330
 	panel_box.offset_bottom = minf(300, parent.get_viewport_rect().size.y * 0.44)
-	UITheme.apply_popup_frame(panel_box, "gold")
+	UITheme.apply_popup_frame(panel_box, "gold", true, true)
 	layer.add_child(panel_box)
 	var fit := func():
 		var half := parent.get_viewport_rect().size*Vector2(0.44,0.43)
@@ -43,7 +45,7 @@ static func open(parent: Control, config: Dictionary, locked: Callable, on_confi
 	box.add_theme_constant_override("separation", 8)
 	margin.add_child(box)
 	var title := Label.new()
-	title.text = Locale.t("prep.advanced")
+	title.text = Locale.t("battle_config.action_time_enabled" if timing_only else "prep.advanced")
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	UITheme.apply_title(title, 20)
 	box.add_child(title)
@@ -58,6 +60,30 @@ static func open(parent: Control, config: Dictionary, locked: Callable, on_confi
 	settings_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	settings_box.add_theme_constant_override("separation", 12)
 	settings_scroll.add_child(settings_box)
+	var time_toggle := _make_config_check_row(settings_box, Locale.t("battle_config.action_time_enabled"), ActionClock.enabled(config))
+	time_toggle.check.name = "ActionTimeEnabledToggle"
+	time_toggle.check.disabled = locked.call()
+	var time_options := MarginContainer.new()
+	time_options.add_theme_constant_override("margin_left", 16)
+	time_options.visible = time_toggle.check.button_pressed
+	settings_box.add_child(time_options)
+	var time_box := VBoxContainer.new()
+	time_box.add_theme_constant_override("separation", 12)
+	time_options.add_child(time_box)
+	var time_rows: Array[Dictionary] = []
+	for i in range(1, ActionClock.KEYS.size()):
+		var key: String = ActionClock.KEYS[i]
+		var time_row := _make_config_spin_row(time_box, Locale.t("battle_config." + key), ActionClock.seconds(config, i == 2),
+			ActionClock.MIN_SECONDS, ActionClock.MAX_SECONDS)
+		time_row.spin.name = key
+		time_row.spin.editable = not locked.call()
+		time_rows.append(time_row)
+	time_toggle.check.toggled.connect(time_options.set_visible)
+	var other_rules := VBoxContainer.new()
+	other_rules.add_theme_constant_override("separation", 12)
+	other_rules.visible = not timing_only
+	settings_box.add_child(other_rules)
+	settings_box = other_rules
 	var action_rows := {}
 	var action_toggle := _make_config_check_row(settings_box, Locale.t("battle_config.action_enabled"), config.has("action_base"))
 	(action_toggle.check as BaseButton).name = "ActionEnabledToggle"
@@ -114,7 +140,7 @@ static func open(parent: Control, config: Dictionary, locked: Callable, on_confi
 	mana_mode.disabled = locked.call()
 	UITheme.apply_button(mana_mode, "secondary")
 	mana_mode_row.add_child(mana_mode)
-	var mana_row := _make_config_spin_row(settings_box, "", config.get("mana_per_turn", 2), 0, 10)
+	var mana_row := _make_config_spin_row(settings_box, "", config.get("mana_per_turn", PlayerData.DEFAULT_BATTLE_CONFIG["mana_per_turn"]), 0, 10)
 	mana_row.spin.name = "mana_per_turn"
 	var increment_row := _make_config_spin_row(settings_box, Locale.t("battle_config.mana_increment"), config.get("mana_increment", 1), 1, 10)
 	increment_row.spin.name = "mana_increment"
@@ -129,7 +155,7 @@ static func open(parent: Control, config: Dictionary, locked: Callable, on_confi
 	draw_row.spin.name = "draw_per_turn"
 
 	# Row: Starting HP
-	var hp_row := _make_config_spin_row(settings_box, Locale.t("battle_config.starting_hp"), config.get("starting_hp", 30), 1, 99)
+	var hp_row := _make_config_spin_row(settings_box, Locale.t("team.starting_hp" if party else "battle_config.starting_hp"), config.get("starting_hp", 30), 1, 99)
 	hp_row.spin.name = "starting_hp"
 
 	# Row: Second player extra cards
@@ -143,8 +169,35 @@ static func open(parent: Control, config: Dictionary, locked: Callable, on_confi
 	# Row: Death compensation
 	var death_comp_check := _make_config_check_row(settings_box, Locale.t("battle_config.death_compensation"), config.get("death_compensation", false))
 
-	# Row: Face damage compensation
 	var face_comp_check := _make_config_check_row(settings_box, Locale.t("battle_config.face_damage_compensation"), config.get("face_damage_compensation", false))
+	face_comp_check.check.name = "FaceDamageCompensationToggle"
+	var face_comp_details := MarginContainer.new()
+	face_comp_details.add_theme_constant_override("margin_left", 16)
+	face_comp_details.visible = face_comp_check.check.button_pressed
+	settings_box.add_child(face_comp_details)
+	var face_comp_options := VBoxContainer.new()
+	face_comp_options.add_theme_constant_override("separation", 6)
+	face_comp_details.add_child(face_comp_options)
+	var face_comp_mana := _make_config_spin_row(face_comp_options, Locale.t("battle_config.face_damage_compensation_mana"),
+		config.get("face_damage_compensation_mana", PlayerData.DEFAULT_FACE_DAMAGE_COMPENSATION_MANA),
+		1, PlayerData.MAX_FACE_DAMAGE_COMPENSATION_MANA)
+	face_comp_mana.spin.name = "face_damage_compensation_mana"
+	var face_comp_help := Label.new()
+	face_comp_help.text = Locale.t("battle_config.face_damage_compensation_help")
+	face_comp_help.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	face_comp_help.add_theme_font_size_override("font_size", 14)
+	UITheme.apply_label(face_comp_help, true)
+	face_comp_options.add_child(face_comp_help)
+	face_comp_check.check.toggled.connect(func(enabled: bool):
+		face_comp_details.visible = enabled
+		if enabled:
+			await settings_scroll.get_tree().process_frame
+			if is_instance_valid(face_comp_details) and face_comp_details.is_visible_in_tree():
+				settings_scroll.ensure_control_visible(face_comp_details)
+	)
+	if party:
+		for row in [visibility.row, order_row, extra_cards_row.row, extra_mana_row.row]:
+			row.hide()
 
 	var btn_row := HBoxContainer.new()
 	btn_row.add_theme_constant_override("separation", 10)
@@ -157,6 +210,13 @@ static func open(parent: Control, config: Dictionary, locked: Callable, on_confi
 	UITheme.apply_button(start_btn, "primary")
 	start_btn.pressed.connect(func():
 		if locked.call():
+			close.call()
+			return
+		config[ActionClock.KEYS[0]] = time_toggle.check.button_pressed
+		for i in range(time_rows.size()):
+			config[ActionClock.KEYS[i + 1]] = int(time_rows[i].spin.value)
+		if timing_only:
+			on_confirm.call(config)
 			close.call()
 			return
 		for key in action_rows:
@@ -178,6 +238,11 @@ static func open(parent: Control, config: Dictionary, locked: Callable, on_confi
 		config["second_extra_mana"] = int(extra_mana_row.get("spin").value)
 		config["death_compensation"] = death_comp_check.get("check").button_pressed
 		config["face_damage_compensation"] = face_comp_check.get("check").button_pressed
+		var compensation_mana := int(face_comp_mana.spin.value)
+		if compensation_mana == PlayerData.DEFAULT_FACE_DAMAGE_COMPENSATION_MANA:
+			config.erase("face_damage_compensation_mana")
+		else:
+			config["face_damage_compensation_mana"] = compensation_mana
 		on_confirm.call(config)
 		close.call()
 	)
@@ -190,7 +255,7 @@ static func open(parent: Control, config: Dictionary, locked: Callable, on_confi
 	cancel_btn.pressed.connect(close)
 	btn_row.add_child(cancel_btn)
 	if locked.call():
-		for row in action_rows.values() + [mana_row, increment_row, draw_row, hp_row, extra_cards_row, extra_mana_row]: row["spin"].editable = false
+		for row in action_rows.values() + [mana_row, increment_row, draw_row, hp_row, extra_cards_row, extra_mana_row, face_comp_mana]: row["spin"].editable = false
 		death_comp_check["check"].disabled = true
 		face_comp_check["check"].disabled = true
 	return layer

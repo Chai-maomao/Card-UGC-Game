@@ -7,6 +7,8 @@ var cards: Array = []
 var heading := ""
 var pick_limit := 0
 var allow_empty_selection := false
+var replace_single_selection := false
+var empty_selection_text := ""
 var limit_feedback := false
 var on_confirm: Callable
 var include_source_positions := false
@@ -34,6 +36,36 @@ static func show_cards(parent: Node, items: Array, title: String, limit: int = 0
 	return dialog
 
 
+static func make_comparison(local_label: String, local: CardData, incoming_label: String, incoming: CardData) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 16)
+	row.add_child(_make_comparison_card(local_label, local))
+	row.add_child(_make_comparison_card(incoming_label, incoming))
+	return row
+
+
+static func _make_comparison_card(caption: String, card: CardData) -> VBoxContainer:
+	var column := VBoxContainer.new()
+	column.custom_minimum_size.x = 260
+	column.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	column.add_theme_constant_override("separation", 6)
+	var label := Label.new()
+	label.text = caption
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UITheme.apply_label(label)
+	column.add_child(label)
+	var holder := CenterContainer.new()
+	holder.custom_minimum_size = Vector2(120, 150)
+	column.add_child(holder)
+	var preview := CardScene.instantiate()
+	holder.add_child(preview)
+	preview.set_card(card)
+	preview.apply_ui_scale(0.82)
+	preview.set_battle_layout_preview(true)
+	preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	return column
+
+
 func _ready() -> void:
 	add_to_group("battle_modal")
 	layer = 120
@@ -45,7 +77,7 @@ func _ready() -> void:
 	UITheme.fade_enter(backdrop, 0.16)
 	panel = PanelContainer.new()
 	panel.name = "CardCollectionPanel"
-	UITheme.apply_popup_frame(panel, "gold", false)
+	UITheme.apply_popup_frame(panel, "gold", false, true)
 	add_child(panel)
 	UITheme.fade_enter(panel, 0.18)
 	var margin := MarginContainer.new()
@@ -77,6 +109,8 @@ func _ready() -> void:
 	if pick_limit > 0:
 		confirm_button = Button.new()
 		confirm_button.text = Locale.t("battle.confirm")
+		if allow_empty_selection and not empty_selection_text.is_empty():
+			confirm_button.text = empty_selection_text
 		confirm_button.disabled = not allow_empty_selection
 		confirm_button.custom_minimum_size = Vector2(130, 38)
 		UITheme.apply_button(confirm_button, "primary", false)
@@ -166,9 +200,12 @@ func _on_card_input(event: InputEvent, index: int) -> void:
 
 func _select(pressed: bool, index: int, _legacy_button: Control = null) -> void:
 	if pressed and selected.size() >= pick_limit:
-		selection_overlays[index].set_pressed_no_signal(selected.has(index))
-		if limit_feedback: UITheme.reject_button(selection_overlays[index])
-		return
+		if pick_limit == 1 and replace_single_selection and not selected.has(index):
+			_select(false, selected_order[0])
+		else:
+			selection_overlays[index].set_pressed_no_signal(selected.has(index))
+			if limit_feedback: UITheme.reject_button(selection_overlays[index])
+			return
 	if pressed:
 		selected[index] = true
 		selected_order.append(index)
@@ -183,6 +220,8 @@ func _select(pressed: bool, index: int, _legacy_button: Control = null) -> void:
 	if card_ui:
 		card_ui.modulate = Color.WHITE
 	confirm_button.disabled = selected.is_empty() and not allow_empty_selection
+	if not empty_selection_text.is_empty():
+		confirm_button.text = empty_selection_text if selected.is_empty() else Locale.t("battle.confirm")
 
 
 func _ignore_descendant_mouse(root: Node) -> void:

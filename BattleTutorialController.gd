@@ -170,7 +170,7 @@ func set_phase(next_phase: int) -> void:
 		Phase.FACE_DAMAGE:
 			_set_copy(13, "tutorial.face_title", "tutorial.face_body", true)
 		Phase.END_TURN:
-			_set_copy(14, "tutorial.end_title", "tutorial.end_body", false, [int(battle.game.battle_config.get("mana_per_turn", 2)), int(battle.game.battle_config.get("draw_per_turn", 2))])
+			_set_copy(14, "tutorial.end_title", "tutorial.end_body", false, [int(battle.game.battle_config.get("mana_per_turn", PlayerData.DEFAULT_BATTLE_CONFIG["mana_per_turn"])), int(battle.game.battle_config.get("draw_per_turn", 2))])
 		Phase.COMPLETE:
 			_set_copy(total, "tutorial.complete_title", "tutorial.complete_body", true)
 			next_button.text = Locale.t("tutorial.continue_battle")
@@ -204,6 +204,9 @@ func _set_copy(_step: int, title_key: String, body_key: String, show_next: bool 
 func _build_ui() -> void:
 	overlay_layer = CanvasLayer.new()
 	overlay_layer.layer = 90
+	overlay_layer.set_meta("popup_close", _on_exit)
+	overlay_layer.tree_entered.connect(_resume_focus_updates)
+	overlay_layer.tree_exiting.connect(_stop_focus_updates)
 	battle.add_child(overlay_layer)
 	overlay_root = Control.new()
 	overlay_root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -214,7 +217,7 @@ func _build_ui() -> void:
 	instruction_panel.custom_minimum_size = Vector2(740, 0)
 	instruction_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	instruction_panel.z_index = 10
-	UITheme.apply_popup_frame(instruction_panel, "gold", false)
+	UITheme.apply_popup_frame(instruction_panel, "gold", false, true)
 	overlay_root.add_child(instruction_panel)
 	var margin := MarginContainer.new()
 	for side in ["left", "right", "top", "bottom"]:
@@ -238,7 +241,7 @@ func _build_ui() -> void:
 	heading.add_child(title_label)
 	body_label = Label.new()
 	body_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	body_label.custom_minimum_size = Vector2(0, 48)
+	body_label.custom_minimum_size.y = 48
 	body_label.add_theme_font_size_override("font_size", 14)
 	UITheme.apply_label(body_label)
 	box.add_child(body_label)
@@ -347,6 +350,15 @@ func _phase_focus_controls() -> Array:
 
 func _position_panel() -> void:
 	var viewport_size: Vector2 = battle.get_viewport_rect().size
+	var compact := viewport_size.y <= 540.0 and phase in [Phase.SUMMON, Phase.SKILL]
+	var body_min_height := 30.0 if compact else 48.0
+	if body_label.custom_minimum_size.y != body_min_height:
+		body_label.custom_minimum_size.y = body_min_height
+		var box := body_label.get_parent() as VBoxContainer
+		box.add_theme_constant_override("separation", 6 if compact else 9)
+		var margin := box.get_parent() as MarginContainer
+		margin.add_theme_constant_override("margin_top", 4 if compact else 6)
+		margin.add_theme_constant_override("margin_bottom", 4 if compact else 6)
 	var width := minf(900, viewport_size.x - 32)
 	instruction_panel.custom_minimum_size.x = width
 	instruction_panel.size.x = width
@@ -358,9 +370,20 @@ func _position_panel() -> void:
 
 
 func _process(_delta: float) -> void:
-	if battle != null and instruction_panel != null:
+	if is_instance_valid(battle) and is_instance_valid(instruction_panel):
 		_position_panel()
 		_refresh_focus(_phase_focus_controls())
+
+
+func _stop_focus_updates() -> void:
+	set_process(false)
+	_clear_focus()
+
+
+func _resume_focus_updates() -> void:
+	set_process(true)
+	if is_instance_valid(instruction_panel):
+		_focus_controls(_phase_focus_controls())
 
 
 func _focus_controls(controls: Array) -> void:
@@ -438,7 +461,7 @@ func _clear_focus() -> void:
 
 
 func _remind() -> void:
-	if instruction_panel == null:
+	if not is_instance_valid(instruction_panel):
 		return
 	if _panel_tween and _panel_tween.is_valid():
 		_panel_tween.kill()

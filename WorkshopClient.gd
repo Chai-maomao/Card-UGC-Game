@@ -2,10 +2,15 @@ class_name WorkshopClient
 extends WorkshopBackend
 
 const MAX_BYTES := 16 * 1024 * 1024
+const DOWNLOAD_TIMEOUT_SECONDS := 10.0
 static var token := ""
 static var account_name := ""
 static var token_origin := ""
-var busy := false
+var busy := false:
+	set(value):
+		if busy == value: return
+		busy = value
+		request_activity_changed.emit()
 var origin := ""
 
 func _ready() -> void:
@@ -28,6 +33,9 @@ func request_api(path: String, method: int = HTTPClient.METHOD_GET, data: Dictio
 	if busy: return {"ok":false,"error":"正在处理，请稍候"}
 	busy = true
 	var request := HTTPRequest.new()
+	# Threaded HTTPRequest uses blocking reads. Leaving the Workshop or timing
+	# out would wait for that thread to finish before releasing the request.
+	request.use_threads = false
 	request.timeout = timeout_seconds
 	request.body_size_limit = MAX_BYTES + 65536
 	add_child(request)
@@ -46,6 +54,8 @@ func request_api(path: String, method: int = HTTPClient.METHOD_GET, data: Dictio
 	var reply: Array = await request.request_completed
 	request.queue_free()
 	busy = false
+	if reply[0] == HTTPRequest.RESULT_TIMEOUT:
+		return {"ok":false,"error":"请求超时，请重试","timed_out":true}
 	if reply[0] != HTTPRequest.RESULT_SUCCESS: return {"ok":false,"error":"连接中断，请重试"}
 	var parsed = JSON.parse_string(reply[3].get_string_from_utf8())
 	if not parsed is Dictionary: return {"ok":false,"error":"服务暂时不可用，请稍后再试"}
@@ -86,6 +96,7 @@ static func _strip_private_fields(value: Variant) -> void:
 func authenticated() -> bool: return not token.is_empty() and token_origin == origin
 func display_name() -> String: return account_name if authenticated() else ""
 func ready_for_use() -> bool: return not origin.is_empty()
+func is_request_active() -> bool: return busy
 
 func browse(query: String, sort: String, offset: int, mine: bool) -> Dictionary:
 	return await request_api("/v1/packages?q="+query.uri_encode()+"&offset="+str(offset)+"&sort="+sort+("&mine=1" if mine else ""))
@@ -94,7 +105,10 @@ func publish(title: String, description: String, package: Dictionary, cover: Str
 	return await request_api("/v1/packages",HTTPClient.METHOD_POST,{"title":title,"description":description,"package":package,"cover":cover},120.0)
 
 func download(id: String) -> Dictionary:
-	return await request_api("/v1/packages/"+id+"/download")
+	var result := await request_api("/v1/packages/"+id+"/download", HTTPClient.METHOD_GET, {}, DOWNLOAD_TIMEOUT_SECONDS)
+	if result.get("timed_out", false):
+		result["error"] = "下载超时，请重试"
+	return result
 
 func withdraw(id: String) -> Dictionary:
 	return await request_api("/v1/packages/"+id,HTTPClient.METHOD_DELETE)

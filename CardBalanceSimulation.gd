@@ -56,6 +56,7 @@ static func add_game(accumulator: Dictionary, result: Dictionary) -> void:
 	accumulator["lost_status_origins"] = int(accumulator.get("lost_status_origins", 0)) + int(result.get("lost_status_origins", 0))
 	if not bool(result.get("stable", false)):
 		accumulator["stability_failures"] = int(accumulator.get("stability_failures", 0)) + 1
+		return
 	var candidate: Dictionary = accumulator.get("candidate", {})
 	var metrics: Dictionary = result.get("cards", {}).get(CANDIDATE_METRIC_KEY, {})
 	for key in candidate.keys():
@@ -111,12 +112,14 @@ static func finalize(accumulator: Dictionary) -> Dictionary:
 		warnings.append("candidate_unused")
 	var reference: Dictionary = accumulator.get("reference", {})
 	result["strength_score"] = null
-	if int(candidate.get("unmeasured_effects",0)) > 0:
+	var incomplete := int(candidate.get("unmeasured_effects", 0)) > 0
+	if incomplete:
 		warnings.append("incomplete_contribution")
-	if plays>0 and int(candidate.get("unmeasured_effects",0)) == 0 and _plays(reference)>0 and int(result.stability_failures)==0 and int(result.lost_status_origins)==0:
+	result["partial_score"] = incomplete or int(result.lost_status_origins) > 0 or int(result.stability_failures) > 0
+	if plays > 0 and _plays(reference) > 0 and int(result.stability_failures) < int(result.games):
 		var value := _efficiency(candidate)
 		var baseline := _efficiency(reference)
-		if value+baseline>0.0:
+		if value + baseline > 0.0:
 			result["strength_score"] = relative_score(value,baseline)
 	return result
 

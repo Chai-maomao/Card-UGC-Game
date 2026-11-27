@@ -10,7 +10,7 @@ const REQUIRED_SIZES: Array[Vector2i] = [
 const LANGUAGES := ["zh", "en"]
 const OpponentHand := preload("res://presentation/OpponentHandPresentation.gd")
 const SCENES := [
-	["main_menu", "res://MainMenu.tscn", "CenterContainer"],
+	["main_menu", "res://MainMenu.tscn", "MenuSurface/MenuColumn"],
 	["settings", "res://SettingsMenu.tscn", "CenterContainer"],
 	["card_editor", "res://CardEditor.tscn", "Panel"],
 	["skill_editor", "res://SkillEditor.tscn", "Panel"],
@@ -86,8 +86,16 @@ func _exercise_scene(tag: String, path: String, key_path: String, viewport_size:
 	# Exercise three representative modal layouts under the same matrix: menu
 	# choice, battlefield rules, and the data-dense history detail view.
 	if tag == "main_menu":
-		scene.call("_show_battle_mode_popup")
-		await _check_latest_popup(scene, bounds, "%s battle-mode popup" % [language])
+		(scene.get("start_battle_btn") as Button).pressed.emit()
+		await get_tree().process_frame
+		_finish_layout_tweens()
+		await get_tree().process_frame
+		var choice_menu := scene.get("battle_hub_layer") as CanvasLayer
+		_assert(is_instance_valid(choice_menu) and choice_menu.visible, "%s did not open its battle mode menu" % language)
+		if is_instance_valid(choice_menu):
+			var heading := choice_menu.get("heading_label") as Label
+			_assert(heading != null and _rect_inside(heading.get_global_rect(), bounds, 2.0), "%s battle mode heading exceeds viewport" % language)
+			_check_interactive_controls(choice_menu, bounds, "%s battle mode menu" % language)
 	elif tag == "battle":
 		scene.call("_show_help_popup")
 		await _check_latest_popup(scene, bounds, "%s battle-help popup" % [language])
@@ -115,7 +123,7 @@ func _check_battle_layout(scene: Node, bounds: Rect2, tag: String) -> void:
 	var discard_zone := scene.get("discard_zone") as Control
 	var draw_button := scene.get("draw_pile_btn") as Control
 	var broadcast_strip := scene.get("combat_broadcast_panel") as Control
-	for toolbar_name in ["abandon_battle_button", "action_log_button", "help_btn"]:
+	for toolbar_name in ["action_log_button", "help_btn"]:
 		var toolbar_button := scene.get(toolbar_name) as Control
 		_assert(not _controls_overlap(enemy_hud, toolbar_button), "%s enemy HUD overlaps %s" % [tag, toolbar_name])
 	_assert(not _controls_overlap(enemy_hud, enemy_row), "%s enemy HUD overlaps the enemy field" % tag)

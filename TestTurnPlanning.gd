@@ -8,6 +8,7 @@ var events := 0
 func _ready() -> void:
 	EventBus.hp_changed.connect(_on_hp)
 	_test_quote_and_resolution()
+	_test_face_damage_compensation()
 	_test_rounding_refunds_and_gates()
 	_test_simulation_copy()
 	_test_ordering()
@@ -64,6 +65,40 @@ func _test_quote_and_resolution() -> void:
 		_check(BattleRepro.state_hash(game) == before and events == event_before, "quote must not mutate state, RNG, stats or emit events")
 		var result: Dictionary = game.end_player_turn()
 		_check(result.total_damage == quote.total_damage and field.action_points == 0 and field.current_mana == 0 and field.actions_taken == 3, "actual resolution must match the quote for either player")
+
+
+func _test_face_damage_compensation() -> void:
+	for player in [1, 2]:
+		for scenario in [[true, null, 2], [true, 3, 6], [false, 3, 0]]:
+			var game = _game()
+			game.current_player = player
+			game.battle_config.face_damage_compensation = scenario[0]
+			if scenario[1] != null:
+				game.battle_config.face_damage_compensation_mana = scenario[1]
+			var attacker: BattleField = game.active_field()
+			var defender: BattleField = game.opponent_field()
+			attacker.action_points = 10
+			attacker.slots[0] = _card("First", 2)
+			attacker.slots[1] = _card("Second", 5)
+			attacker.slots[2] = _card("Already acted", 8)
+			attacker.slots[2].has_acted = true
+			attacker.slots[3] = _card("Zero damage", 0)
+			_check(MatchAgreement.valid_config(game.battle_config), "match rules must accept both the legacy and custom rates")
+			var rules_text := BattleRulesHelp.description(game)
+			var rate: int = 1 if scenario[1] == null else scenario[1]
+			_check(rules_text.contains(Locale.t("help.face_damage_compensation_rate", [rate])) == scenario[0],
+				"battle help must show the actual rate when compensation is enabled")
+			var result: Dictionary = game.end_player_turn()
+			_check(result.cards_hit.size() == 3 and result.total_damage == 7 and defender.temp_mana == scenario[2] and attacker.temp_mana == 0,
+				"only attacks that took hero health should grant Temporary Elixir to the defender")
+			game.start_new_turn()
+			_check(game.active_field() == defender and defender.temp_mana == scenario[2], "compensation must carry into the defender's turn")
+			game.end_player_turn()
+			_check(defender.temp_mana == 0, "unused compensation must expire at the end of the defender's turn")
+	var invalid := PlayerData.DEFAULT_BATTLE_CONFIG.duplicate(true)
+	for invalid_amount in [0, 11, 1.5, "3"]:
+		invalid.face_damage_compensation_mana = invalid_amount
+		_check(not MatchAgreement.valid_config(invalid), "match rules must reject invalid compensation amounts")
 
 
 func _test_rounding_refunds_and_gates() -> void:

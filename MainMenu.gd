@@ -41,9 +41,6 @@ func _apply_texts() -> void:
 	online_btn.text = Locale.t("menu.online")
 	match_history_btn.text = Locale.t("menu.match_history")
 	settings_btn.text = Locale.t("menu.settings")
-	var font := UITheme.selection_font()
-	for button in _menu_items.get_children():
-		button.add_theme_font_override("font", font)
 
 
 func _ui_scale() -> float:
@@ -93,7 +90,7 @@ func _apply_theme() -> void:
 	move_child(bg, 0)
 
 	for button in _menu_items.get_children():
-		UITheme.apply_selection_entry(button)
+		UITheme.apply_selection_entry(button, UITheme.display_font())
 
 
 func _on_viewport_size_changed() -> void:
@@ -155,7 +152,7 @@ func _on_tutorial_pressed(return_state: String = "") -> void:
 	UIMotion.change_scene("res://CardEditor.tscn", return_state)
 
 
-func _push_title_choices(node_name: String, heading: String, depth: int, opener: Button, scroll := false) -> SelectionMenu:
+func _push_title_choices(node_name: String, heading: String, depth: int, opener: Button) -> SelectionMenu:
 	var previous: CanvasItem = _menu_items if _title_choices.is_empty() else _title_choices.back().surface
 	if is_instance_valid(opener) and opener.is_visible_in_tree():
 		opener.grab_focus()
@@ -163,9 +160,8 @@ func _push_title_choices(node_name: String, heading: String, depth: int, opener:
 	page.name = node_name
 	page.heading = heading
 	page.layer = depth
-	page.scroll_choices = scroll
 	page.placement = _place_title_choices.bind(page)
-	if opener in [start_battle_btn, card_editor_btn]:
+	if is_instance_valid(opener):
 		page.title_entry = opener
 	add_child(page)
 	_title_choices.append(page)
@@ -198,13 +194,14 @@ func _title_choice_closed(page: SelectionMenu) -> void:
 		return
 	if not _title_choices.is_empty():
 		var previous: SelectionMenu = _title_choices.back()
-		previous.surface.show()
-		previous.fade_choices()
+		previous.reveal_from_child(page.title_entry)
 	elif is_instance_valid(_menu_items):
 		_menu_items.show()
 		for button in _menu_items.get_children():
 			if button != page.title_entry and button.is_visible_in_tree():
 				UITheme.fade_enter(button, 0.14)
+		if is_instance_valid(page.title_entry) and page.title_entry.is_visible_in_tree():
+			page.title_entry.grab_focus()
 
 
 func _focus_title_choice(key: String) -> void:
@@ -223,6 +220,12 @@ func _restore_title_route(state: String) -> void:
 			"online":
 				_focus_title_choice("menu.online")
 				_show_battle_mode_popup(true)
+				if entry in ["mp.dedicated", "mp.direct"]:
+					_focus_title_choice(entry)
+					_show_online_match_choices(entry == "mp.dedicated")
+					var mode := state.get_slice(":", 2)
+					_focus_title_choice(mode if not mode.is_empty() else "mp.classic")
+					return
 			"local_battle", "practice":
 				_focus_title_choice("menu.battle_local")
 				_show_battle_mode_popup()
@@ -230,7 +233,9 @@ func _restore_title_route(state: String) -> void:
 					_focus_title_choice("menu.practice")
 					_show_practice_difficulty_popup()
 			"challenge_picker":
-				_show_challenge_choices()
+				var page := _push_title_choices("ChallengePickerLayer", PracticeChallenges.catalog_title(), 150,
+					battle_hub_layer.find_choice(PracticeChallenges.catalog_title()))
+				PracticeChallenges.add_choices(page)
 				if not entry.is_empty():
 					_title_choices.back().focus_choice("Challenge_" + entry)
 				return
@@ -252,6 +257,7 @@ func _show_battle_hub_popup() -> void:
 		_show_battle_mode_popup())
 	page.add_choice(Locale.t("menu.online"), _on_online_pressed)
 	page.add_choice(Locale.t("menu.tutorial"), _on_tutorial_pressed.bind("battle_hub"))
+	page.add_choice(Locale.t("menu.advanced_tutorial"), func(): UIMotion.change_scene("res://AdvancedTutorial.tscn", "battle_hub:menu.advanced_tutorial"))
 	page.add_choice(PracticeChallenges.catalog_title(), _show_challenge_choices)
 	page.finish()
 
@@ -266,19 +272,43 @@ func _show_battle_mode_popup(online: bool = false) -> void:
 		opener = battle_hub_layer.find_choice(Locale.t("menu.online" if online else "menu.battle_local"))
 	var page := _push_title_choices(
 		"OnlineModePopup" if online else "BattleModePopup",
-		Locale.t("menu.online" if online else "menu.battle_mode"), 120, opener)
+		Locale.t("mp.title" if online else "menu.battle_mode"), 120, opener)
 	if online:
-		page.add_choice(Locale.t("mp.dedicated"), _enter_online_lobby.bind("res://DedicatedLobby.tscn", "mp.dedicated"))
-		page.add_choice(Locale.t("mp.direct"), _enter_online_lobby.bind("res://DirectLobby.tscn", "mp.direct"))
+		page.add_choice(Locale.t("mp.dedicated"), _show_online_match_choices.bind(true))
+		page.add_choice(Locale.t("mp.direct"), _show_online_match_choices.bind(false))
 	else:
 		page.add_choice(Locale.t("menu.hotseat"), _start_hotseat_battle)
 		page.add_choice(Locale.t("menu.practice"), _show_practice_difficulty_popup)
 	page.finish()
 
 
-func _enter_online_lobby(scene: String, entry: String) -> void:
-	PlayerData.prepare_online_selection(scene)
-	UIMotion.change_scene(scene, "online:" + entry)
+func _show_online_match_choices(dedicated: bool) -> void:
+	var connection := "mp.dedicated" if dedicated else "mp.direct"
+	var opener := _title_choices.back().find_choice(Locale.t(connection)) as Button
+	var page := _push_title_choices("OnlineMatchModePopup", Locale.t(connection), 140, opener)
+	if dedicated:
+		page.add_choice(Locale.t("matchmaking.ranked"), _enter_matchmaking.bind("ranked"))
+		page.add_choice(Locale.t("matchmaking.random"), _enter_matchmaking.bind("random"))
+	page.add_choice(Locale.t("mp.classic"), _enter_online_lobby.bind(dedicated, false))
+	page.add_choice(Locale.t("team.title"), _enter_online_lobby.bind(dedicated, true))
+	page.finish()
+
+
+func _enter_matchmaking(mode: String) -> void:
+	PlayerData.matchmaking_mode = mode
+	UIMotion.change_scene("res://MatchmakingLobby.tscn", "online:mp.dedicated:matchmaking." + mode)
+
+
+func _enter_online_lobby(dedicated: bool, party: bool) -> void:
+	var connection := "mp.dedicated" if dedicated else "mp.direct"
+	var mode := "team.title" if party else "mp.classic"
+	var scene := "res://DedicatedLobby.tscn" if dedicated else "res://DirectLobby.tscn"
+	if party:
+		NetworkManager.team_room.use_dedicated_lobby = dedicated
+		scene = "res://TeamLobby.tscn"
+	else:
+		PlayerData.prepare_online_selection(scene)
+	UIMotion.change_scene(scene, "online:%s:%s" % [connection, mode])
 
 
 func _show_practice_difficulty_popup() -> void:
@@ -292,9 +322,7 @@ func _show_practice_difficulty_popup() -> void:
 
 
 func _show_challenge_choices() -> void:
-	var page := _push_title_choices("ChallengePickerLayer", PracticeChallenges.catalog_title(), 150,
-		battle_hub_layer.find_choice(PracticeChallenges.catalog_title()), true)
-	PracticeChallenges.add_choices(page)
+	UIMotion.change_scene("res://presentation/ChallengeLaunch.tscn", "battle_hub:launch.challenges")
 
 
 func _start_hotseat_battle() -> void:

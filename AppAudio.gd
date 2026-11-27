@@ -1,6 +1,7 @@
 extends Node
 
 const SOUNDS := ["death"]
+const HOVER_SOUND := "res://res/audio/sfx/cardex-hover.mp3"
 const DENY_SOUND := "res://res/audio/cardex-ui_deny.mp3"
 # The supplied file has 280 ms of silence before its transient.
 const DENY_START_SECONDS := 0.26
@@ -9,8 +10,8 @@ const EFFECT_FILES := {
 	"punch":["punch"], "heal":["heal"], "skill":["magic_smite"],
 	"dark_magic":["dark_magic"], "draw":["shuffle"],
 	"draw_single":["distributing_single"],
-	"shuffle":["shuffle_2","shuffle","shuffle_3"], "click":["mouse_over_menu"], "hover":["mouse_over_object"],
-	"card_hover":["mouse_over_object"], "summon":["deploy_card","deploy_card_2","deploy_card_3"],
+	"shuffle":["shuffle_2","shuffle","shuffle_3"], "click":["mouse_over_menu"],
+	"summon":["deploy_card","deploy_card_2","deploy_card_3"],
 	"swoosh":["swoosh"], "discard":["deploy_card","deploy_card_2","deploy_card_3"]
 }
 var _effect_variants: Dictionary = {}
@@ -63,6 +64,8 @@ func _ready() -> void:
 		for file in EFFECT_FILES[sound]: variants.append(load("res://res/audio/sfx/%s.wav" % file))
 		_effect_variants[sound] = variants
 		streams[sound] = variants[0]
+	streams["hover"] = load(HOVER_SOUND)
+	streams["card_hover"] = streams["hover"]
 	streams["blocked"] = load("res://res/audio/cardex-blockage.mp3")
 	streams["heavy"] = load("res://res/audio/cardex-heavy_punch.mp3")
 	for i in range(12):
@@ -204,7 +207,9 @@ func play(sound: String, bus: String = "SFX") -> void:
 		for other in players:
 			if other != player and other.playing and other.get_meta("sound","") == "denied": other.stop()
 	player.volume_db = DENY_LEVEL_DB if sound == "denied" else (-18 if sound in ["hover","card_hover","swoosh"] else -13)
-	if sound == "heavy":
+	if sound == "hover":
+		player.volume_db += linear_to_db(1.25)
+	elif sound == "heavy":
 		player.volume_db = -10.0
 	# Let short transients finish instead of cutting them off on every entry.
 	# A small voice limit prevents a rapid sweep from accumulating loudness.

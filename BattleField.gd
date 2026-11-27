@@ -136,9 +136,25 @@ func is_empty() -> bool:
 # 检查场上是否有嘲讽随从
 func has_any_taunt() -> bool:
 	for slot in slots:
-		if slot != null and slot.is_alive() and slot.has_taunt():
+		if slot != null and slot.is_selectable() and slot.has_taunt():
 			return true
 	return false
+
+func has_selectable_units() -> bool:
+	for card: CardData in slots:
+		if card != null and card.is_selectable():
+			return true
+	return false
+
+func can_swap_unit_positions() -> bool:
+	var available := 0
+	var has_source := false
+	for card: CardData in slots:
+		if card != null and not card.is_selectable():
+			continue
+		available += 1
+		has_source = has_source or card != null
+	return has_source and available > 1
 
 
 # ========== 伤害/治疗 ==========

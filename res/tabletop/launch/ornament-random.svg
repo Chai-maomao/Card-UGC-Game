@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="400" height="400" viewBox="0 0 400 400">
+  <defs>
+    <radialGradient id="glow"><stop stop-color="#fff" stop-opacity=".075"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+  </defs>
+  <circle cx="207" cy="209" r="190" fill="url(#glow)"/>
+  <g stroke="#fff" stroke-width="1.35" fill="none">
+    <circle cx="204" cy="202" r="150" opacity=".085"/>
+    <circle cx="204" cy="202" r="141" stroke-width="3" stroke-dasharray="1 12" opacity=".12"/>
+    <path d="M57 264C116 338 260 329 326 263C386 203 338 142 297 115" opacity=".15"/>
+    <path d="M100 288C130 320 211 331 260 311" opacity=".10"/>
+    <g opacity=".20" transform="rotate(-20 158 180)">
+      <rect x="117" y="139" width="82" height="82" rx="13"/>
+      <circle cx="138" cy="160" r="3"/><circle cx="158" cy="180" r="3"/><circle cx="178" cy="200" r="3"/>
+    </g>
+    <g opacity=".19" transform="rotate(22 248 232)">
+      <rect x="207" y="191" width="82" height="82" rx="13"/>
+      <circle cx="228" cy="212" r="3"/><circle cx="268" cy="212" r="3"/>
+      <circle cx="228" cy="252" r="3"/><circle cx="268" cy="252" r="3"/>
+    </g>
+  </g>
+</svg>

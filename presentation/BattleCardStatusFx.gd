@@ -10,8 +10,9 @@ func _process(delta: float) -> void:
 	if not is_instance_valid(battle) or battle.tabletop == null: return
 	for side in [1,2]:
 		var field: BattleField = battle.game.player_field if side==1 else battle.game.player2_field
-		for index in range(field.slots.size()):
-			var card: CardData = field.slots[index]
+		var slots: Array = battle._random_visible_slots(side, field.slots)
+		for index in range(slots.size()):
+			var card: CardData = slots[index]
 			if card == null or not card.is_alive(): continue
 			var statuses: Array[String] = []
 			if card.is_silenced(): statuses.append("silence")

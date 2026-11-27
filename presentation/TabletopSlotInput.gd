@@ -25,19 +25,32 @@ func _gui_input(event: InputEvent) -> void:
 	accept_event()
 
 func _can_drop_data(_at: Vector2, data: Variant) -> bool:
+	if data is Dictionary and data.has("enemy_swap_source"):
+		return opposing and battle.can_drop_enemy_swap(data, index)
 	return data is Dictionary and data.get("card_data") is CardData
 
 func _drop_data(_at: Vector2, data: Variant) -> void:
+	if data.has("enemy_swap_source"):
+		battle.drop_enemy_swap(data, index)
+		return
 	slot.card_dropped_here.emit(data.card_data,data.get("card_ui"))
 
 func _get_drag_data(at: Vector2) -> Variant:
 	dragging = true
 	battle.tabletop_selected_hand = null
 	if is_instance_valid(battle.card_inspector): battle.card_inspector.hide()
-	if opposing or not battle.is_my_turn() or slot.current_card_data == null: return null
+	if opposing:
+		var swap: Dictionary = battle.enemy_swap_drag_payload(index)
+		if swap.is_empty():
+			return null
+		var card: CardData = slot.current_card_data
+		set_drag_preview(Preview.make(card, at, battle.tabletop.drag_portrait(index + 5, card)))
+		return swap
+	if not battle.is_my_turn() or slot.current_card_data == null: return null
 	var source: Control = slot.current_card_ui
 	if source != null:
-		set_drag_preview(Preview.make(slot.current_card_data,at))
+		var card: CardData = slot.current_card_data
+		set_drag_preview(Preview.make(card, at, battle.tabletop.drag_portrait(index, card)))
 	return {"card_data":slot.current_card_data,"card_ui":null}
 
 func _ready() -> void:

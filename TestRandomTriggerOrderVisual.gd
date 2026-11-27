@@ -8,6 +8,7 @@ func _verify() -> void:
 	get_window().size = Vector2i(1280,720)
 	GamePreferences.set_animation_acceleration(true)
 	var wheel: CanvasLayer = battle.get_node("RandomWheelPresentation")
+	var status_fx = battle.get_node("CanvasLayer/BattleCardStatusFx")
 	for trigger in ["on_attack","on_damaged","parasite","on_death","on_healed","on_summon","on_turn_end","on_turn_start"]:
 		await _idle(wheel)
 		battle.game.current_player = 1
@@ -27,6 +28,13 @@ func _verify() -> void:
 		match trigger:
 			"on_attack":
 				attacker.hp = 3
+				skill.effects = [{"effect":"add_buff","target":"all_enemies","buff_id":"silence","value":1,"duration":1,"probability":50}]
+				var success_rng := RandomNumberGenerator.new()
+				for seed_value in range(64):
+					success_rng.seed = seed_value
+					if success_rng.randf() <= 0.5:
+						battle.game.game_rng.seed = seed_value
+						break
 				attacker.skills = [skill]
 			"on_damaged": defender.skills=[skill]
 			"parasite":
@@ -74,6 +82,8 @@ func _verify() -> void:
 		while wheel.history.size()==before_count:
 			assert(Time.get_ticks_msec()<deadline,"trigger never reached its wheel: "+trigger)
 			await get_tree().process_frame
+			if trigger == "on_attack":
+				assert(not _silence_visible(status_fx), "silence must stay off the board until the wheel reveals its result")
 		var left: Control = battle.player_side_ui.get_child(0)
 		var right: Control = battle.enemy_side_ui.get_child(0)
 		var shown_attacker := before_attacker + (1 if trigger == "on_healed" else 0)
@@ -89,7 +99,14 @@ func _verify() -> void:
 		if trigger in ["parasite","on_death"]:
 			await RenderingServer.frame_post_draw
 			get_viewport().get_texture().get_image().save_png("res://artifacts/hand-overlap-20261115/random-order-"+trigger+".png")
+		if trigger == "on_attack":
+			while wheel.busy:
+				assert(not _silence_visible(status_fx), "the silence badge must remain hidden while the wheel is on screen")
+				await get_tree().process_frame
 		await _idle(wheel)
+		if trigger == "on_attack":
+			assert(wheel.history.back().chance_scope == "effect" and wheel.history.back().success, "the fixture must resolve a successful 50% effect roll")
+			assert(defender.is_silenced() and _silence_visible(status_fx), "the silence badge must appear after the successful wheel")
 		assert(not battle._playing_random_action and battle._random_board_override.is_empty(),"trigger chain must restore normal presentation")
 	# A lethal attack records its ordinary hit before cleanup discovers the
 	# death passive. The remote packet must preserve that order.
@@ -144,3 +161,7 @@ func _idle(wheel: CanvasLayer) -> void:
 		assert(Time.get_ticks_msec()<deadline,"trigger chain remained locked")
 		await get_tree().process_frame
 	await get_tree().create_timer(.45).timeout
+
+
+func _silence_visible(status_fx: Node) -> bool:
+	return status_fx.effects.values().any(func(entry): return "silence" in entry.statuses)

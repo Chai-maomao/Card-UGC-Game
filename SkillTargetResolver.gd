@@ -23,6 +23,10 @@ static func is_directed_target(target_str: String) -> bool:
 	return target_str in [TARGET_SELF, TARGET_SELF_SIDES, TARGET_SINGLE, TARGET_SIDES]
 
 
+static func uses_selected_unit(target_str: String) -> bool:
+	return target_str in [TARGET_SINGLE, TARGET_SIDES]
+
+
 static func default_target_side(target_str: String) -> String:
 	# Legacy save compat: old cards may store the pre-combined "all_enemies" /
 	# "all_allies" targets; map them to their implicit side.
@@ -51,6 +55,8 @@ static func normalize_effect_target(eff: Dictionary) -> Dictionary:
 	elif target_str == "all_allies":
 		normalized["target"] = TARGET_ALL
 		normalized["target_side"] = TARGET_SIDE_ALLY
+	elif uses_selected_unit(target_str) and normalized.get("effect") != "make_zero_cost":
+		normalized.erase("target_side")
 	# An unset target / side is deliberately left empty: the editor renders
 	# empty sockets ("+ 选择目标" / "+ 选择阵营") until the user picks a value,
 	# and SkillErrorChecker flags the missing field as an error.
@@ -62,9 +68,9 @@ static func resolve_targets(target_str: String, source_card: CardData, context: 
 		TARGET_SELF:
 			return [source_card]
 		TARGET_SINGLE:
-			return _resolve_directed_target(source_card, context, false, target_side)
+			return _resolve_directed_target(source_card, context, false)
 		TARGET_SIDES:
-			return _resolve_directed_target(source_card, context, true, target_side)
+			return _resolve_directed_target(source_card, context, true)
 		TARGET_SELF_SIDES:
 			return _resolve_self_adjacent(source_card, context)
 		# Legacy save compat: un-normalized old cards may still carry the
@@ -88,6 +94,10 @@ static func resolve_targets(target_str: String, source_card: CardData, context: 
 
 
 static func enemy_field_of_source(source_card: CardData, context: Dictionary) -> BattleField:
+	var party_fields: Callable = context.get("party_fields", Callable())
+	if party_fields.is_valid():
+		var enemies: Array = party_fields.call(source_card, TARGET_SIDE_ENEMY)
+		return enemies.front() if not enemies.is_empty() else null
 	var pf: BattleField = context.get("player_field")
 	var ef: BattleField = context.get("enemy_field")
 	if pf != null and source_card in pf.slots:
@@ -98,14 +108,12 @@ static func enemy_field_of_source(source_card: CardData, context: Dictionary) ->
 
 
 static func targets_include_enemy(targets: Array, source_card: CardData, context: Dictionary) -> bool:
-	var enemy_field: BattleField = enemy_field_of_source(source_card, context)
-	if enemy_field == null:
-		return false
-	for t in targets:
-		if t == enemy_field:
-			return true
-		if t != null and t in enemy_field.slots:
-			return true
+	for enemy_field: BattleField in _fields_for_side(source_card, context, TARGET_SIDE_ENEMY):
+		if enemy_field == null:
+			continue
+		for target in targets:
+			if target == enemy_field or (target != null and target in enemy_field.slots):
+				return true
 	return false
 
 
@@ -119,26 +127,30 @@ static func _source_field_of(source_card: CardData, context: Dictionary) -> Batt
 	return pf
 
 
-static func _resolve_directed_target(source_card: CardData, context: Dictionary, include_sides: bool, target_side: String = TARGET_SIDE_ENEMY) -> Array:
+static func _resolve_directed_target(source_card: CardData, context: Dictionary, include_sides: bool) -> Array:
 	var target_slot: int = context.get("target_slot", -1)
 	if target_slot < 0:
 		return []
-	var field: BattleField = _directed_target_field(source_card, context, target_side)
+	var field := _directed_target_field(source_card, context)
 	if field == null:
 		return []
 	# A response targets the actual damage/heal initiator. An incompatible
 	# side or an off-board spell must not select an unrelated same-slot unit.
 	if context.has("reaction_target_card") and (target_slot >= field.slots.size() or field.slots[target_slot] != context.reaction_target_card):
 		return []
-	return _cards_around_slot(field, target_slot, include_sides)
+	if target_slot >= field.slots.size():
+		return []
+	var selected: CardData = field.slots[target_slot]
+	if selected == null or selected == source_card or not selected.is_selectable():
+		return []
+	var targets := _cards_around_slot(field, target_slot, include_sides)
+	targets.erase(source_card)
+	return targets
 
 
-static func _directed_target_field(source_card: CardData, context: Dictionary, target_side: String) -> BattleField:
-	match target_side:
-		TARGET_SIDE_ALLY:
-			return _source_field_of(source_card, context)
-		TARGET_SIDE_ENEMY:
-			return enemy_field_of_source(source_card, context)
+static func _directed_target_field(source_card: CardData, context: Dictionary) -> BattleField:
+	if context.has("selected_unit_field"):
+		return context.selected_unit_field
 	var target_player := int(context.get("target_player", 0))
 	var current_player := int(context.get("current_player", 0))
 	if target_player in [1, 2] and current_player in [1, 2]:
@@ -149,6 +161,9 @@ static func _directed_target_field(source_card: CardData, context: Dictionary, t
 static func _player_target_field(source_card: CardData, context: Dictionary, target_side: String) -> BattleField:
 	match target_side:
 		TARGET_SIDE_ALLY:
+			var spell_field: BattleField = context.get("party_spell_field")
+			if spell_field != null and source_card != null and source_card.is_spell():
+				return spell_field
 			return _source_field_of(source_card, context)
 		TARGET_SIDE_ENEMY:
 			return enemy_field_of_source(source_card, context)
@@ -181,19 +196,21 @@ static func _cards_around_slot(field: BattleField, center: int, include_sides: b
 	return result
 
 
-static func _resolve_cards_by_side(source_card: CardData, context: Dictionary, target_side: String) -> Array:
-	var result: Array = []
-	var source_field := _source_field_of(source_card, context)
-	var enemy_field := enemy_field_of_source(source_card, context)
-	var fields: Array = []
+static func _fields_for_side(source_card: CardData, context: Dictionary, target_side: String) -> Array:
+	var party_fields: Callable = context.get("party_fields", Callable())
+	if party_fields.is_valid():
+		return party_fields.call(source_card, target_side)
 	match target_side:
 		TARGET_SIDE_ENEMY:
-			fields = [enemy_field]
+			return [enemy_field_of_source(source_card, context)]
 		TARGET_SIDE_ALLY:
-			fields = [source_field]
-		_:
-			fields = [enemy_field, source_field]
-	for field in fields:
+			return [_source_field_of(source_card, context)]
+	return [enemy_field_of_source(source_card, context), _source_field_of(source_card, context)]
+
+
+static func _resolve_cards_by_side(source_card: CardData, context: Dictionary, target_side: String) -> Array:
+	var result: Array = []
+	for field: BattleField in _fields_for_side(source_card, context, target_side):
 		if field == null:
 			continue
 		for slot in field.slots:

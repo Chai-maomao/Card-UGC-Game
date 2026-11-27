@@ -77,7 +77,8 @@ func _ready() -> void:
 	block = _find_effect_block(sed, SkillEngine.EFFECT_DAMAGE)
 	side_slot = _find_target_slot(block, "side")
 	tgt_slot = _find_target_slot(block, "target")
-	_assert(side_slot != null and side_slot.visible, "side slot should appear after picking a directed target")
+	_assert(side_slot != null and not side_slot.visible and not ed_init[0].has("target_side"),
+			"a chosen target must hide the side slot and drop legacy faction data")
 	_assert(tgt_slot != null, "target slot missing after refresh")
 
 	# --- Sentence order: side slot comes before the target slot --------------
@@ -95,6 +96,10 @@ func _ready() -> void:
 	_assert(row.get_child(first_slot).kind == "side", "first slot is not side")
 	_assert(row.get_child(second_slot).kind == "target", "second slot is not target")
 
+	# A unit filter still has an independent faction socket.
+	tgt_slot.call("_drop_var", Vector2.ZERO, {"type": "target_block", "value": SkillEngine.TARGET_ALL})
+	_assert(side_slot.visible, "a whole-field filter must show the side slot")
+
 	# --- Drop a side reporter -> eff.target_side updates ---------------------
 	var side_payload := {"type": "side_block", "value": SkillEngine.TARGET_SIDE_ENEMY}
 	_assert(side_slot.call("_can_drop_var", Vector2.ZERO, side_payload), "side slot rejects side_block")
@@ -104,12 +109,12 @@ func _ready() -> void:
 			"side drop failed (side=%s)" % str(ed[0].get("target_side", "?")))
 
 	# --- Drop a target reporter -> eff.target updates ------------------------
-	var tgt_payload := {"type": "target_block", "value": SkillEngine.TARGET_ALL}
+	var tgt_payload := {"type": "target_block", "value": SkillEngine.TARGET_SIDES}
 	_assert(tgt_slot.call("_can_drop_var", Vector2.ZERO, tgt_payload), "target slot rejects target_block")
 	_assert(not tgt_slot.call("_can_drop_var", Vector2.ZERO, side_payload), "target slot accepted a side_block")
 	tgt_slot.call("_drop_var", Vector2.ZERO, tgt_payload)
 	ed = sed.get("effect_data")
-	_assert(str(ed[0].get("target", "")) == SkillEngine.TARGET_ALL,
+	_assert(str(ed[0].get("target", "")) == SkillEngine.TARGET_SIDES and not side_slot.visible and not ed[0].has("target_side"),
 			"target drop failed (target=%s)" % str(ed[0].get("target", "?")))
 
 	# --- Drag the chip out -> palette drop restores the default --------------
@@ -124,48 +129,24 @@ func _ready() -> void:
 	_assert(str(ed[0].get("target", "")) == "",
 			"palette drop must leave an empty target (target=%s)" % str(ed[0].get("target", "?")))
 
-	# --- Click-to-pick path writes the same field (menu semantics) -----------
-	# Emulate the menu's selection handler directly on the slot.
-	tgt_slot.call("setup", ed[0], "target")
-	tgt_slot.data["target"] = SkillEngine.TARGET_SELF_SIDES
-	tgt_slot.call("_rebuild")
-	ed = sed.get("effect_data")
-	_assert(str(ed[0].get("target", "")) == SkillEngine.TARGET_SELF_SIDES, "target pick write failed")
-
-	# --- Round-trip: saved skill keeps target + target_side ------------------
-	var saved: Dictionary = sed.call("_build_skill")
-	PlayerData.card_draft["skill2"] = saved
-	var dict: Dictionary = PlayerData.serialize_card(CardData.new("T", 1, 1, 1, [saved]))
-	var loaded: CardData = PlayerData.deserialize_card(JSON.parse_string(JSON.stringify(dict)))
-	var s2: Dictionary = loaded.skills[0]
-	var effs: Array = s2.get("effects", [])
-	_assert(effs.size() == 1, "round-trip effects lost")
-	if effs.size() == 1:
-		_assert(str((effs[0] as Dictionary).get("target", "")) == SkillEngine.TARGET_SELF_SIDES, "round-trip target lost")
-		_assert(str((effs[0] as Dictionary).get("target_side", "")) == SkillEngine.TARGET_SIDE_ENEMY, "round-trip target_side lost")
-
-	# --- Directed target + 全体 is now a compile error (no more gray-out) ----
-	var ie_ed: Array = sed.get("effect_data")
-	ie_ed[0]["target"] = SkillEngine.TARGET_SINGLE
-	ie_ed[0]["target_side"] = SkillEngine.TARGET_SIDE_ALL
+	# Reopen an existing skill with the old all-side data and verify compilation and round-trip output.
+	tgt_slot.call("_drop_var", Vector2.ZERO, {"type": "target_block", "value": SkillEngine.TARGET_SIDES})
+	ed[0]["target_side"] = SkillEngine.TARGET_SIDE_ALL
+	ed[0]["value"] = 1
 	sed.call("_refresh_script")
 	await get_tree().process_frame
-	var errs: Array = sed.call("_collect_errors")
-	var has_ineff := false
-	for e in errs:
-		if str(e) == Locale.t("skill_editor.error_target_ineffective"):
-			has_ineff = true
-	_assert(has_ineff, "single+all must be reported as a compile error (got: %s)" % str(errs))
-	# The save button must refuse: the card draft stays untouched (so the
-	# invalid skill can never be written into card_library.json).
-	var draft_before: Dictionary = PlayerData.card_draft["skill2"]
-	sed.call("_on_save_pressed")
-	await get_tree().process_frame
-	_assert(PlayerData.card_draft["skill2"] == draft_before, "save must not write an invalid skill into the draft")
-	for button: Button in sed.find_children("*", "Button", true, false):
-		if button.text == Locale.t("common.confirm") and button.is_visible_in_tree():
-			button.pressed.emit()
-			break
+	if DisplayServer.get_name() != "headless" and "--capture-slot-swap" in OS.get_cmdline_user_args():
+		await RenderingServer.frame_post_draw
+		_assert(get_viewport().get_texture().get_image().save_png("res://artifacts/chosen-unit-skill.png") == OK,
+			"could not save chosen-target screenshot")
+	var errors: Array = sed.call("_collect_errors")
+	_assert(errors.is_empty(), "chosen targets must compile without a faction: %s" % str(errors))
+	var saved: Dictionary = sed.call("_build_skill")
+	var encoded := PlayerData.serialize_card(CardData.new("T", 1, 1, 1, [saved]))
+	var loaded := PlayerData.deserialize_card(JSON.parse_string(JSON.stringify(encoded)))
+	var effects: Array = loaded.skills[0].get("effects", [])
+	_assert(effects.size() == 1 and effects[0].get("target") == SkillEngine.TARGET_SIDES and not effects[0].has("target_side"),
+			"round-trip must retain the chosen target without a faction")
 
 	await _check_slot_moves(sed)
 	_finish()
@@ -188,7 +169,7 @@ func _check_slot_moves(sed: Node) -> void:
 	destination.call("_drop_var", Vector2.ZERO, payload)
 	_assert(source.data.get("target") == SkillEngine.TARGET_SELF and destination.data.get("target") == SkillEngine.TARGET_SINGLE,
 			"occupied target slots must exchange both reporters")
-	_assert(not _find_target_slot(damage, "side").visible and _find_target_slot(shield, "side").visible,
+	_assert(not _find_target_slot(damage, "side").visible and not _find_target_slot(shield, "side").visible,
 			"both effects must refresh faction visibility after the exchange")
 	sed.call("_undo")
 	await get_tree().process_frame
@@ -214,7 +195,8 @@ func _check_slot_moves(sed: Node) -> void:
 			"moving a target into an empty socket must leave the source empty")
 	_assert(not _find_target_slot(damage, "side").visible, "empty source target must hide its faction slot")
 
-	source.call("_drop_var", Vector2.ZERO, {"type": "target_block", "value": SkillEngine.TARGET_SINGLE})
+	source.call("_drop_var", Vector2.ZERO, {"type": "target_block", "value": SkillEngine.TARGET_ALL})
+	destination.call("_drop_var", Vector2.ZERO, {"type": "target_block", "value": SkillEngine.TARGET_ALL})
 	var source_side := _find_target_slot(damage, "side")
 	var destination_side := _find_target_slot(shield, "side")
 	source_side.call("_drop_var", Vector2.ZERO, {"type": "side_block", "value": SkillEngine.TARGET_SIDE_ENEMY})

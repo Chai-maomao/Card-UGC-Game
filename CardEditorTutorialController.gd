@@ -138,7 +138,7 @@ func _build_ui() -> void:
 	instruction_panel.custom_minimum_size = Vector2(350, 248)
 	instruction_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	instruction_panel.z_index = 10
-	UITheme.apply_popup_frame(instruction_panel, "gold", false)
+	UITheme.apply_popup_frame(instruction_panel, "gold", false, true)
 	overlay_root.add_child(instruction_panel)
 	var margin := MarginContainer.new()
 	for side in ["left", "right", "top", "bottom"]:

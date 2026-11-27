@@ -1,6 +1,7 @@
 extends "res://BattleMainPresentation.gd"
 
 const MAX_PROCESSED_COMMANDS := 256
+const ActionClock = preload("res://BattleActionClock.gd")
 var _processed_command_ids: Dictionary = {}
 var _opponent_playback: Array[Dictionary] = []
 var _opponent_playback_due := 0
@@ -8,12 +9,97 @@ var _opponent_playback_last := -1000
 var _authority_playback_running := false
 var _opponent_playback_busy := false
 var _room_checkpoint_revision := -1
+var _action_clock := ActionClock.new()
+var _action_timer: Control
+
+
+func _ready() -> void:
+	super._ready()
+	_action_timer = preload("res://presentation/BattleActionTimer.gd").new()
+	var row: HBoxContainer = end_turn_button.get_parent()
+	row.add_child(_action_timer)
+	row.move_child(_action_timer, end_turn_button.get_index())
+	_action_timer.visibility_changed.connect(_align_turn_label)
+	_action_timer.minimum_size_changed.connect(_align_turn_label)
+	_apply_responsive_layout()
+
+
+func _notification(what: int) -> void:
+	if game != null and what in [NOTIFICATION_PAUSED, NOTIFICATION_UNPAUSED]:
+		_tick_action_clock(true)
 
 
 func _process(delta: float) -> void:
 	_process_opponent_playback()
 	super._process(delta)
 	_sync_online_cost_picker()
+	_process_action_timer()
+
+
+func _process_action_timer() -> void:
+	if game == null or _action_timer == null:
+		return
+	if battle_finished or (_challenge_controller != null and _challenge_controller.finished) \
+		or PlayerData.battle_mode == "tutorial" or not ActionClock.enabled(game.battle_config):
+		_action_timer.hide()
+		return
+	var paused := _action_clock_paused()
+	var timed_out := _tick_action_clock(paused)
+	_action_timer.present(_action_clock.remaining_ms, _action_clock.limit_ms, paused)
+	if timed_out and (not PlayerData.is_online_battle() or NetworkManager.is_authority()):
+		_end_timed_out_turn()
+
+
+func _action_clock_paused() -> bool:
+	return (_opening_coin_active or match_paused or _waiting_for_room_link() or _turn_ending
+		or not game.is_player_turn or _authority_playback_running or is_resolution_locked()
+		or _deployment_feedback_delay() > 0 or _result_waiting_for_feedback
+		or (_challenge_controller != null and is_instance_valid(_challenge_controller.popup_layer))
+		or (PlayerData.battle_mode == "practice" and game.current_player == 2))
+
+
+func _tick_action_clock(paused: bool) -> bool:
+	return _action_clock.tick(game.battle_config, Vector2i(game.turn_number, game.current_player),
+		game.effective_actions_this_turn, paused, Time.get_ticks_msec())
+
+
+func _network_battle_state() -> Dictionary:
+	_tick_action_clock(_action_clock_paused())
+	var state := super._network_battle_state()
+	state["_action_clock_ms"] = _action_clock.remaining_ms
+	return state
+
+
+func _apply_authority_state(state: Dictionary, label: String = "authority") -> void:
+	super._apply_authority_state(state, label)
+	var remaining: Variant = state.get("_action_clock_ms")
+	if (remaining is int or remaining is float) and is_finite(float(remaining)):
+		_tick_action_clock(true)
+		_action_clock.remaining_ms = int(clampf(float(remaining), 0, _action_clock.limit_ms))
+
+
+func _end_timed_out_turn() -> void:
+	if not game.is_player_turn or _turn_ending:
+		return
+	get_viewport().gui_cancel_drag()
+	cancel_attack()
+	for picker in get_tree().get_nodes_in_group("battle_timed_choice"):
+		if is_ancestor_of(picker):
+			picker.queue_free()
+	_show_combat_broadcast(Locale.t("battle.action_timed_out"))
+	if is_instance_valid(_online_cost_picker):
+		_online_cost_picker.set_meta("submitted", true)
+		_online_cost_picker.queue_free()
+	game.pending_cost_choices.clear()
+	if PlayerData.is_online_battle():
+		_record_feedback_event("broadcast_text", game.current_player, -1, {"text_key": "battle.action_timed_out"})
+		_turn_ending = true
+		await _host_apply_end_turn(game.current_player, face_mana_button.button_pressed)
+		_turn_ending = false
+		_reset_face_mana_toggle()
+		update_entire_screen()
+	else:
+		await _finish_end_turn(face_mana_button.button_pressed)
 
 
 func _enqueue_opponent_playback(entry: Dictionary) -> void:
@@ -53,6 +139,8 @@ func is_my_turn() -> bool:
 
 func _owns_current_turn() -> bool:
 	if _opening_coin_active or battle_finished or _result_waiting_for_feedback or match_paused or _waiting_for_action_state() or not game.is_player_turn or _waiting_for_room_link(): return false
+	if _challenge_controller != null and _challenge_controller.finished: return false
+	if not game.pending_cost_choices.is_empty(): return false
 	if _confirmed_game != null and not game.check_game_over().is_empty():
 		return false
 	if PlayerData.is_online_battle() and not NetworkManager.is_authority() and NetworkManager.pending_game_command_count() > 0 and not _can_continue_web_turn():
@@ -61,7 +149,6 @@ func _owns_current_turn() -> bool:
 		if PlayerData.battle_mode == "practice":
 			return game.current_player == 1 and not practice_ai_running
 		return true
-	if not game.pending_cost_choices.is_empty(): return false
 	return game.current_player == my_player
 
 func _turn_request_playback_pending() -> bool:
@@ -142,6 +229,7 @@ func _pause_for_reconnect() -> void:
 		var last: Dictionary = _opponent_playback.back()["state"]
 		if int(last.get("state_revision", -1)) >= game.state_revision:
 			game.apply_initial_state(last)
+			_restore_local_art_paths()
 	_opponent_playback.clear()
 	if game != null:
 		NetworkManager.save_match_snapshot(game.export_initial_state())
@@ -307,7 +395,7 @@ func _on_rpc_resume_state_requested(requesting_player: int, known_revision: int,
 	_resume_waiting_for_player = requesting_player
 	_resume_expected_revision = game.state_revision
 	_resume_waiting_nonce = nonce
-	NetworkManager.rpc_resume_state.rpc(game.export_initial_state(), my_player, requesting_player, nonce)
+	NetworkManager.rpc_resume_state.rpc(_network_battle_state(), my_player, requesting_player, nonce)
 
 
 func _on_rpc_resume_state_received(state: Dictionary, source_player: int, target_player: int, nonce: String) -> void:
@@ -442,7 +530,7 @@ func _on_rpc_initial_state_requested(_peer_id: int):
 		return
 	if not _has_online_prediction():
 		_broadcast_authority_state("initial request")
-	NetworkManager.send_initial_state(game.export_initial_state())
+	NetworkManager.send_initial_state(_network_battle_state())
 
 
 func _on_rpc_authority_state(state: Dictionary):
@@ -497,7 +585,7 @@ func _accept_authority_snapshot(state: Dictionary, label: String) -> void:
 
 func _send_current_state_for_command(command_id: String, status: String) -> void:
 	NetworkManager.set_next_authority_ack(command_id, status)
-	NetworkManager.broadcast_authority_state(game.export_initial_state())
+	NetworkManager.broadcast_authority_state(_network_battle_state())
 
 
 func _remember_processed_command(command_id: String, status: String) -> void:
@@ -581,12 +669,12 @@ func _rebuild_web_predictions() -> void:
 
 
 func _execute_network_command(kind: String, payload: Dictionary, player: int) -> void:
-	if battle_finished or not game.check_game_over().is_empty():
+	if battle_finished or not game.is_player_turn or not game.check_game_over().is_empty():
 		return
 	if kind == "activate_skill" and payload.has("cost_choice"):
 		var index: Variant = payload.cost_choice
 		if not _simulating_web_command and not match_paused and (index is int or index is float) \
-				and index >= -1 and index < SkillEngine.MAX_HAND_SIZE and index == floor(index):
+				and index >= -1 and index < 25 and index == floor(index):
 			_resolve_online_cost_choice(player, int(index))
 		return
 	if not game.pending_cost_choices.is_empty(): return
@@ -606,7 +694,7 @@ func _execute_network_command(kind: String, payload: Dictionary, player: int) ->
 			elif _is_spell_intent_source(slot_index):
 				_host_apply_cast(_spell_hand_index_from_intent(slot_index), skill_index, target_slot, player, int(payload.get("target_player", 0)))
 			else:
-				_host_apply_skill(slot_index, skill_index, target_slot, player)
+				_host_apply_skill(slot_index, skill_index, target_slot, player, int(payload.get("target_player", 0)))
 		"end_turn":
 			await _host_apply_end_turn(player, payload.get("allow_face_mana", true) == true)
 		"discard":
@@ -653,7 +741,7 @@ func _host_auto_resolve_summon_skills(slot_index: int, player: int) -> void:
 		if not _summon_skill_is_pending(card, skill_index):
 			continue
 		var skill: Dictionary = card.skills[skill_index]
-		if _skill_needs_targeting(skill) and _summon_skill_has_live_manual_target(skill, player):
+		if _skill_needs_targeting(skill) and _summon_skill_has_live_manual_target(skill, player, card):
 			continue
 		_host_apply_summon_skill(slot_index, skill_index, -1, player, 0, false)
 		card = field.slots[slot_index]
@@ -676,6 +764,8 @@ func _host_apply_summon_skill(slot_index: int, skill_index: int, target_slot: in
 	var resolved_target_player := target_player if target_player in [1, 2] else _opponent_of_player(player)
 	var target_field := _field_for_player(resolved_target_player)
 	var target_card: CardData = target_field.slots[target_slot] if target_slot >= 0 and target_slot < target_field.slots.size() else null
+	if target_slot >= 0 and SpellRules.needs_target(skill) and not SpellRules.can_select_unit(skill, source_card, target_field, target_slot, resolved_target_player != player, game.turn_number):
+		return
 	if not _simulating_web_command:
 		_begin_action_broadcast("summon_skill", player, source_card.card_name if source_card != null else Locale.t("battle.log.unit"), target_card.card_name if target_card != null else "", {"skill": skill.get("skill_name", Locale.t("battle.log.skill_word"))})
 	var saved = game.current_player
@@ -690,6 +780,8 @@ func _host_apply_summon_skill(slot_index: int, skill_index: int, target_slot: in
 		if commit_state:
 			_commit_authority_state("summon skill")
 		return
+	if SpellRules.needs_target(skill):
+		_record_directed_action(player, slot_index, resolved_target_player, target_slot)
 	_finish_action_broadcast()
 	_play_skill_cast_feedback(player, slot_index, skill_index)
 	_record_feedback_event("skill", player, slot_index, {"skill_index":skill_index})
@@ -733,9 +825,8 @@ func _host_apply_attack(source_slot: int, target_slot: int, player: int) -> void
 		return
 	if victim != null and not victim.is_alive():
 		_action_broadcast["kill_mana"] = true
+	_record_directed_action(player, source_slot, _opponent_of_player(player), target_slot, true)
 	_finish_action_broadcast()
-	_play_attack_feedback(player, source_slot, target_slot)
-	_record_feedback_event("attack", player, source_slot, {"target_slot": target_slot})
 	_apply_deaths()
 	_check_charm_overflow()
 	_refresh_hand_ui()
@@ -746,7 +837,7 @@ func _host_apply_attack(source_slot: int, target_slot: int, player: int) -> void
 	_commit_authority_state("attack")
 
 
-func _host_apply_skill(slot_index: int, skill_index: int, target_slot: int, player: int) -> void:
+func _host_apply_skill(slot_index: int, skill_index: int, target_slot: int, player: int, target_player: int = 0) -> void:
 	if match_paused or not (_simulating_web_command or NetworkManager.is_authority()) or player != game.current_player:
 		return
 	var source_field := _field_for_player(player)
@@ -755,9 +846,13 @@ func _host_apply_skill(slot_index: int, skill_index: int, target_slot: int, play
 	var source_card: CardData = source_field.slots[slot_index]
 	if source_card == null or skill_index < 0 or skill_index >= source_card.skills.size():
 		return
-	var enemy_field := _field_for_player(_opponent_of_player(player))
-	var target_card: CardData = enemy_field.slots[target_slot] if target_slot >= 0 and target_slot < enemy_field.slots.size() else null
 	var skill: Dictionary = source_card.skills[skill_index]
+	var directed := SpellRules.needs_target(skill)
+	var side := target_player if target_player in [1, 2] else 3 - player
+	var target_field := _field_for_player(side)
+	var target_card: CardData = target_field.slots[target_slot] if target_slot in range(target_field.slots.size()) else null
+	if directed and not SpellRules.can_select_unit(skill, source_card, target_field, target_slot, side != player, game.turn_number):
+		return
 	if source_card == null or source_card.skills_used.has(skill_index) \
 			or str(skill.get("trigger", "")) != SkillEngine.TRIGGER_ON_ACTIVATE \
 			or not SkillEngine.has_uses_remaining(source_card, skill, skill_index):
@@ -769,7 +864,7 @@ func _host_apply_skill(slot_index: int, skill_index: int, target_slot: int, play
 	var saved = game.current_player
 	game.current_player = player
 	var card: CardData = game.active_field().slots[slot_index]
-	if not game.trigger_activate_skills(slot_index, target_slot, skill_index):
+	if not game.trigger_activate_skills(slot_index, target_slot, skill_index, side):
 		game.current_player = saved
 		if not _simulating_web_command:
 			_action_broadcast.clear()
@@ -779,6 +874,8 @@ func _host_apply_skill(slot_index: int, skill_index: int, target_slot: int, play
 		game.cleanup_deaths()
 		_commit_authority_state("activate skill")
 		return
+	if directed:
+		_record_directed_action(player, slot_index, side, target_slot)
 	_finish_action_broadcast()
 	_play_skill_cast_feedback(player, slot_index, skill_index)
 	_record_feedback_event("skill", player, slot_index, {"skill_index":skill_index})
@@ -814,6 +911,7 @@ func _host_apply_parasite(hand_index: int, target_player: int, target_slot: int,
 	if _simulating_web_command:
 		_commit_authority_state("attach parasite")
 		return
+	_record_directed_action(player, -1, target_player, target_slot, false, hand_index)
 	_finish_action_broadcast()
 	_refresh_hand_ui()
 	update_entire_screen()
@@ -834,10 +932,9 @@ func _host_apply_cast(hand_index: int, skill_index: int, target_slot: int, playe
 	if cast_check.get("needs_target", false):
 		var skill: Dictionary = cast_check.get("skill", {})
 		if resolved_target_player not in [1, 2]:
-			resolved_target_player = SpellRules.default_target_player(skill, player)
+			resolved_target_player = 3 - player
 		var target_field := _field_for_player(resolved_target_player)
-		var target_card: CardData = target_field.slots[target_slot] if target_slot >= 0 and target_slot < target_field.slots.size() else null
-		if target_card == null or not target_card.is_alive() or not SpellRules.target_player_matches_drop(skill, player, resolved_target_player):
+		if not SpellRules.can_select_unit(skill, spell_card, target_field, target_slot, resolved_target_player != player, game.turn_number):
 			return
 	if not _simulating_web_command:
 		_begin_action_broadcast("cast", player, spell_card.card_name if spell_card != null else Locale.t("battle.log.spell_word"), "")
@@ -854,6 +951,8 @@ func _host_apply_cast(hand_index: int, skill_index: int, target_slot: int, playe
 		game.cleanup_deaths()
 		_commit_authority_state("cast spell")
 		return
+	if cast_check.get("needs_target", false):
+		_record_directed_action(player, -1, resolved_target_player, target_slot, false, hand_index)
 	_finish_action_broadcast()
 	_play_skill_cast_feedback(player, -1)
 	_record_feedback_event("cast", player, -1)
@@ -922,7 +1021,7 @@ func _host_apply_move(source_slot: int, target_slot: int, player: int) -> void:
 
 
 func _host_apply_end_turn(player: int, allow_face_mana: bool = true) -> void:
-	if match_paused or not (_simulating_web_command or NetworkManager.is_authority()) or player != game.current_player:
+	if match_paused or not game.is_player_turn or not (_simulating_web_command or NetworkManager.is_authority()) or player != game.current_player:
 		return
 	if _simulating_web_command:
 		game.end_player_turn(allow_face_mana)
@@ -1093,6 +1192,7 @@ func _update_wait_hint_layout() -> void:
 		return
 	var s := _ui_scale()
 	var recovering := match_paused or _waiting_for_room_link()
+	var party_recovering := _is_party_battle() and recovering
 	var readable_size := ceili(_screen_pixels_in_ui(10))
 	var button_width := 0.0
 	if reconnect_leave_button:
@@ -1100,12 +1200,14 @@ func _update_wait_hint_layout() -> void:
 		reconnect_leave_button.add_theme_font_size_override("font_size", maxi(readable_size, int(12 * s)))
 		if recovering:
 			button_width = maxf(120.0 * s, reconnect_leave_button.get_combined_minimum_size().x)
-			reconnect_leave_button.offset_left = -button_width - 4.0 * s
+			reconnect_leave_button.anchor_left = 0.0 if party_recovering else 1.0
+			reconnect_leave_button.offset_left = 4.0 * s if party_recovering else -button_width - 4.0 * s
 			reconnect_leave_button.offset_right = -4.0 * s
 			reconnect_leave_button.offset_top = 4.0 * s
 			reconnect_leave_button.offset_bottom = -4.0 * s
 	var lbl := turn_wait_hint.get_node_or_null("Label")
 	if lbl:
+		lbl.visible = not party_recovering
 		var minimum_font_size := readable_size if recovering else 10
 		lbl.add_theme_font_size_override("font_size", maxi(minimum_font_size, int((14 if recovering else 15) * s)))
 		lbl.offset_left = 8.0 * s
@@ -1144,7 +1246,7 @@ func _toggle_turn_cover():
 		_update_wait_hint_layout()
 		var label := turn_wait_hint.get_node_or_null("Label")
 		if label:
-			if match_paused:
+			if match_paused and not _is_party_battle():
 				label.text = Locale.t("battle.reconnecting_progress", [_reconnect_attempt, _reconnect_elapsed_seconds])
 			elif command_pending and not link_waiting and not action_sync_pending:
 				label.text = Locale.t("battle.command_received" if _network_command_phase == "received" else "battle.command_sent")
@@ -1224,6 +1326,7 @@ func _open_battle_settings() -> void:
 	var settings := preload("res://presentation/BattlePause.gd").new()
 	settings.name = "BattleSettingsOverlay"
 	settings.settings_only = true
+	settings.battle = self
 	add_child(settings)
 
 
@@ -1261,7 +1364,7 @@ func _show_help_popup(field_rules_only: bool = false):
 
 	var panel := Panel.new()
 	panel.name = "BattleHelpPanel"
-	UITheme.apply_popup_frame(panel, "gold", false)
+	UITheme.apply_popup_frame(panel, "gold", false, true)
 	panel.clip_contents = true
 	panel.anchor_left = 0.15
 	panel.anchor_right = 0.85
@@ -1328,15 +1431,8 @@ func _record_match_history(outcome: String, result: String) -> void:
 	var online_match := my_player in [1, 2]
 	var mode := "online" if online_match else PlayerData.battle_mode
 	var history_game: RefCounted = _confirmed_game if _confirmed_game != null else game
-	var deck_names: Array[String] = []
-	for card in PlayerData.battle_deck:
-		if card is CardData:
-			deck_names.append(card.card_name)
-	var opponent_names: Array[String] = []
-	for card in PlayerData.opponent_battle_deck:
-		if card is CardData:
-			opponent_names.append(card.card_name)
-	var current_deck := PlayerData.get_current_deck()
+	var deck_faces := PlayerData.snapshot_history_cards(PlayerData.battle_deck)
+	var opponent_faces := PlayerData.snapshot_history_cards(PlayerData.opponent_battle_deck)
 	var local_is_p2 := my_player == 2
 	PlayerData.add_match_history({
 		"mode": mode,
@@ -1345,10 +1441,14 @@ func _record_match_history(outcome: String, result: String) -> void:
 		"turns": int(history_game.turn_number),
 		"player_hp": int(history_game.player2_field.player_hp if local_is_p2 else history_game.player_field.player_hp),
 		"opponent_hp": int(history_game.player_field.player_hp if local_is_p2 else history_game.player2_field.player_hp),
+		"player_max_hp": int(history_game.player2_field.max_player_hp if local_is_p2 else history_game.player_field.max_player_hp),
+		"opponent_max_hp": int(history_game.player_field.max_player_hp if local_is_p2 else history_game.player2_field.max_player_hp),
 		"local_player": my_player if online_match else 1,
-		"deck_name": str(current_deck.get("name", "")),
-		"deck_cards": deck_names,
-		"opponent_cards": opponent_names,
+		"deck_name": _history_deck_name,
+		"deck_cards": deck_faces.map(func(face: Dictionary): return face.name),
+		"opponent_cards": opponent_faces.map(func(face: Dictionary): return face.name),
+		"deck_card_faces": deck_faces,
+		"opponent_card_faces": opponent_faces,
 		"app_version": AppVersion.VERSION,
 		"duration": int(round(Time.get_unix_time_from_system() - _battle_started_at)),
 		"stats_p1": history_game.get_stats(1).duplicate(true),

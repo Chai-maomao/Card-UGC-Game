@@ -183,7 +183,8 @@ func _guide_layout(viewport: SubViewport, guide: BattleTutorialController, prefi
 	var panel := guide.instruction_panel.get_global_rect()
 	_check(screen.encloses(panel), "instruction panel must fit: " + prefix)
 	for control in [guide.body_label, guide.title_label, guide.next_button, guide.exit_button]:
-		_check(panel.encloses(control.get_global_rect()), "tutorial copy and navigation must fit: " + prefix)
+		_check(panel.encloses(control.get_global_rect()), "tutorial copy and navigation must fit: %s (%s, panel=%s, control=%s)" % [
+			prefix, control.name, panel, control.get_global_rect()])
 	for frame in guide.focus_frames:
 		_check(frame.visible and screen.encloses(frame.get_global_rect()), "focus must be visible and inside viewport: " + prefix)
 		_check(not panel.intersects(frame.get_global_rect()), "instruction panel must leave the highlighted element visible: " + prefix)
@@ -199,10 +200,14 @@ func _guide_layout(viewport: SubViewport, guide: BattleTutorialController, prefi
 
 func _settle(battle: Node) -> void:
 	var deadline := Time.get_ticks_msec() + 5000
+	# A click can queue feedback for the next frame before the animation locks input.
+	await get_tree().process_frame
 	while (battle.is_resolution_locked() or battle._turn_ending or (battle.splash_tween != null and battle.splash_tween.is_running())) and Time.get_ticks_msec() < deadline:
 		await get_tree().process_frame
 	await get_tree().create_timer(0.15).timeout
-	_check(not battle.is_resolution_locked() and not battle._turn_ending, "tutorial input must unlock after real feedback")
+	_check(not battle.is_resolution_locked() and not battle._turn_ending,
+			"tutorial input must unlock after real feedback (phase=%s, resolving=%s, HP feedback=%s, ending turn=%s)" % [
+				battle.tutorial_controller.phase, battle._resolution_running, battle._hp_feedback_running, battle._turn_ending])
 
 
 func _save(viewport: SubViewport, prefix: String) -> void:

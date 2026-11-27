@@ -17,11 +17,14 @@ var starting_player: int = 1
 var draw_callable: Callable
 var first_switch: bool = true
 var battle_config: Dictionary = {}
+var effective_actions_this_turn := 0
 var shared_deck: Array = []
 var shared_discard: Array = []
 var game_rng := RandomNumberGenerator.new()
 var state_revision: int = 0
 var pending_cost_choices: Array = []
+var manual_enemy_swaps := false
+var auto_enemy_swap_player := 0
 var quiet: bool = false
 var trace_callable: Callable
 var metrics_callable: Callable
@@ -191,7 +194,7 @@ func initialize_fields(config: Dictionary) -> void:
 
 
 func deal_opening_hands(test_card: CardData = null, opening_player: int = 1) -> void:
-	var opening_count: int = clampi(int(battle_config.get("draw_per_turn", 2)) + 1, 1, SkillEngine.MAX_HAND_SIZE)
+	var opening_count := opening_hand_size(battle_config)
 	if test_card != null:
 		# The dedicated test specimen is not shuffled into the shared deck: reserve
 		# one opening-hand slot for it, even when the normal opening already fills six.
@@ -207,6 +210,15 @@ func deal_opening_hands(test_card: CardData = null, opening_player: int = 1) -> 
 	current_player = starting_player
 	reset_action_budget(1)
 	reset_action_budget(2)
+
+
+static func opening_hand_size(config: Dictionary) -> int:
+	return clampi(int(config.get("draw_per_turn", PlayerData.DEFAULT_BATTLE_CONFIG["draw_per_turn"])) + 1, 1, SkillEngine.MAX_HAND_SIZE)
+
+
+static func first_response_resources(config: Dictionary, mana: int, draws: int) -> Vector2i:
+	return Vector2i(maxi(1, mana / 2) + int(config.get("second_extra_mana", 0)),
+		maxi(1, draws / 2) + int(config.get("second_extra_cards", 0)))
 
 
 func _reserve_playtest_helpers(hand: Array, player: int) -> void:
@@ -234,6 +246,7 @@ func export_initial_state() -> Dictionary:
 		"is_player_turn": is_player_turn,
 		"first_switch": first_switch,
 		"state_revision": state_revision,
+		"effective_actions_this_turn": effective_actions_this_turn,
 		"rng_seed": game_rng.seed,
 		"rng_state": game_rng.state,
 		"stats": {1: get_stats(1).duplicate(true), 2: get_stats(2).duplicate(true)},
@@ -267,8 +280,11 @@ func copy_for_simulation() -> RefCounted:
 	for property in ["is_player_turn", "turn_number", "current_player", "starting_player", "first_switch", "state_revision", "allow_first_turn_attacks"]:
 		copy.set(property, get(property))
 	copy.battle_config = battle_config.duplicate(true)
+	copy.effective_actions_this_turn = effective_actions_this_turn
 	copy.stats = stats.duplicate(true)
 	copy.pending_cost_choices = pending_cost_choices.duplicate(true)
+	copy.manual_enemy_swaps = manual_enemy_swaps
+	copy.auto_enemy_swap_player = auto_enemy_swap_player
 	copy.game_rng.seed = game_rng.seed
 	copy.game_rng.state = game_rng.state
 	copy.draw_callable = copy.draw_cards
@@ -313,6 +329,7 @@ func apply_initial_state(state: Dictionary, sync_preferences: bool = true) -> vo
 	is_player_turn = bool(state.get("is_player_turn", true))
 	first_switch = bool(state.get("first_switch", true))
 	state_revision = int(state.get("state_revision", state_revision))
+	effective_actions_this_turn = maxi(0, int(state.get("effective_actions_this_turn", 0)))
 	pending_cost_choices = state.get("pending_cost_choices", []).duplicate(true)
 	allow_first_turn_attacks = bool(state.get("allow_first_turn_attacks", false))
 	game_rng.seed = int(state.get("rng_seed", game_rng.seed))
@@ -438,6 +455,7 @@ func make_skill_context_for_player(player: int, source_slot: int = -1, target_sl
 		"draw_callable": Callable(self, "draw_cards_for_player").bind(player),
 		"hand_entry_callable": Callable(self, "resolve_hand_entry_for_player").bind(player),
 		"board_change_callable": Callable(self, "notify_board_units_changed"),
+		"enemy_swap_callable": Callable(self, "_request_enemy_slot_swap").bind(player),
 		"discard_card_callable": Callable(self, "finalize_card_discard"),
 		"current_player": player,
 		"active_hand": active_hand_for_context,
@@ -466,6 +484,7 @@ func make_reaction_context(reactor: CardData, context: Dictionary) -> Dictionary
 	# Keep the shared recursion budget/RNG and per-effect options. Rebind only
 	# battle-owned fields, hands and callbacks to the reacting unit's owner.
 	var reaction := context.duplicate()
+	reaction.erase("selected_unit_field")
 	reaction.merge(make_skill_context_for_player(owner, source_field.slots.find(reactor), cause_slot, cause_owner), true)
 	reaction["reaction_target_card"] = cause
 	return reaction
@@ -629,6 +648,7 @@ func discard_card_with_refund(card_data: CardData) -> int:
 
 
 func _refund_discard_mana(card_data: CardData) -> int:
+	effective_actions_this_turn += 1
 	var field := active_field()
 	var before := field.current_mana
 	field.add_mana(1)
@@ -648,6 +668,7 @@ func summon_card(card_data: CardData, slot_index: int) -> bool:
 	var temp_before := active_field().temp_mana
 	if not active_field().summon_card(card_data, slot_index):
 		return false
+	effective_actions_this_turn += 1
 	_stats_add(summoner, "summons", 1)
 	_stats_add(summoner, "mana_spent", card_data.cost)
 	_metric_payment(card_data, "summon", card_data.cost, 0, temp_before)
@@ -667,13 +688,18 @@ func attach_parasite(hand_index: int, target_player: int, target_slot: int) -> b
 	var attach_check: Dictionary = ParasiteRules.can_attach(card, target, active_field().get_total_mana())
 	if not attach_check.get("ok", false):
 		return false
+	effective_actions_this_turn += 1
 	var attacher := current_player
 	var temp_before := active_field().temp_mana
 	active_field().spend_mana(card.cost)
 	_metric_payment(card, "attach", card.cost, 0, temp_before)
 	hand.remove_at(hand_index)
-	ParasiteRules.attach(card, target)
-	_stats_add(attacher, "parasites", 1)
+	if _target_dodged(target):
+		card.reset_to_base()
+		shared_discard.append(card)
+	else:
+		ParasiteRules.attach(card, target)
+		_stats_add(attacher, "parasites", 1)
 	_stats_add(attacher, "mana_spent", card.cost)
 	card.clear_cost_modifiers_after_play()
 	return true
@@ -690,6 +716,10 @@ func cast_spell(hand_index: int, skill_index: int = SpellRules.CAST_SKILL_INDEX,
 	var cast_check: Dictionary = SpellRules.can_cast(card, active_field().get_total_mana(), skill_index, turn_number)
 	if not cast_check.get("ok", false):
 		return false
+	var normalized_skill: Dictionary = cast_check.get("skill", {})
+	if SpellRules.needs_target(normalized_skill) and not _can_select_directed_unit(normalized_skill, card, target_slot, target_player):
+		return false
+	effective_actions_this_turn += 1
 
 	var caster := current_player
 	var field := active_field()
@@ -699,13 +729,9 @@ func cast_spell(hand_index: int, skill_index: int = SpellRules.CAST_SKILL_INDEX,
 	_metric_payment(card, "cast", paid_cost, 0, temp_before)
 	hand.remove_at(hand_index)
 
-	var ctx := make_skill_context(-1, target_slot, target_player)
-	var normalized_skill: Dictionary = cast_check.get("skill", {})
 	if skill_index >= 0 and skill_index < card.skills.size():
 		card.skills[skill_index] = normalized_skill
-	_stats_listen(caster)
-	SkillEngine.trigger_single_skill(card, skill_index, ctx)
-	_stats_unlisten()
+	_resolve_directed_skill(card, -1, target_slot, skill_index, target_player)
 
 	_stats_add(caster, "spells", 1)
 	_stats_add(caster, "mana_spent", paid_cost)
@@ -720,13 +746,86 @@ func trigger_summon_skills(source_slot: int, target_slot: int, skill_index: int,
 	# Main._on_skill_activated routes them here so they don't consume the
 	# card's attack/action for the turn, unlike trigger_activate_skills.
 	var card: CardData = active_field().slots[source_slot]
-	if card != null:
-		if turn_number <= 1 and skill_index >= 0 and skill_index < card.skills.size() and SkillRegistry.skill_changes_enemy_hp_or_presence(card.skills[skill_index]):
+	if card != null and skill_index >= 0 and skill_index < card.skills.size():
+		if turn_number <= 1 and SkillRegistry.skill_changes_enemy_hp_or_presence(card.skills[skill_index]):
 			return
-		var actor := current_player
-		_stats_listen(actor)
-		SkillEngine.trigger_single_skill(card, skill_index, make_skill_context(source_slot, target_slot, target_player))
-		_stats_unlisten()
+		if target_slot >= 0 and SpellRules.needs_target(card.skills[skill_index]) \
+				and not _can_select_directed_unit(card.skills[skill_index], card, target_slot, target_player):
+			return
+		effective_actions_this_turn += 1
+		_resolve_directed_skill(card, source_slot, target_slot, skill_index, target_player)
+
+
+func _resolve_directed_skill(source: CardData, source_slot: int, target_slot: int, skill_index: int, target_player: int) -> void:
+	var skill: Dictionary = source.skills[skill_index]
+	var context := make_skill_context(source_slot, target_slot, target_player)
+	if target_slot >= 0 and SpellRules.needs_target(skill):
+		var field := _directed_skill_field(target_player)
+		context["selected_unit_field"] = field
+		if _target_dodged(field.slots[target_slot]):
+			return
+	_stats_listen(current_player)
+	SkillEngine.trigger_single_skill(source, skill_index, context)
+	_stats_unlisten()
+
+
+func _can_select_directed_unit(skill: Dictionary, source: CardData, slot: int, target_player: int) -> bool:
+	return SpellRules.can_select_unit(skill, source, _directed_skill_field(target_player), slot, _directed_skill_is_hostile(target_player), turn_number)
+
+
+func _directed_skill_field(target_player: int) -> BattleField:
+	return active_field() if target_player == current_player else (player2_field if current_player == 1 else player_field)
+
+
+func _directed_skill_is_hostile(target_player: int) -> bool:
+	return target_player != current_player
+
+
+func _target_dodged(target: CardData) -> bool:
+	if target == null or not target.is_alive():
+		return false
+	var chance := target.get_dodge_chance()
+	if chance <= 0 or game_rng.randi_range(1, 100) > chance:
+		return false
+	if not quiet:
+		EventBus.action_dodged.emit(target)
+	return true
+
+
+func _request_enemy_slot_swap(player: int) -> void:
+	var field := player2_field if player == 1 else player_field
+	if not field.can_swap_unit_positions():
+		return
+	if manual_enemy_swaps and is_player_turn and player == current_player and player != auto_enemy_swap_player:
+		if pending_cost_choices.size() < UgcSafety.MAX_EXECUTED_EFFECT_NODES:
+			pending_cost_choices.append({"kind": "enemy_swap", "player": player})
+		return
+	for source in range(field.slots.size()):
+		for offset in range(1, field.slots.size()):
+			if apply_enemy_slot_swap(field, source, (source + offset) % field.slots.size()):
+				return
+
+
+func decode_enemy_slot_pair(index: int, slot_count: int) -> Vector2i:
+	if index < 0 or index >= slot_count * slot_count:
+		return Vector2i(-1, -1)
+	@warning_ignore("integer_division")
+	return Vector2i(index / slot_count, index % slot_count)
+
+
+func apply_enemy_slot_swap(field: BattleField, source: int, destination: int) -> bool:
+	if source == destination or source not in range(field.slots.size()) or destination not in range(field.slots.size()):
+		return false
+	var card: CardData = field.slots[source]
+	if card == null or not card.is_selectable():
+		return false
+	var displaced: CardData = field.slots[destination]
+	if displaced != null and not displaced.is_selectable():
+		return false
+	if not _target_dodged(card):
+		field.slots[source] = field.slots[destination]
+		field.slots[destination] = card
+	return true
 
 
 func reset_action_budget(player: int) -> void:
@@ -782,6 +881,8 @@ func _pay_action(source: CardData = null, action: String = "activate") -> bool:
 	active_field().spend_mana(int(payment["mana"]))
 	active_field().action_points -= int(payment["points"])
 	active_field().actions_taken += 1
+	if action != "automatic":
+		effective_actions_this_turn += 1
 	_stats_add(current_player, "mana_spent", int(payment["mana"]))
 	_metric_payment(source, action, int(payment.mana), int(payment.points), temp_before)
 	return true
@@ -823,13 +924,12 @@ func trigger_activate_skills(source_slot: int, target_slot: int, skill_index: in
 	if not can_activate_skill(source_slot, skill_index):
 		return false
 	var card: CardData = active_field().slots[source_slot]
+	if SpellRules.needs_target(card.skills[skill_index]) and not _can_select_directed_unit(card.skills[skill_index], card, target_slot, target_player):
+		return false
 	if not _pay_action(card, "activate"):
 		return false
 	card.skills_used.append(skill_index)
-	var actor := current_player
-	_stats_listen(actor)
-	SkillEngine.trigger_single_skill(card, skill_index, make_skill_context(source_slot, target_slot, target_player))
-	_stats_unlisten()
+	_resolve_directed_skill(card, source_slot, target_slot, skill_index, target_player)
 	card.has_acted = true
 	return true
 
@@ -856,7 +956,7 @@ func activate_skill(slot_index: int, skill_index: int) -> String:
 # Attack
 # ============================================
 
-func execute_attack(atk_slot: int, def_slot: int) -> Dictionary:
+func execute_attack(atk_slot: int, def_slot: int, hostile: bool = true) -> Dictionary:
 	if atk_slot < 0 or atk_slot >= active_field().slots.size() or def_slot < 0 or def_slot >= opponent_field().slots.size():
 		return {}
 	if turn_number <= 1 and not allow_first_turn_attacks:
@@ -864,11 +964,11 @@ func execute_attack(atk_slot: int, def_slot: int) -> Dictionary:
 		return {}
 	var attacker: CardData = active_field().slots[atk_slot]
 	var victim: CardData = opponent_field().slots[def_slot]
-	if attacker == null or victim == null:
+	if attacker == null or victim == null or not victim.is_selectable():
 		return {}
 	# Keep taunt as a game-state invariant. UI, network clients and AI may all
 	# propose targets, but none may bypass the rule at execution time.
-	if opponent_field().has_any_taunt() and not victim.has_taunt():
+	if hostile and opponent_field().has_any_taunt() and not victim.has_taunt():
 		_log("A taunt minion must be attacked first!")
 		return {}
 	if attacker.has_acted:
@@ -879,6 +979,10 @@ func execute_attack(atk_slot: int, def_slot: int) -> Dictionary:
 		return {}
 	if not attacker.is_alive() or not victim.is_alive() or not _pay_action(attacker, "attack"):
 		return {}
+	if _target_dodged(victim):
+		attacker.has_acted = true
+		attacker.has_attacked = true
+		return {"attacker_died": false, "victim_died": false, "dodged": true}
 	var actor := current_player
 	_stats_listen(actor)
 	var atk_dmg: int = attacker.effective_atk()
@@ -1029,6 +1133,7 @@ func end_player_turn(allow_face_mana: bool = true) -> Dictionary:
 	# after turn-end passives have resolved. Permanent reductions remain.
 	for card: CardData in active_hand():
 		card.clear_turn_cost_reduction()
+	var face_exposed := not opponent_field().has_selectable_units()
 
 	# Tick buffs owned by the next player, then clear that player's old shields.
 	# Shields gained this turn stay through the opponent's turn and expire when
@@ -1054,28 +1159,19 @@ func end_player_turn(allow_face_mana: bool = true) -> Dictionary:
 				EventBus.hp_changed.emit(slot, slot.hp - hp_before, slot.hp)
 
 	# Empty-field direct damage (turn 2+)
-	var result := _process_empty_field_damage(allow_face_mana)
+	var result := _process_empty_field_damage(allow_face_mana, face_exposed)
 	for card in active_field().slots:
 		if card != null: card.finish_stun_turn()
 	return result
 
 
-func _field_is_empty(field: BattleField) -> bool:
-	for i in range(5):
-		if field.slots[i] != null and field.slots[i].is_alive():
-			return false
-	return true
-
-
-func _process_empty_field_damage(allow_face_mana: bool = true) -> Dictionary:
+func _process_empty_field_damage(allow_face_mana: bool = true, face_exposed: Variant = null) -> Dictionary:
 	if turn_number < 2:
 		return {}
 
 	var af := active_field()
-	var of := opponent_field()
-	var opp_empty := _field_is_empty(of)
-
-	if not opp_empty:
+	var can_hit_player: bool = not opponent_field().has_selectable_units() if face_exposed == null else face_exposed
+	if not can_hit_player:
 		return {}
 
 	var damaged_player: int = 3 - current_player
@@ -1085,7 +1181,7 @@ func _process_empty_field_damage(allow_face_mana: bool = true) -> Dictionary:
 	var total_dmg := 0
 	var cards_hit: Array = []
 	var resources_before := {"points":af.action_points,"mana":af.get_total_mana()}
-	var plan := _automatic_attack_plan(af.get_total_mana(), allow_face_mana)
+	var plan := _automatic_attack_plan(af.get_total_mana(), allow_face_mana, can_hit_player)
 	for hit in plan.cards_hit:
 		var i := int(hit.slot)
 		var card = attacking_field.slots[i]
@@ -1102,9 +1198,12 @@ func _process_empty_field_damage(allow_face_mana: bool = true) -> Dictionary:
 
 	if total_dmg > 0:
 		var remaining_hp := opponent_field().player_hp
+		var damaging_attacks := 0
 		for hit in cards_hit:
 			var damage := mini(maxi(0, int(hit.dmg)), remaining_hp)
 			remaining_hp -= damage
+			if damage > 0:
+				damaging_attacks += 1
 			_record_attack_metric(attacking_field.slots[int(hit.slot)],opponent_field(),damage)
 		if damaged_player == 1:
 			player_field.damage_player(total_dmg)
@@ -1112,15 +1211,10 @@ func _process_empty_field_damage(allow_face_mana: bool = true) -> Dictionary:
 			player2_field.damage_player(total_dmg)
 		_stats_add(attacking_player, "hero_damage", total_dmg)
 		_log("[EmptyField] P%d board empty — P%d deals %d direct damage to P%d" % [damaged_player, attacking_player, total_dmg, damaged_player])
-		# Face damage compensation: 1 temp mana per attacking card
-		if battle_config.get("face_damage_compensation", false):
-			var attacker_count: int = cards_hit.size()
-			if attacker_count > 0:
-				if damaged_player == 1:
-					player_field.add_temp_mana(attacker_count)
-				else:
-					player2_field.add_temp_mana(attacker_count)
-				_log("[FaceComp] P%d gains %d temp mana (compensation for %d attacking cards)" % [damaged_player, attacker_count, attacker_count])
+		if damaging_attacks > 0 and battle_config.get("face_damage_compensation", false):
+			var mana := damaging_attacks * int(battle_config.get("face_damage_compensation_mana", PlayerData.DEFAULT_FACE_DAMAGE_COMPENSATION_MANA))
+			opponent_field().add_temp_mana(mana)
+			_log("[FaceComp] P%d gains %d temp mana (compensation for %d damaging attacks)" % [damaged_player, mana, damaging_attacks])
 
 	return {
 		"triggered": true,
@@ -1157,7 +1251,7 @@ func preview_end_turn_attacks(allow_face_mana: bool = true) -> Dictionary:
 	return plan
 
 
-func _automatic_attack_plan(available_mana: int, allow_face_mana: bool = true) -> Dictionary:
+func _automatic_attack_plan(available_mana: int, allow_face_mana: bool = true, face_exposed: Variant = null) -> Dictionary:
 	var field := active_field()
 	var points := field.action_points
 	var actions := field.actions_taken
@@ -1165,7 +1259,8 @@ func _automatic_attack_plan(available_mana: int, allow_face_mana: bool = true) -
 	if turn_number < 2:
 		plan.reason = "first_turn"
 		return plan
-	if not _field_is_empty(opponent_field()):
+	var can_hit_player: bool = not opponent_field().has_selectable_units() if face_exposed == null else face_exposed
+	if not can_hit_player:
 		plan.reason = "defended"
 		return plan
 	for slot in range(field.slots.size()):
@@ -1192,17 +1287,17 @@ func _automatic_attack_plan(available_mana: int, allow_face_mana: bool = true) -
 
 func start_new_turn() -> void:
 	is_player_turn = true
+	effective_actions_this_turn = 0
 	current_player = 2 if current_player == 1 else 1
 
 	var cfg: Dictionary = battle_config
-	var mana_per_turn: int = cfg.get("mana_per_turn", 2)
+	var mana_per_turn: int = cfg.get("mana_per_turn", PlayerData.DEFAULT_BATTLE_CONFIG["mana_per_turn"])
 	var draw_amount: int = cfg.get("draw_per_turn", 2)
 	if first_switch:
 		# The second player gets catch-up benefits on their first turn.
-		var extra_mana: int = cfg.get("second_extra_mana", 0)
-		var extra_cards: int = cfg.get("second_extra_cards", 0)
-		active_field().add_mana(max(1, mana_per_turn / 2) + extra_mana)
-		draw_amount = max(1, draw_amount / 2) + extra_cards
+		var refill := first_response_resources(cfg, mana_per_turn, draw_amount)
+		active_field().add_mana(refill.x)
+		draw_amount = refill.y
 		first_switch = false
 	else:
 		# Both players receive the base amount in round two, their first regular refill.
@@ -1226,13 +1321,13 @@ func start_new_turn() -> void:
 	if current_player == starting_player:
 		turn_number += 1
 
-	# Stun: stunned cards skip their actions this turn (buff consumed once).
+	# Only a turn that starts with Stun counts toward its duration.
 	var active_board: BattleField = player_field if current_player == 1 else player2_field
 	for slot in active_board.slots:
 		if slot != null and slot.has_stun():
 			slot.has_acted = true
 			slot.has_attacked = true
-			slot.consume_stun()
+			slot.begin_stun_turn()
 
 	# On-turn-start passives for the current player's field.
 	_stats_listen(current_player)

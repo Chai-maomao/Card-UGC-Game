@@ -2,10 +2,12 @@ extends Control
 
 const UITheme = preload("res://UITheme.gd")
 const BASE_VIEWPORT_SIZE := Vector2(1152, 648)
+const CardFace = preload("res://presentation/ClassicBattleCardFace.gd")
+const CARD_PREVIEW_SIZE := Vector2(92, 126.5)
 
-const COLOR_WIN := UITheme.Tokens.SUCCESS
-const COLOR_LOSS := UITheme.Tokens.WARNING
-const COLOR_NEUTRAL := UITheme.Tokens.PAPER
+var COLOR_WIN := UITheme.Tokens.SUCCESS
+var COLOR_LOSS := UITheme.Tokens.WARNING
+var COLOR_NEUTRAL := UITheme.Tokens.TITLE
 const OUTCOMES := ["victory", "defeat", "finished", "forfeit", "interrupted"]
 const STAT_KEYS := [
 	"summons", "spells", "parasites", "cards_drawn",
@@ -16,6 +18,7 @@ var list_box: VBoxContainer
 var empty_label: Label
 var count_label: Label
 var summary_box: HBoxContainer
+var summary_averages: Label
 var outcome_filter: OptionButton
 var mode_filter: OptionButton
 var _outcome_options: Array = []
@@ -25,19 +28,21 @@ var _root_box: VBoxContainer
 var _header: HBoxContainer
 var _history_controls: VBoxContainer
 var _clear_button: Button
+var _empty_history: CenterContainer
+var _history_scroll: ScrollContainer
 
 
 # ============================================
 # 纯逻辑（便于无头测试）
 # ============================================
 
-# entries 按最新在前排列；返回 {total, wins, losses, win_rate, streak_type,
-# streak_count, avg_turns, avg_duration}
+# entries 按最新在前排列。
 static func compute_summary(entries: Array) -> Dictionary:
 	var summary := {
 		"total": entries.size(),
 		"wins": 0,
 		"losses": 0,
+		"scored_count": 0,
 		"win_rate": 0,
 		"streak_type": "none",
 		"streak_count": 0,
@@ -60,7 +65,10 @@ static func compute_summary(entries: Array) -> Dictionary:
 		if duration > 0:
 			duration_total += duration
 			duration_count += 1
-	var scored_entries := entries.filter(func(entry): return entry.get("outcome") != "interrupted")
+	var scored_entries := entries.filter(func(entry):
+		return entry.get("outcome") in ["victory", "defeat", "forfeit"] \
+			or (entry.get("outcome") == "finished" and entry.get("mode") in ["ranked", "random"] and str(entry.get("result", "")) == "3"))
+	summary["scored_count"] = scored_entries.size()
 	if not scored_entries.is_empty():
 		summary["win_rate"] = int(round(float(summary["wins"]) / float(scored_entries.size()) * 100.0))
 	summary["avg_turns"] = int(round(float(turn_total) / float(entries.size())))
@@ -215,11 +223,6 @@ func _build_ui() -> void:
 	_history_controls = VBoxContainer.new()
 	_history_controls.add_theme_constant_override("separation", 16)
 	root.add_child(_history_controls)
-	count_label = Label.new()
-	count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	UITheme.apply_label(count_label, true)
-	_history_controls.add_child(count_label)
-
 	# ---- 总览面板 ----
 	var overview := PanelContainer.new()
 	UITheme.apply_panel(overview, "dark")
@@ -228,20 +231,34 @@ func _build_ui() -> void:
 	for edge in ["left", "right", "top", "bottom"]:
 		overview_margin.add_theme_constant_override("margin_" + edge, 8)
 	overview.add_child(overview_margin)
+	var overview_content := VBoxContainer.new()
+	overview_content.add_theme_constant_override("separation", 6)
+	overview_margin.add_child(overview_content)
 	summary_box = HBoxContainer.new()
 	summary_box.add_theme_constant_override("separation", 10)
-	overview_margin.add_child(summary_box)
+	overview_content.add_child(summary_box)
+	summary_averages = Label.new()
+	summary_averages.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UITheme.apply_label(summary_averages, true)
+	summary_averages.add_theme_font_size_override("font_size", 12)
+	overview_content.add_child(summary_averages)
 
 	# ---- 筛选栏 ----
 	var filter_bar := HBoxContainer.new()
 	filter_bar.add_theme_constant_override("separation", 14)
 	_history_controls.add_child(filter_bar)
 	outcome_filter = _build_filter_option(filter_bar, "history.filter_outcome", ["all"] + OUTCOMES, _outcome_options)
-	mode_filter = _build_filter_option(filter_bar, "history.filter_mode", ["all", "online", "practice", "hotseat"], _mode_options)
+	mode_filter = _build_filter_option(filter_bar, "history.filter_mode", ["all", "online", "ranked", "random", "practice", "hotseat"], _mode_options)
+	count_label = Label.new()
+	count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	count_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UITheme.apply_label(count_label, true)
+	filter_bar.add_child(count_label)
 
 	# ---- 战绩列表 ----
 	_history_controls.add_child(UITheme.separator())
 	var scroll := ScrollContainer.new()
+	_history_scroll = scroll
 	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	scroll.follow_focus = true
@@ -250,6 +267,13 @@ func _build_ui() -> void:
 	list_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	list_box.add_theme_constant_override("separation", 0)
 	scroll.add_child(list_box)
+	_empty_history = CenterContainer.new()
+	_empty_history.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	root.add_child(_empty_history)
+	var empty := Label.new()
+	empty.text = Locale.t("history.empty")
+	UITheme.apply_label(empty, true)
+	_empty_history.add_child(empty)
 
 
 func _build_filter_option(bar: HBoxContainer, caption_key: String, values: Array, sink: Array) -> OptionButton:
@@ -283,13 +307,17 @@ func _refresh_list() -> void:
 	var all_entries: Array = PlayerData.match_history
 	_history_controls.visible = not all_entries.is_empty()
 	_clear_button.visible = not all_entries.is_empty()
-	count_label.visible = all_entries.size() >= PlayerData.MAX_MATCH_HISTORY
-	count_label.text = Locale.t("history.count", [all_entries.size(), PlayerData.MAX_MATCH_HISTORY])
-	_refresh_summary(all_entries)
-	var entries := filtered_entries(all_entries, _current_filter(outcome_filter, _outcome_options), _current_filter(mode_filter, _mode_options))
+	_empty_history.visible = all_entries.is_empty()
+	_history_scroll.visible = not all_entries.is_empty()
+	count_label.text = Locale.t("history.retention", [PlayerData.MAX_MATCH_HISTORY])
+	if all_entries.is_empty():
+		return
+	var mode_entries := filtered_entries(all_entries, "all", _current_filter(mode_filter, _mode_options))
+	_refresh_summary(mode_entries)
+	var entries := filtered_entries(mode_entries, _current_filter(outcome_filter, _outcome_options), "all")
 	if entries.is_empty():
 		empty_label = Label.new()
-		empty_label.text = Locale.t("history.empty") if all_entries.is_empty() else Locale.t("history.empty_filtered")
+		empty_label.text = Locale.t("history.empty_filtered")
 		empty_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		empty_label.custom_minimum_size = Vector2(0, 160)
 		UITheme.apply_label(empty_label, true)
@@ -309,13 +337,13 @@ func _refresh_summary(entries: Array) -> void:
 			streak_text = Locale.t("history.streak_win", [int(summary["streak_count"])])
 		elif summary["streak_type"] == "loss":
 			streak_text = Locale.t("history.streak_loss", [int(summary["streak_count"])])
-	summary_box.add_child(_make_summary_tile("%d%%" % int(summary["win_rate"]), Locale.t("history.overview.win_rate"), COLOR_NEUTRAL, true))
-	summary_box.add_child(_make_summary_tile(str(summary["total"]), Locale.t("history.overview.total"), COLOR_NEUTRAL))
-	summary_box.add_child(_make_summary_tile(str(summary["wins"]), Locale.t("history.overview.wins"), COLOR_WIN))
-	summary_box.add_child(_make_summary_tile(str(summary["losses"]), Locale.t("history.overview.losses"), COLOR_LOSS))
+	var rate := "%d%%" % int(summary["win_rate"]) if int(summary["scored_count"]) > 0 else Locale.t("history.streak_none")
+	summary_box.add_child(_make_summary_tile(rate, Locale.t("history.overview.win_rate"), COLOR_NEUTRAL, true))
+	var record := Locale.t("history.overview.record", [summary["wins"], summary["losses"]])
+	summary_box.add_child(_make_summary_tile(str(summary["total"]), record, COLOR_NEUTRAL))
 	summary_box.add_child(_make_summary_tile(streak_text, Locale.t("history.overview.streak"), COLOR_WIN if summary["streak_type"] == "win" else (COLOR_LOSS if summary["streak_type"] == "loss" else COLOR_NEUTRAL)))
-	summary_box.add_child(_make_summary_tile(str(summary["avg_turns"]), Locale.t("history.overview.avg_turns"), COLOR_NEUTRAL))
-	summary_box.add_child(_make_summary_tile(format_duration(int(summary["avg_duration"]), true), Locale.t("history.overview.avg_duration"), COLOR_NEUTRAL))
+	summary_averages.visible = not entries.is_empty()
+	summary_averages.text = Locale.t("history.overview.averages", [summary["avg_turns"], format_duration(int(summary["avg_duration"])) if summary["avg_duration"] > 0 else Locale.t("history.streak_none")])
 
 
 func _make_summary_tile(value: String, caption: String, accent: Color, featured := false) -> MarginContainer:
@@ -389,9 +417,24 @@ func _make_match_card(entry: Dictionary) -> Control:
 	var mode := Label.new()
 	mode.text = _mode_text(str(entry.get("mode", "")))
 	UITheme.apply_label(mode)
-	match_info.add_child(mode)
+	var identity := HBoxContainer.new()
+	identity.add_theme_constant_override("separation", 18)
+	match_info.add_child(identity)
+	identity.add_child(mode)
+	var deck_name := str(entry.get("deck_name", ""))
+	if not deck_name.is_empty():
+		var deck := Label.new()
+		deck.set_meta("keyword_literal", true)
+		deck.text = deck_name
+		deck.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		deck.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		UITheme.apply_label(deck)
+		identity.add_child(deck)
 	var meta := Label.new()
 	var meta_parts := PackedStringArray()
+	var timestamp := int(entry.get("timestamp", 0))
+	if timestamp > 0:
+		meta_parts.append(_format_time(timestamp))
 	var turns := int(entry.get("turns", 0))
 	if turns > 0:
 		meta_parts.append(Locale.t("history.turns_only", [turns]))
@@ -404,17 +447,32 @@ func _make_match_card(entry: Dictionary) -> Control:
 	meta.add_theme_font_size_override("font_size", 13)
 	meta.visible = not meta_parts.is_empty()
 	match_info.add_child(meta)
-	var date := Label.new()
-	date.text = _format_time(int(entry.get("timestamp", 0)))
-	date.add_theme_font_size_override("font_size", 13)
-	UITheme.apply_label(date, true)
-	body.add_child(date)
+	if entry.get("mode") == "ranked":
+		var rating := Label.new()
+		var receipt: Variant = entry.get("ranked_settlement")
+		if PlayerData.valid_ranked_history_settlement(receipt):
+			var delta := int(receipt.after) - int(receipt.before)
+			rating.text = _format_rating_delta(delta)
+			UITheme.apply_title(rating, 20)
+			rating.add_theme_color_override("font_color", COLOR_WIN if delta > 0 else (COLOR_LOSS if delta < 0 else COLOR_NEUTRAL))
+		else:
+			rating.text = _rating_status(entry)
+			UITheme.apply_label(rating, true)
+		body.add_child(rating)
 	var open := Label.new()
 	open.text = "›"
 	UITheme.apply_title(open, 20)
 	open.add_theme_color_override("font_color", UITheme.COLOR_GOLD)
 	body.add_child(open)
 	return card
+
+
+func _format_rating_delta(delta: int) -> String:
+	return "−%d" % -delta if delta < 0 else ("%+d" % delta if delta > 0 else "0")
+
+
+func _rating_status(entry: Dictionary) -> String:
+	return Locale.t("history.rating_pending" if not str(entry.get("ranked_match_id", "")).is_empty() else "history.rating_missing")
 
 
 func _on_card_input(event: InputEvent, entry: Dictionary, card: Control) -> void:
@@ -449,16 +507,18 @@ func _make_hp_bar(caption: String, hp: int, max_hp: int, color: Color) -> Contro
 	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	box.add_theme_constant_override("separation", 8)
 	var label := Label.new()
-	label.text = "%s %d" % [caption, max(0, hp)]
-	label.custom_minimum_size = Vector2(96, 0)
+	label.text = Locale.t("history.remaining_hp", [caption, maxi(0, hp)])
+	label.custom_minimum_size.x = 124
 	label.add_theme_font_size_override("font_size", 13)
 	label.add_theme_color_override("font_color", color)
 	box.add_child(label)
+	if max_hp <= 0:
+		return box
 	var bar := ProgressBar.new()
 	bar.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	bar.custom_minimum_size = Vector2(0, 12)
 	bar.min_value = 0
-	bar.max_value = max(1, max_hp)
+	bar.max_value = max_hp
 	bar.value = max(0, hp)
 	bar.show_percentage = false
 	bar.add_theme_stylebox_override("background", UITheme.panel_style(Color(UITheme.Tokens.PANEL_DARK,0.9), Color(UITheme.Tokens.DISABLED,0.8), 1, 5))
@@ -511,8 +571,9 @@ func _show_detail(entry: Dictionary) -> void:
 	var subtitle := Label.new()
 	var sub_parts: Array = [
 		_format_time(int(entry.get("timestamp", 0))),
-		Locale.t("history.turn_hp", [int(entry.get("turns", 0)), int(entry.get("player_hp", 0)), int(entry.get("opponent_hp", 0))]),
 	]
+	if int(entry.get("turns", 0)) > 0:
+		sub_parts.append(Locale.t("history.turns_only", [int(entry.turns)]))
 	var duration := int(entry.get("duration", 0))
 	if duration > 0:
 		sub_parts.append(Locale.t("history.duration", [format_duration(duration)]))
@@ -521,8 +582,10 @@ func _show_detail(entry: Dictionary) -> void:
 	UITheme.apply_label(subtitle, true)
 	box.add_child(subtitle)
 
-	box.add_child(_make_hp_bar(Locale.t("history.you"), int(entry.get("player_hp", 0)), 20, COLOR_WIN))
-	box.add_child(_make_hp_bar(Locale.t("history.opponent"), int(entry.get("opponent_hp", 0)), 20, COLOR_LOSS))
+	if entry.has("player_hp"):
+		box.add_child(_make_hp_bar(Locale.t("history.you"), int(entry.player_hp), int(entry.get("player_max_hp", 0)), COLOR_WIN))
+	if entry.has("opponent_hp"):
+		box.add_child(_make_hp_bar(Locale.t("history.opponent"), int(entry.opponent_hp), int(entry.get("opponent_max_hp", 0)), COLOR_LOSS))
 
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -532,6 +595,23 @@ func _show_detail(entry: Dictionary) -> void:
 	scroll_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	scroll_box.add_theme_constant_override("separation", 12)
 	scroll.add_child(scroll_box)
+	if entry.get("mode") == "ranked":
+		var heading := Label.new()
+		heading.text = Locale.t("history.rating_title")
+		UITheme.apply_title(heading, 18)
+		scroll_box.add_child(heading)
+		var score := Label.new()
+		UITheme.apply_label(score)
+		var receipt: Variant = entry.get("ranked_settlement")
+		if PlayerData.valid_ranked_history_settlement(receipt):
+			var delta := int(receipt.after) - int(receipt.before)
+			score.text = Locale.t("history.rating_result", [int(receipt.before), int(receipt.after), _format_rating_delta(delta)])
+			var multiplier: Variant = receipt.get("multiplier")
+			if multiplier is float or multiplier is int:
+				score.text += "\n" + Locale.t("history.rating_multiplier" if delta > 0 else "history.rating_multiplier_inactive", [float(multiplier)])
+		else:
+			score.text = _rating_status(entry)
+		scroll_box.add_child(score)
 
 	# 关键数据对比
 	var stats := entry_stats(entry)
@@ -556,14 +636,23 @@ func _show_detail(entry: Dictionary) -> void:
 
 	# 卡组对比
 	var deck_title := Label.new()
-	deck_title.text = Locale.t("history.deck_compare")
+	var shared_pool: bool = entry.get("mode") in ["ranked", "random"]
+	deck_title.text = Locale.t("history.shared_pool" if shared_pool else "history.deck_compare")
 	UITheme.apply_title(deck_title, 18)
 	scroll_box.add_child(deck_title)
-	var decks := HBoxContainer.new()
-	decks.add_theme_constant_override("separation", 16)
-	scroll_box.add_child(decks)
-	decks.add_child(_make_deck_column(Locale.t("history.your_cards"), entry.get("deck_cards", []), COLOR_WIN, str(entry.get("deck_name", ""))))
-	decks.add_child(_make_deck_column(Locale.t("history.opponent_cards"), entry.get("opponent_cards", []), COLOR_LOSS, ""))
+	var own_cards: Array = entry.get("deck_card_faces", entry.get("deck_cards", []))
+	var opponent_cards: Array = entry.get("opponent_card_faces", entry.get("opponent_cards", []))
+	var own_legacy := _index_legacy_cards(own_cards) if not entry.has("deck_card_faces") else {}
+	if shared_pool:
+		scroll_box.add_child(_make_deck_column("", own_cards, COLOR_NEUTRAL, "", own_legacy))
+	else:
+		var decks := HBoxContainer.new()
+		decks.add_theme_constant_override("separation", 16)
+		scroll_box.add_child(decks)
+		var deck_name := str(entry.get("deck_name", ""))
+		var opponent_legacy := _index_legacy_cards(opponent_cards) if not entry.has("opponent_card_faces") else {}
+		decks.add_child(_make_deck_column(Locale.t("history.your_cards"), own_cards, COLOR_WIN, deck_name, own_legacy))
+		decks.add_child(_make_deck_column(Locale.t("history.opponent_cards"), opponent_cards, COLOR_LOSS, "", opponent_legacy, not deck_name.is_empty()))
 
 	var version := Label.new()
 	version.set_meta("keyword_literal",true)
@@ -633,19 +722,20 @@ func _make_stat_row(key: String, mine: Dictionary, theirs: Dictionary) -> Contro
 	return row
 
 
-func _make_deck_column(caption: String, cards: Array, accent: Color, deck_name: String) -> Control:
+func _make_deck_column(caption: String, cards: Array, accent: Color, deck_name: String, legacy_cards: Dictionary, reserve_name_row: bool = false) -> Control:
 	var box := VBoxContainer.new()
 	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	box.add_theme_constant_override("separation", 6)
-	var title := Label.new()
-	title.text = caption
-	title.add_theme_font_size_override("font_size", 14)
-	title.add_theme_color_override("font_color", accent)
-	box.add_child(title)
-	if deck_name != "":
+	if not caption.is_empty():
+		var title := Label.new()
+		title.text = caption
+		title.add_theme_font_size_override("font_size", 14)
+		title.add_theme_color_override("font_color", accent)
+		box.add_child(title)
+	if not deck_name.is_empty() or reserve_name_row:
 		var name_label := Label.new()
 		name_label.set_meta("keyword_literal",true)
-		name_label.text = deck_name
+		name_label.text = deck_name if not deck_name.is_empty() else " "
 		UITheme.apply_label(name_label, true)
 		name_label.add_theme_font_size_override("font_size", 12)
 		box.add_child(name_label)
@@ -657,15 +747,11 @@ func _make_deck_column(caption: String, cards: Array, accent: Color, deck_name: 
 		box.add_child(none_label)
 		return box
 	var flow := FlowContainer.new()
-	flow.add_theme_constant_override("h_separation", 4)
-	flow.add_theme_constant_override("v_separation", 4)
+	flow.add_theme_constant_override("h_separation", 8)
+	flow.add_theme_constant_override("v_separation", 8)
 	box.add_child(flow)
-	var shown: int = 0
-	for card_name in cards:
-		if shown >= 30:
-			break
-		flow.add_child(_make_card_chip(str(card_name), accent))
-		shown += 1
+	for card in cards.slice(0, 30):
+		flow.add_child(_make_history_card(card, legacy_cards))
 	if cards.size() > 30:
 		var more := Label.new()
 		more.text = "… +%d" % (cards.size() - 30)
@@ -675,24 +761,49 @@ func _make_deck_column(caption: String, cards: Array, accent: Color, deck_name: 
 	return box
 
 
-func _make_card_chip(text: String, accent: Color) -> PanelContainer:
-	var chip := PanelContainer.new()
-	chip.set_meta("keyword_literal_fields",true)
-	chip.add_theme_stylebox_override("panel", UITheme.panel_style(
-		Color(accent.r, accent.g, accent.b, 0.10), Color(accent.r, accent.g, accent.b, 0.45), 1, 5
-	))
-	var margin := MarginContainer.new()
-	margin.add_theme_constant_override("margin_left", 6)
-	margin.add_theme_constant_override("margin_right", 6)
-	margin.add_theme_constant_override("margin_top", 1)
-	margin.add_theme_constant_override("margin_bottom", 1)
-	chip.add_child(margin)
-	var label := Label.new()
-	label.text = text
-	label.add_theme_font_size_override("font_size", 12)
-	label.add_theme_color_override("font_color", UITheme.COLOR_TEXT)
-	margin.add_child(label)
-	return chip
+func _index_legacy_cards(recorded_names: Array) -> Dictionary:
+	if recorded_names.is_empty():
+		return {}
+	var matching_decks: Array[Array] = []
+	for deck: Dictionary in PlayerData.deck_library:
+		var deck_cards: Array = deck.get("cards", [])
+		if deck_cards.size() == recorded_names.size() and deck_cards.map(func(card: CardData): return card.card_name) == recorded_names:
+			matching_decks.append(deck_cards)
+	var candidates: Array = PlayerData.card_library + CardDatabase.starter_library()
+	if not matching_decks.is_empty():
+		candidates = []
+		for deck_cards in matching_decks:
+			candidates.append_array(deck_cards)
+	var cards := {}
+	for card: CardData in candidates:
+		var face := MatchHistoryRepository.card_face(card)
+		if not cards.has(card.card_name):
+			cards[card.card_name] = face
+		elif cards[card.card_name] != face:
+			cards[card.card_name] = {}
+	return cards
+
+
+func _make_history_card(record: Variant, legacy_cards: Dictionary) -> Control:
+	var cell := Control.new()
+	cell.custom_minimum_size = CARD_PREVIEW_SIZE
+	cell.mouse_filter = Control.MOUSE_FILTER_PASS
+	var preview := CardFace.new()
+	preview.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	preview.size = Vector2(384, 528)
+	preview.scale = Vector2.ONE * (CARD_PREVIEW_SIZE.x / preview.size.x)
+	cell.add_child(preview)
+	var data: Dictionary = record if record is Dictionary else legacy_cards.get(str(record), {})
+	if not data.is_empty():
+		var card := CardData.new(str(data.get("name", "")), int(data.get("cost", 0)), int(data.get("max_hp", 1)), int(data.get("atk", 0)), [])
+		card.card_type = str(data.get("card_type", "minion"))
+		card.art_path = str(data.get("art_path", ""))
+		preview.bind(card, false)
+		cell.tooltip_text = card.card_name if record is Dictionary else Locale.t("history.legacy_card_library", [card.card_name])
+	else:
+		preview.bind_name_only(str(record))
+		cell.tooltip_text = Locale.t("history.legacy_card_name", [str(record)])
+	return cell
 
 
 func _show_clear_confirmation() -> void:
@@ -701,8 +812,6 @@ func _show_clear_confirmation() -> void:
 	var dialog := ConfirmationDialog.new()
 	dialog.title = Locale.t("history.clear")
 	dialog.dialog_text = Locale.t("history.clear_confirm")
-	dialog.ok_button_text = Locale.t("common.confirm")
-	dialog.cancel_button_text = Locale.t("common.cancel")
 	dialog.confirmed.connect(func():
 		PlayerData.clear_match_history()
 		_refresh_list()
@@ -711,8 +820,7 @@ func _show_clear_confirmation() -> void:
 	dialog.confirmed.connect(dialog.queue_free)
 	add_child(dialog)
 	UITheme.apply_dialog(dialog, true)
-	dialog.get_ok_button().text = Locale.t("history.clear")
-	UITheme.apply_button(dialog.get_ok_button(), "danger")
+	UITheme.apply_destructive_confirmation(dialog, Locale.t("history.clear"))
 	var dialog_size := Vector2i(Vector2(430, 180) * _ui_scale())
 	dialog_size.x = mini(dialog_size.x, int(get_viewport_rect().size.x - 32.0))
 	dialog_size.y = mini(dialog_size.y, int(get_viewport_rect().size.y - 32.0))
@@ -726,6 +834,7 @@ func _show_clear_confirmation() -> void:
 func _mode_text(mode: String) -> String:
 	match mode:
 		"online": return Locale.t("result.mode_online")
+		"ranked", "random": return Locale.t("matchmaking." + mode)
 		"practice": return Locale.t("result.mode_practice")
 		"hotseat": return Locale.t("result.mode_hotseat")
 	return mode

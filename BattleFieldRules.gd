@@ -54,7 +54,12 @@ static func build_info(box: VBoxContainer, game, battle: Node, popup: Node) -> v
 		objective.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		margin.add_child(objective)
 		grid.hide()
-	for card in (match_cards() if PlayerData.practice_challenge_id.is_empty() else []):
+	var starting_cards := match_cards() if PlayerData.practice_challenge_id.is_empty() else []
+	if battle.has_method("match_info_cards"):
+		var room_cards: Array = battle.match_info_cards()
+		if not room_cards.is_empty():
+			starting_cards = room_cards
+	for card in starting_cards:
 		var cell := CenterContainer.new()
 		cell.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		grid.add_child(cell)
@@ -90,11 +95,18 @@ static func build_info(box: VBoxContainer, game, battle: Node, popup: Node) -> v
 
 static func rows(config: Dictionary) -> Array:
 	var result: Array = []
+	var clock := preload("res://BattleActionClock.gd")
+	var timed := clock.enabled(config)
+	result.append([Locale.t("battle_config.action_time_enabled"), _switch_text(timed)])
+	if timed:
+		result.append([Locale.t("battle_config.action_time_seconds"), str(clock.seconds(config, false))])
+		result.append([Locale.t("battle_config.first_action_time_seconds"), str(clock.seconds(config, true))])
 	var enabled := config.has("action_base")
 	result.append([Locale.t("battle_config.action_enabled"), _switch_text(enabled)])
 	var growing := config.has("mana_increment")
 	result.append([Locale.t("battle_config.mana_mode"), Locale.t("battle_config.mana_growing" if growing else "battle_config.mana_fixed")])
 	for key in PlayerData.DEFAULT_BATTLE_CONFIG:
+		if key in clock.KEYS: continue
 		if str(key).begins_with("action_") and not enabled: continue
 		if key == "draw_pile_ordered":
 			if bool(config.get("draw_pile_visible",false)):
@@ -106,6 +118,9 @@ static func rows(config: Dictionary) -> Array:
 			result.append([Locale.t("battle_config.mana_increment"), str(config["mana_increment"])])
 			continue
 		result.append([Locale.t("battle_config." + key), _switch_text(value) if value is bool else str(value)])
+		if key == "face_damage_compensation" and value:
+			var mana := int(config.get("face_damage_compensation_mana", PlayerData.DEFAULT_FACE_DAMAGE_COMPENSATION_MANA))
+			result.append([Locale.t("battle_config.face_damage_compensation_mana"), str(mana)])
 	return result
 
 

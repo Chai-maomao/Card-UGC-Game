@@ -15,6 +15,7 @@ func _ready() -> void:
 	await _test_boundaries()
 	_test_menu_theme()
 	await _test_live_menu_hover()
+	await _test_keyword_icon_hover()
 	if failures.is_empty():
 		print("TEST_SKILL_UI_HELP_OK: rounding, menu change/serialization, palette coverage, bounded tooltips, native menu themes")
 		get_tree().quit(0)
@@ -268,10 +269,15 @@ func _test_live_menu_hover() -> void:
 	var hints = UIMotion.get_node("HoverHints")
 	hints._process(1.0)
 	await _settle()
-	var text: String = hints.label.get_parsed_text().replace(" \u2009", "")
+	var text := preload("res://presentation/SkillDescription.gd").plain(hints.label.get_parsed_text())
 	_assert(hints.panel.visible and text == SkillHelp.description("effect", "charm"), "hovered popup item must display the full shared hint")
 	_assert(hints.label.text.contains("res://res/ui/keywords/charm.svg[/img]"), "hovered charm hint must display its keyword icon")
 	_assert(Rect2(Vector2.ZERO, get_viewport().get_visible_rect().size).encloses(hints.panel.get_global_rect()), "live menu hint must remain inside viewport")
+	var menu_hint_position: Vector2 = hints.panel.position
+	motion.position += Vector2(8, 3)
+	get_viewport().push_input(motion, true)
+	await _settle()
+	_assert(popup.get_focused_item() == 0 and hints.panel.visible and hints.panel.position == menu_hint_position, "menu hints must stay fixed when the mouse moves within an item")
 	popup.hide()
 	popup.queue_free()
 	await _settle()
@@ -280,6 +286,91 @@ func _test_live_menu_hover() -> void:
 func _settle() -> void:
 	for frame in range(4):
 		await get_tree().process_frame
+
+
+func _test_keyword_icon_hover() -> void:
+	var words := preload("res://presentation/SkillDescription.gd")
+	for language in ["zh", "en"]:
+		Locale.language = language
+		for style: Array in words.KEYWORDS.values():
+			_assert(not SkillHelp.keyword_description(style[1]).is_empty(), "missing keyword explanation: " + style[1])
+	Locale.language = "zh"
+	var root := Control.new()
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(root)
+	var button := Button.new()
+	button.position = Vector2(120, 80)
+	button.size = Vector2(200, 48)
+	button.text = "圣水补付"
+	button.set_meta("keyword_enabled", true)
+	button.tooltip_text = "原按钮说明"
+	UITheme.apply_button(button)
+	root.add_child(button)
+	var presses := [0]
+	button.pressed.connect(func(): presses[0] += 1)
+	var skill := words.build("造成 2 点伤害。")
+	skill.position = Vector2(120, 160)
+	skill.custom_minimum_size = Vector2(230, 40)
+	skill.set_meta("suppress_hover_hint", true)
+	root.add_child(skill)
+	await _settle()
+	var overlay := button.get_node_or_null("KeywordText") as RichTextLabel
+	_assert(overlay != null, "button must display the inline elixir icon")
+	if overlay != null:
+		var icon := _keyword_point(overlay, "elixir")
+		_assert(icon != Vector2.INF, "elixir icon must have a hover hit area")
+		if icon != Vector2.INF:
+			_move_pointer(icon)
+			await _settle()
+			var hints = UIMotion.get_node("HoverHints")
+			hints._process(1.0)
+			_assert(hints.panel.visible and hints.current_text == SkillHelp.keyword_description("elixir"),
+				"the editor tooltip must explain the icon instead of repeating the button hint")
+			if DisplayServer.get_name() != "headless":
+				await RenderingServer.frame_post_draw
+				get_viewport().get_texture().get_image().save_png("res://artifacts/keyword-hover-elixir.png")
+			for down in [true, false]:
+				var click := InputEventMouseButton.new()
+				click.position = icon
+				click.button_index = MOUSE_BUTTON_LEFT
+				click.pressed = down
+				get_viewport().push_input(click, true)
+			_assert(presses[0] == 1, "clicking the icon must still press its parent button")
+			_move_pointer(button.global_position + Vector2(4, 4))
+			await _settle()
+			hints._process(1.0)
+			_assert(hints.current_text == "原按钮说明", "leaving the icon restores the normal button hint")
+			var position: Vector2 = hints.panel.position
+			_move_pointer(button.global_position + Vector2(22, 8))
+			await _settle()
+			_assert(hints.panel.visible and hints.current_text == "原按钮说明" and hints.panel.position == position, "ordinary hints must anchor to the button when the mouse moves within it")
+			_assert(position.y >= button.get_global_rect().end.y, "button hints should appear below the button when space permits")
+	var damage := _keyword_point(skill, "damage")
+	_assert(damage != Vector2.INF, "skill text must expose the damage icon")
+	if damage != Vector2.INF:
+		_move_pointer(damage)
+		await _settle()
+		var hints = UIMotion.get_node("HoverHints")
+		hints._process(1.0)
+		var hint: String = hints.current_text
+		_assert(hint == SkillHelp.description("effect", "damage"), "icon hint remains available in a skill inspector")
+	root.queue_free()
+	await _settle()
+
+
+func _keyword_point(label: RichTextLabel, id: String) -> Vector2:
+	for y in range(2, int(label.size.y), 2):
+		for x in range(2, int(label.size.x), 2):
+			var point := Vector2(x, y)
+			if label.get_tooltip(point) == SkillHelp.KEYWORD_PREFIX + id:
+				return label.get_global_transform_with_canvas() * point
+	return Vector2.INF
+
+
+func _move_pointer(point: Vector2) -> void:
+	var motion := InputEventMouseMotion.new()
+	motion.position = point
+	get_viewport().push_input(motion, true)
 
 
 func _assert(condition: bool, message: String) -> void:

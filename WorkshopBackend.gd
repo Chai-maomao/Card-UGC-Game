@@ -1,12 +1,15 @@
 class_name WorkshopBackend
 extends Node
 
+signal request_activity_changed
+
 # Shared contract for the hosted workshop and a future Steam UGC adapter.
 # UI/import code deals with packages; authentication and transport belong here.
 func authenticated() -> bool: return false
 func display_name() -> String: return ""
 func password_login() -> bool: return true
 func ready_for_use() -> bool: return false
+func is_request_active() -> bool: return false
 func browse(_query: String, _sort: String, _offset: int, _mine: bool) -> Dictionary: return _unavailable()
 func publish(_title: String, _description: String, _package: Dictionary, _cover: String = "") -> Dictionary: return _unavailable()
 func download(_id: String) -> Dictionary: return _unavailable()

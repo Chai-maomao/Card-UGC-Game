@@ -61,6 +61,7 @@ func _ready() -> void:
 	value = SkillEngine._resolve_value({"effect":"heal","value_min":6,"value_max":2},legacy,legacy,{"rng":silent_rng,"quiet":true})
 	assert(value==expected_value and silent_rng.state==expected_rng.state and random_outcomes.is_empty(),"simulation must consume the existing roll without emitting UI events")
 	_check_misfortune(rng, expected_rng)
+	_check_luck(rng, expected_rng)
 
 	PlayerData.skill_tutorial_active = false
 	PlayerData.init_card_draft()
@@ -95,6 +96,9 @@ func _ready() -> void:
 	assert(editor._collect_errors().is_empty())
 	var built: Dictionary = editor._build_skill()
 	assert(built.effects[0].then_effects.size() == 1)
+	editor.skill_prob_spin.value = 0
+	assert(editor._build_skill().probability == 0, "the editor must accept and preserve a zero percent activation chance")
+	editor.skill_prob_spin.value = 100
 	editor._undo()
 	editor._redo()
 	assert(SkillRegistry.is_chance_block(editor.effect_data[0]))
@@ -125,3 +129,32 @@ func _check_misfortune(rng: RandomNumberGenerator, expected_rng: RandomNumberGen
 		if effect_probability < 100:
 			assert(random_outcomes[1].chance_scope == "effect" and random_outcomes[1].effect_id == "gain_attack")
 			assert(random_outcomes[1].probability == effect_probability and random_outcomes[1].success)
+
+
+func _check_luck(rng: RandomNumberGenerator, expected_rng: RandomNumberGenerator) -> void:
+	for sample in [[0, 75, 0, 75], [60, 30, 20, 70], [85, 30, 0, 100], [0, 20, 20, 0]]:
+		var skill := {"trigger": "on_activate", "probability": sample[0],
+			"effects": [{"effect": "gain_attack", "target": "self", "value": 1}]}
+		var luck := {"trigger": "on_summon", "effects": [{"effect": "add_buff", "target": "self",
+			"buff_id": SkillEngine.BUFF_LUCK, "value": sample[1], "duration": 1}]}
+		var card := CardData.new("Lucky caster", 0, 5, 0, [skill, luck])
+		SkillEngine.trigger_skills("on_summon", card, {"current_player": 1})
+		if sample[2] > 0:
+			card.apply_buff(SkillEngine.BUFF_MISFORTUNE, sample[2], 2, 1)
+		random_outcomes.clear()
+		rng.seed = 42
+		expected_rng.state = rng.state
+		var final_chance: int = sample[3]
+		var expected := final_chance == 100
+		if final_chance < 100:
+			var roll := expected_rng.randf() * 100.0
+			expected = final_chance > 0 and roll <= final_chance
+		SkillEngine.trigger_single_skill(card, 0, {"rng": rng, "current_player": 1})
+		assert(card.field_atk_bonus == (1 if expected else 0) and rng.state == expected_rng.state)
+		if final_chance < 100:
+			assert(random_outcomes.size() == 1 and random_outcomes[0].probability == final_chance
+				and random_outcomes[0].success == expected, "the displayed roll must use the adjusted chance")
+		else:
+			assert(random_outcomes.is_empty(), "a guaranteed skill must skip the roll")
+		card.tick_buffs(1)
+		assert(card.skill_activation_probability(sample[0]) == maxi(0, sample[0] - sample[2]))

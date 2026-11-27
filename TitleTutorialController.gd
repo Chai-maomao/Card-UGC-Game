@@ -62,7 +62,7 @@ func _build_ui() -> void:
 	focus_frame.add_theme_stylebox_override("panel", UITheme.panel_style(Color.TRANSPARENT, UITheme.COLOR_GOLD, 3, 8))
 	overlay_layer.add_child(focus_frame)
 	instruction_panel = PanelContainer.new()
-	UITheme.apply_popup_frame(instruction_panel, "gold", false)
+	UITheme.apply_popup_frame(instruction_panel, "gold", false, true)
 	overlay_layer.add_child(instruction_panel)
 	var margin := MarginContainer.new()
 	for side in ["left", "right", "top", "bottom"]:

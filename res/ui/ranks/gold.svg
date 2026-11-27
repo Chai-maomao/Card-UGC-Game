@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="96" height="96" viewBox="0 0 96 96">
+  <defs>
+    <linearGradient id="metal" x2=".8" y2="1">
+      <stop stop-color="#50351b"/><stop offset=".21" stop-color="#fff0b5"/><stop offset=".49" stop-color="#c99636"/><stop offset=".67" stop-color="#fff0b5"/><stop offset="1" stop-color="#50351b"/>
+    </linearGradient>
+    <linearGradient id="field" x1="0" y1="0" x2=".45" y2="1">
+      <stop stop-color="#50351b"/><stop offset="1" stop-color="#1a191e"/>
+    </linearGradient>
+    <linearGradient id="stone" x2=".8" y2="1">
+      <stop stop-color="#fff0b5"/><stop offset=".55" stop-color="#c99636"/><stop offset="1" stop-color="#fdd66e"/>
+    </linearGradient>
+  </defs>
+  <path d="M48 8 57 16 70 18 80 36 76 59 66 76 48 89 30 76 20 59 16 36 26 18 39 16Z" transform="translate(0 2)" fill="#090909" stroke="#090909" stroke-width="3" opacity=".65"/>
+  <path d="M48 8 57 16 70 18 80 36 76 59 66 76 48 89 30 76 20 59 16 36 26 18 39 16Z" fill="url(#metal)" stroke="#50351b" stroke-width="1.2"/>
+  <path d="M48 8 57 16 70 18 80 36 76 59 66 76 48 89 30 76 20 59 16 36 26 18 39 16Z" transform="translate(6.72 6.72) scale(.86)" fill="url(#field)" stroke="#fff0b5" stroke-opacity=".75"/>
+  <path d="M27 38 31 26 40 23m16 0 9 3 4 12M32 64l5 7 7 5m8 0 7-5 5-7" fill="none" stroke="#fff0b5" opacity=".4"/>
+  <g stroke="#fff0b5" stroke-width="1.25" stroke-linejoin="round"><path d="m48 30 6 12 13 2-10 10 2 13-11-6-11 6 2-13-10-10 13-2Z" fill="url(#stone)"/><path d="m48 31 1 20 17-7-17 8 9 14-10-12-10 12 8-14-16-8 17 6Z" fill="#fff4c5" opacity=".63"/></g>
+  <path d="m48 16 2.5 3-2.5 3-2.5-3Zm0 62 3 3-3 3-3-3Z" fill="#fdd66e"/>
+</svg>

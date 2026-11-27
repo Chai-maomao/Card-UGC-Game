@@ -2,7 +2,9 @@ extends Control
 
 const BASE_VIEWPORT_SIZE := Vector2(1152, 648)
 const UITheme = preload("res://UITheme.gd")
+const LaunchFrame = preload("res://presentation/BattleLaunchFrame.gd")
 static var _entry_draft := ""
+var _launch: Control
 
 @onready var status_label = $Panel/VBoxContainer/StatusLabel
 @onready var host_btn = $Panel/VBoxContainer/HostButton
@@ -18,7 +20,7 @@ static var _entry_draft := ""
 
 
 func _apply_texts() -> void:
-	title_label.text = Locale.t("direct.title")
+	title_label.text = Locale.t("launch.lan_heading")
 	host_btn.text = Locale.t("lobby.host")
 	ip_label.text = Locale.t("direct.join_by_ip")
 	ip_input.placeholder_text = Locale.t("direct.address_example")
@@ -51,8 +53,6 @@ var _join_failure_message := ""
 
 
 func _apply_theme() -> void:
-	# Full-screen dark backdrop, matching every other scene (the lobby's
-	# content panel is centered and fixed-size, so it can't double as the bg).
 	var bg := Panel.new()
 	bg.name = "ThemeBackground"
 	bg.anchor_right = 1.0
@@ -61,17 +61,22 @@ func _apply_theme() -> void:
 	UITheme.apply_app_background(bg)
 	add_child(bg)
 	move_child(bg, 0)
-	UITheme.apply_panel(lobby_panel, "dark")
-	UITheme.apply_title(title_label, max(18, int(24 * _ui_scale())))
-	title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	lobby_panel.add_theme_stylebox_override("panel", StyleBoxEmpty.new())
+	_launch = LaunchFrame.new()
+	add_child(_launch)
+	move_child(_launch, 1)
+	_launch.setup(Locale.t("direct.title"), Locale.t("launch.lan_intro"), "lan")
+	_launch.bind_form(lobby_panel)
+	UITheme.apply_room_entry_title(title_label, _ui_scale())
+	UITheme.apply_separator($Panel/VBoxContainer/Separator)
 	status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	status_label.get_parent().move_child(status_label, -1)
 	for label in [status_label, ip_label]:
 		UITheme.apply_label(label, label == status_label)
 	UITheme.apply_input(ip_input)
 	UITheme.apply_button(host_btn, "primary")
-	UITheme.apply_button(join_btn, "secondary")
-	UITheme.apply_button(refresh_btn, "secondary")
+	UITheme.apply_button(join_btn, "outlined")
+	UITheme.apply_button(refresh_btn, "outlined")
 	UITheme.place_page_back(self, back_btn)
 
 
@@ -96,10 +101,10 @@ func _apply_responsive_layout() -> void:
 
 	for child in vbox.get_children():
 		if child is Label:
-			child.add_theme_font_size_override("font_size", max(10, int(14 * s)))
+			child.add_theme_font_size_override("font_size", maxi(14, roundi(15 * s)))
 			UITheme.apply_label(child, child.name == "StatusLabel")
 			if child.name == "TitleLabel":
-				UITheme.apply_title(child, max(14, int(24 * s)))
+				UITheme.apply_room_entry_title(child, s)
 			elif child.name == "StatusLabel":
 				# Long error messages must wrap instead of stretching the panel wide.
 				child.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -109,8 +114,8 @@ func _apply_responsive_layout() -> void:
 			child.custom_minimum_size = Vector2(260 * s, 0)
 			UITheme.apply_button(child, "secondary")
 		elif child is Button:
-			child.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-			UITheme.apply_button(child, "primary" if child == host_btn else "secondary")
+			child.add_theme_font_size_override("font_size", maxi(14, roundi(15 * s)))
+			UITheme.apply_button(child, "primary" if child == host_btn else "outlined")
 		elif child is LineEdit:
 			child.custom_minimum_size = Vector2(200 * s, 0)
 			UITheme.apply_input(child)
@@ -124,19 +129,11 @@ func _apply_responsive_layout() -> void:
 
 func _resize_panel_to_content(s: float) -> void:
 	var vbox := $Panel/VBoxContainer
-	var content: Vector2 = vbox.get_combined_minimum_size()
-	var pad := maxf(16.0, 24.0 * s)
-	# Panel does not inset its children using StyleBox content margins.
-	vbox.offset_left = pad
-	vbox.offset_right = -pad
-	vbox.offset_top = pad
-	vbox.offset_bottom = -pad
-	var half_w: float = max(200.0 * s, content.x * 0.5 + pad)
-	var half_h: float = max(150.0 * s, content.y * 0.5 + pad)
-	lobby_panel.offset_left = -half_w
-	lobby_panel.offset_top = -half_h
-	lobby_panel.offset_right = half_w
-	lobby_panel.offset_bottom = half_h
+	_launch.place_form(lobby_panel)
+	vbox.offset_left = 0
+	vbox.offset_right = 0
+	vbox.offset_top = maxf(12.0, 30.0 * s)
+	vbox.offset_bottom = 0
 
 
 func _scale_waiting_room(s: float) -> void:
@@ -324,16 +321,7 @@ func _format_host_address(address: String, port: int) -> String:
 
 
 func _parse_host_address(value: String) -> Dictionary:
-	var address := value.strip_edges()
-	var port := NetworkManager.LAN_GAME_PORT
-	var separator := address.rfind("]:") + 1 if address.begins_with("[") and "]:" in address else -1
-	if separator < 0 and address.count(":") == 1:
-		separator = address.find(":")
-	if separator > 0:
-		var suffix := address.substr(separator + 1)
-		port = int(suffix) if suffix.is_valid_int() else 0
-		address = address.left(separator).trim_prefix("[").trim_suffix("]")
-	return {"address": address, "port": port}
+	return preload("res://NetworkProtocolGuard.gd").parse_host_address(value, NetworkManager.LAN_GAME_PORT)
 
 
 func _on_opponent_joined():
@@ -565,7 +553,6 @@ func _on_card_art_manifest(total: int):
 	# Manifest arrives before the art bytes (and is the only message when the
 	# opponent has 0 arts), so it's what lets us know when waiting can end.
 	_opponent_arts_total = total
-	_update_art_progress_label()
 	if _opponent_arts_total >= 0 and _opponent_arts_received >= _opponent_arts_total:
 		_art_wait_deadline = 0.0
 		_check_both_ready()
@@ -579,7 +566,6 @@ func _on_card_art_received(card_index: int, ext: String, bytes: PackedByteArray,
 		PlayerData.apply_received_art(PlayerData.opponent_battle_deck,card_index,saved_path)
 		NetworkManager.send_card_art_ack(card_index, total)
 	_opponent_arts_received += 1
-	_update_art_progress_label()
 	if _art_transfer_complete():
 		_art_wait_deadline = 0.0
 		_check_both_ready()
@@ -590,24 +576,9 @@ func _on_card_art_ack(card_index: int, total: int) -> void:
 	if card_index >= 0 and not _acked_my_art_indices.has(card_index):
 		_acked_my_art_indices[card_index] = true
 		_my_arts_acked += 1
-	_update_art_progress_label()
 	if _art_transfer_complete():
 		_art_wait_deadline = 0.0
 		_check_both_ready()
-
-
-func _update_art_progress_label() -> void:
-	if not waiting_ui or not (i_am_ready and opponent_ready):
-		return
-	var wait_label = waiting_ui.get_node_or_null("WaitLabel")
-	if not wait_label:
-		return
-	if _opponent_arts_total > 0 or _my_arts_total > 0:
-		wait_label.text = Locale.t("wait.transfer_arts", [_opponent_arts_received, max(_opponent_arts_total, 0), _my_arts_acked, max(_my_arts_total, 0)])
-	elif _opponent_arts_total == 0 and _my_arts_total == 0:
-		wait_label.text = Locale.t("wait.no_arts")
-	else:
-		wait_label.text = Locale.t("wait.waiting_ready")
 
 
 # Card art transfer is best-effort and must never block the battle from starting.
@@ -627,7 +598,6 @@ func _check_both_ready():
 		if _art_wait_deadline <= 0.0:
 			_art_wait_deadline = (Time.get_ticks_msec() / 1000.0) + ART_WAIT_TIMEOUT
 			set_process(true)
-		_update_art_progress_label()
 		return
 	_begin_start()
 

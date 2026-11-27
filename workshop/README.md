@@ -2,7 +2,7 @@
 
 游戏主菜单进入。无需登录浏览卡包；熟人测试期间，注册时需要邀请码；登录后可以上传、举报、下架自己的卡包。下载后先预览，确认后导入为新卡组，不覆盖已有卡组。
 
-当前 `workshop_config.json` 的 URL 留空，入口显示“工坊暂时未开放”。服务器已运行初版后端，但仅监听本机；最新本地修改尚未部署。公网代理和定时任务未启用，不代表已经上线。
+工坊目前临时部署在联机大厅所在服务器。客户端默认连接 `https://103.236.54.24`，由 Nginx 转发到监听本机的独立工坊服务。部署沿用原有数据库和邀请码。
 
 ## 本机运行
 
@@ -20,10 +20,10 @@ python workshop/server.py --allow-http --db artifacts/workshop-dev.sqlite3
 - 在 `/etc/cardex-workshop.env` 设置随机的 `CARDEX_WORKSHOP_ADMIN_TOKEN`，文件权限 600。用 `python3 -c 'import secrets; print(secrets.token_urlsafe(48))'` 生成，勿提交到仓库或放进客户端。
 - 如仅向熟人开放上传，另设 `CARDEX_WORKSHOP_INVITE`。不设置则允许公开注册。
 - 使用附带的 systemd 配置运行，仅监听 127.0.0.1:8765。管理接口只允许服务器本机访问。
-- 域名不是必需条件：可使用 Let's Encrypt 免费 IP 证书。服务器已签发短期 IP 证书，有效至 2026-11-20；尚未接入公网代理，也未启用续期。开放前必须续期并验证自动续期，不能依赖这张临时证书长期运行。
-- `nginx-ip.conf`、`cardex-workshop-certificate.service/.timer` 是待安装的 IP HTTPS 配置；已有域名也可选择附带的 Caddy 配置。不要覆盖服务器已有站点。
+- 当前使用 Let's Encrypt 短期 IP 证书。Certbot 通过现有 HTTP 站点的 webroot 完成验证，续签定时器会重新加载 Nginx。
+- `nginx-ip.conf` 作为独立站点配置接入现有 Nginx，公网只转发工坊 API，并拦截管理接口。其他主机有域名时也可使用附带的 Caddy 配置。
 - 将正式 HTTPS 地址写入项目根目录 `workshop_config.json` 的 `url`。
-- `backup.py` 使用 SQLite backup API，校验备份并保留14天；附带的备份 service/timer 和日志轮转配置尚未安装。不要在写入过程中只复制 `.sqlite3` 而遗漏 WAL。保留足够磁盘空间并监控待审核内容和存储增长。
+- `backup.py` 使用 SQLite backup API，校验备份并保留 14 天。服务器每天备份到 `/var/backups/cardex-workshop`。手动备份时也应使用该脚本，以纳入 WAL 中的写入。
 
 ## 审核
 
@@ -44,7 +44,7 @@ python3 admin.py hide PACKAGE_ID
 
 每包最多200张卡牌、16 MB，每张图片最多2 MB、4096边长和4194304像素。服务端检查图片头的尺寸；上传前和服务端均清除本地图片路径与技能工作区数据，保留原作者来源。内容只作为 JSON 保存，不执行卡包代码；下载仍须通过游戏现有格式与复杂度检查。
 
-这是独立的社区服务，不占用对局服务器端口。公网开放前仍需实际 HTTPS 连通验证、内容审核负责人和备份恢复演练；当前没有邮件验证或自助找回密码。
+工坊和联机大厅共用主机，各自由独立的服务进程和端口提供。当前没有邮件验证或自助找回密码。
 
 ## 检查
 

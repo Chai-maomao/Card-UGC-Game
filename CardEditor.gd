@@ -16,13 +16,14 @@ const _UgcSafety = preload("res://UgcSafety.gd")
 const _CardTutorialController = preload("res://CardEditorTutorialController.gd")
 const _CardArtDropZone = preload("res://presentation/CardArtDropZone.gd")
 
-var card_ui_scene = preload("res://CardUI.tscn")
 var pending_save_card: CardData = null
 var pending_save_target_ids: Array = []
 var pending_save_index: int = 0
 var _pending_save_decks: Dictionary = {}
 var _pending_prior_cards: Array[CardData] = []
 var _retry_save_target_ids: Array = []
+var _retry_sync_cards: Dictionary = {}
+var _pending_sync_cards: Dictionary = {}
 var pending_saved_card: CardData = null
 var pending_save_popup_layer: CanvasLayer = null
 var card_tutorial_controller
@@ -41,6 +42,7 @@ var _art_crop: CanvasLayer
 var _damaged_art_clear: Button
 var _preview_damaged: CheckButton
 var _room_connection_notice: Label
+var _form_header: VBoxContainer
 
 @onready var title_label = $Panel/MarginContainer/ScrollContainer/VBoxContainer/TitleLabel
 @onready var template_button = $Panel/MarginContainer/ScrollContainer/VBoxContainer/TemplateButton
@@ -161,13 +163,20 @@ func _ui_scale() -> float:
 
 func _apply_responsive_layout() -> void:
 	var s := _ui_scale()
+	var bottom_inset := roundi(22 * s)
 
 	# MarginContainer
 	var margin := $Panel/MarginContainer
+	var form_top := maxi(80, int(64 * s))
+	var sidebar_right := -28 * s
+	if preview_card:
+		preview_card.apply_ui_scale(max(0.9, 1.35 * s))
+	var sidebar_width := maxf(266 * s, card_preview_panel.get_combined_minimum_size().x)
+	var sidebar_left := sidebar_right - sidebar_width
+	var form_right := ceili(-sidebar_left + 58 * s)
 	margin.add_theme_constant_override("margin_left", int(48 * s))
-	margin.add_theme_constant_override("margin_right", int(360 * s))
-	margin.add_theme_constant_override("margin_top", maxi(80, int(64 * s)))
-	margin.add_theme_constant_override("margin_bottom", int(64 * s))
+	margin.add_theme_constant_override("margin_right", form_right)
+	margin.add_theme_constant_override("margin_bottom", bottom_inset)
 
 	# Back button
 	var back_btn := $BackButton
@@ -183,13 +192,11 @@ func _apply_responsive_layout() -> void:
 		# This panel is right-anchored. Assigning `position` moved it relative to
 		# the wrong origin on resized windows and could place the entire preview
 		# off-screen; offsets preserve the right anchor at every scale.
-		card_preview_panel.offset_left = -294 * s
+		card_preview_panel.offset_left = sidebar_left
 		card_preview_panel.offset_top = 72 * s
-		card_preview_panel.offset_right = -28 * s
-		card_preview_panel.offset_bottom = 342 * s
+		card_preview_panel.offset_right = sidebar_right
+		card_preview_panel.offset_bottom = card_preview_panel.offset_top + maxf(270 * s, card_preview_panel.get_combined_minimum_size().y)
 		preview_title.add_theme_font_size_override("font_size", max(10, int(14 * s)))
-		if preview_card:
-			preview_card.apply_ui_scale(max(0.9, 1.35 * s))
 
 	# VBox container
 	UITheme.pad_scroll_content($Panel/MarginContainer/ScrollContainer, 16)
@@ -202,19 +209,25 @@ func _apply_responsive_layout() -> void:
 	for label in [cost_label, hp_label, atk_label]:
 		label.add_theme_font_size_override("font_size", maxi(13, int(15 * s)))
 	if _diagnostics_panel:
-		_diagnostics_panel.offset_left = -294 * s
-		_diagnostics_panel.offset_right = -28 * s
-		_diagnostics_panel.offset_top = 356 * s
+		_diagnostics_panel.offset_left = sidebar_left
+		_diagnostics_panel.offset_right = sidebar_right
+		_diagnostics_panel.offset_top = card_preview_panel.offset_bottom + 12 * s
 		_diagnostics_panel.offset_bottom = -80 * s
 	if _editor_save_dock:
-		_editor_save_dock.offset_left = -294 * s
-		_editor_save_dock.offset_right = -28 * s
+		_editor_save_dock.offset_left = sidebar_left
+		_editor_save_dock.offset_right = sidebar_right
 		_editor_save_dock.offset_top = -68 * s
-		_editor_save_dock.offset_bottom = -22 * s
-		save_button.custom_minimum_size = Vector2(250, 44) * s
+		_editor_save_dock.offset_bottom = -bottom_inset
+		save_button.custom_minimum_size = Vector2(sidebar_width, 44 * s)
 	# Scale all labels and inputs in the VBox
 	title_label.add_theme_font_size_override("font_size", maxi(18, int(22 * s)))
 	template_button.add_theme_font_size_override("font_size", maxi(13, int(14 * s)))
+	_form_header.offset_left = int(48 * s)
+	_form_header.offset_right = -form_right - 16
+	_form_header.offset_top = form_top
+	var header_height := ceili(_form_header.get_combined_minimum_size().y)
+	_form_header.offset_bottom = form_top + header_height
+	margin.add_theme_constant_override("margin_top", form_top + header_height + maxi(8, roundi(12 * s)))
 	for child in vbox.get_children():
 		if child is Label:
 			var section: bool = child.has_meta("card_form_heading")
@@ -238,6 +251,7 @@ func _apply_theme() -> void:
 		UITheme.apply_input(input)
 	for btn in [template_button, clear_art_button, simulation_button, version_history_button]:
 		UITheme.apply_button(btn, "utility")
+	_setup_template_menu()
 	for btn in [edit_skill1_btn, edit_talent_btn, edit_skill2_btn, edit_skill3_btn]:
 		UITheme.apply_button(btn, "secondary")
 	UITheme.apply_button(save_button, "primary")
@@ -251,6 +265,7 @@ func _apply_theme() -> void:
 
 
 func _ready():
+	browse_button.paste_requested.connect(_paste_art.bind("art_path"))
 	art_label.set_meta("keyword_literal",true)
 	get_window().files_dropped.connect(_on_art_files_dropped)
 	_arrange_editor_form()
@@ -301,13 +316,19 @@ func _ready():
 
 func _arrange_editor_form() -> void:
 	var form := name_label.get_parent() as VBoxContainer
+	_form_header = VBoxContainer.new()
+	_form_header.name = "EditorHeader"
+	_form_header.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+	_form_header.add_theme_constant_override("separation", 8)
+	$Panel.add_child(_form_header)
 	var header := HBoxContainer.new()
 	header.add_theme_constant_override("separation", 16)
-	form.add_child(header)
-	form.move_child(header, 0)
+	_form_header.add_child(header)
+	_form_header.add_child(UITheme.separator())
 	title_label.reparent(header, false)
 	title_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	title_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_label.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	template_button.reparent(header, false)
 	for field in [name_label, name_input, form.get_node("StatsGrid"),
 			gender_label, gender_select, parasite_damage_mode_label, parasite_damage_mode_select,
@@ -320,6 +341,7 @@ func _arrange_editor_form() -> void:
 	for child in form.get_children():
 		if child is HSeparator:
 			UITheme.apply_separator(child)
+	form.get_node("Separator0").hide()
 
 
 func _add_form_heading(form: VBoxContainer, before: Control, key: String) -> void:
@@ -396,12 +418,9 @@ func _restore_form_from_draft():
 	gender_select.selected = gmap.get(PlayerData.card_draft.get("gender", "female"), 1)
 	parasite_damage_mode_select.selected = 1 if PlayerData.card_draft.get("parasite_damage_mode", CardData.PARASITE_DAMAGE_ABSORB) == CardData.PARASITE_DAMAGE_LINKED else 0
 
-	var art: String = PlayerData.card_draft.get("art_path", "")
-	if art != "":
-		art_path_label.text = art.get_file()
-	else:
-		art_path_label.text = ""
-	art_path_label.visible = not art.is_empty()
+	_show_art_status("art_path", "")
+	if is_instance_valid(_damaged_art_path):
+		_show_art_status("damaged_art_path", "")
 	_suspend_form_updates = false
 
 
@@ -418,12 +437,13 @@ func _save_form_to_draft():
 
 
 func _refresh_card_preview() -> void:
-	clear_art_button.disabled = str(PlayerData.card_draft.get("art_path", "")).is_empty()
+	var art := str(PlayerData.card_draft.get("art_path", ""))
+	clear_art_button.disabled = art.is_empty()
+	browse_button.set_art(art)
 	if _damaged_art_clear != null:
 		var damaged: String = PlayerData.card_draft.get("damaged_art_path", "")
 		_damaged_art_clear.disabled = damaged.is_empty()
-		_damaged_art_path.text = damaged.get_file()
-		_damaged_art_path.visible = not damaged.is_empty()
+		_damaged_art_browse.set_art(damaged)
 	if preview_card == null:
 		return
 	var preview_data: CardData = PlayerData.build_card_from_draft()
@@ -526,7 +546,7 @@ func _balance_color(level: String) -> Color:
 			return UITheme.Tokens.WARNING
 		"weak":
 			return UITheme.Tokens.MUTED
-	return UITheme.Tokens.PAPER
+	return UITheme.Tokens.TITLE
 
 
 # ============================================
@@ -736,14 +756,21 @@ func _add_balance_simulation_result(result: Dictionary) -> void:
 	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	UITheme.apply_label(name_label)
 	row.add_child(name_label)
+	var score: Variant = result.get("strength_score")
+	if score != null and bool(result.get("partial_score", false)):
+		var qualifier := Label.new()
+		qualifier.text = Locale.t("simulation.partial_score")
+		qualifier.tooltip_text = Locale.t("simulation.partial_help")
+		UITheme.apply_label(qualifier, true)
+		row.add_child(qualifier)
 	var score_label := Label.new()
 	score_label.name = "StrengthScore"
 	score_label.custom_minimum_size.x = 64
 	score_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 	UITheme.apply_title(score_label,24)
-	var score: Variant = result.get("strength_score")
-	score_label.text = "—" if score==null else str(int(score))
-	score_label.add_theme_color_override("font_color",UITheme.Tokens.MUTED if score==null else UITheme.strength_score_color(int(score)))
+	var unused: bool = int(result.get("candidate", {}).get("plays", 0)) == 0
+	score_label.text = str(int(score)) if score != null else Locale.t("simulation.no_plays" if unused else "simulation.insufficient")
+	score_label.add_theme_color_override("font_color", UITheme.Tokens.MUTED if score == null else UITheme.strength_score_color(int(score)))
 	row.add_child(score_label)
 	results.add_child(row)
 
@@ -969,8 +996,7 @@ func _on_browse_art_pressed():
 func _art_paste_hint() -> String:
 	if _CardArtDropZone.uses_touch_picker() or not DisplayServer.has_feature(DisplayServer.FEATURE_CLIPBOARD):
 		return ""
-	var shortcut := "⌘V" if OS.get_name() == "macOS" else "Ctrl+V"
-	return Locale.t("editor.art_paste", [shortcut])
+	return Locale.t("editor.art_paste")
 
 
 func _browse_art(field: String) -> void:
@@ -1022,6 +1048,12 @@ func _unhandled_key_input(event: InputEvent) -> void:
 	if field.is_empty() or not DisplayServer.has_feature(DisplayServer.FEATURE_CLIPBOARD):
 		return
 	get_viewport().set_input_as_handled()
+	_paste_art(field)
+
+
+func _paste_art(field: String) -> void:
+	if not _can_import_art() or not DisplayServer.has_feature(DisplayServer.FEATURE_CLIPBOARD):
+		return
 	if not DisplayServer.clipboard_has_image():
 		_show_art_status(field, Locale.t("editor.art_clipboard_empty"))
 		return
@@ -1064,15 +1096,17 @@ func _open_art_crop(image: Image, field: String) -> void:
 	dialog.on_saved = func(saved_path):
 		PlayerData.card_draft[field] = saved_path
 		PlayerData.queue_card_draft_recovery()
-		_show_art_status(field, saved_path.get_file())
+		_show_art_status(field, "")
 		_refresh_card_preview()
 	_art_crop = dialog
 	add_child(dialog)
+	UIMotion.register_popup(dialog)
 
 func _show_art_status(field: String, message: String) -> void:
 	var status: Label = _damaged_art_path if field == "damaged_art_path" else art_path_label
 	status.text = message
 	status.visible = not message.is_empty()
+
 
 func _on_clear_art_pressed():
 	if card_tutorial_controller and not card_tutorial_controller.allows("clear_art"):
@@ -1094,8 +1128,6 @@ func _configure_skill_summaries() -> void:
 		summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		summary.custom_minimum_size.x = 0.0
 		summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-		summary.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		summary.max_lines_visible = 3
 
 
 func _update_skill_labels():
@@ -1110,10 +1142,6 @@ func _update_skill_labels():
 	if not is_spell and not is_parasite:
 		skill1_label.text = Locale.t("editor.talent") if has_talent else Locale.t("editor.skill_1")
 	talent_summary.text = "%s：%s" % [Locale.t("editor.talent"), _format_skill_short(talent)]
-	skill1_summary.tooltip_text = skill1_summary.text
-	skill2_summary.tooltip_text = skill2_summary.text
-	skill3_summary.tooltip_text = skill3_summary.text
-	talent_summary.tooltip_text = talent_summary.text
 	var has_skill2: bool = not PlayerData.card_draft.get("skill2", {}).is_empty()
 	var has_skill3: bool = not PlayerData.card_draft.get("skill3", {}).is_empty()
 	# Spell cards only have one skill; parasite cards currently expose one passive skill slot.
@@ -1165,19 +1193,16 @@ func _format_skill_short(skill: Dictionary) -> String:
 # Templates
 # ============================================
 
-func _on_template_pressed() -> void:
-	var page := preload("res://SelectionMenu.gd").new()
-	page.layer = 100
-	page.heading = Locale.t("editor.template_title")
-	page.backdrop = UITheme.COLOR_BG
-	page.blur_backdrop = true
-	add_child(page)
-	for template_id in ["warrior", "healer", "guard", "gunner", "cursed"]:
-		page.add_choice(Locale.t("editor.template_%s" % template_id), func(id: String = template_id):
-			_apply_template(id)
-			page.queue_free())
-	page.finish()
-	page.slide_entries.call_deferred(UITheme.Tokens.SPACING[2])
+func _setup_template_menu() -> void:
+	template_button.icon = template_button.get_theme_icon("arrow", "OptionButton")
+	template_button.icon_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	template_button.focus_mode = Control.FOCUS_ALL
+	var menu: PopupMenu = template_button.get_popup()
+	UITheme.apply_popup_menu(menu)
+	var templates := ["warrior", "healer", "guard", "gunner", "cursed"]
+	for index in templates.size():
+		menu.add_item(Locale.t("editor.template_%s" % templates[index]), index)
+	menu.id_pressed.connect(func(index: int): _apply_template(templates[index]))
 
 
 func _apply_template(template_id: String) -> void:
@@ -1304,13 +1329,7 @@ func _show_sync_edit_popup(new_card: CardData) -> void:
 	if original == null:
 		_show_message(Locale.t("editor.need_target_deck"))
 		return
-	var target_deck_ids: Dictionary = {}
-	for deck in PlayerData.deck_library:
-		var deck_id: String = deck.get("id", "")
-		for card in PlayerData.get_cards_for_deck(deck_id):
-			if card.card_name == original.card_name:
-				target_deck_ids[deck_id] = true
-				break
+	var original_design := SharePackage.gameplay_signature(PlayerData.serialize_card(original))
 	var popup := UITheme.make_popup_layer(self, 105)
 	var popup_layer: CanvasLayer = popup["layer"]
 	var panel := Panel.new()
@@ -1355,22 +1374,29 @@ func _show_sync_edit_popup(new_card: CardData) -> void:
 	deck_scroll.add_child(deck_box)
 	for deck in PlayerData.deck_library:
 		var deck_id: String = deck.get("id", "")
-		if not target_deck_ids.has(deck_id):
-			continue
-		var check := CheckBox.new()
-		check.text = PlayerData.deck_display_name(deck)
-		check.disabled = deck_id == PlayerData.editing_deck_id
-		check.button_pressed = check.disabled or _retry_save_target_ids.is_empty() or _retry_save_target_ids.has(deck_id)
-		if check.button_pressed:
-			selected_ids[deck_id] = true
-		UITheme.apply_button(check, "secondary")
-		check.toggled.connect(func(pressed: bool):
-			if pressed:
-				selected_ids[deck_id] = true
-			else:
-				selected_ids.erase(deck_id)
-		)
-		deck_box.add_child(check)
+		var copies := PlayerData.get_cards_for_deck(deck_id).filter(func(card: CardData): return card.card_name == original.card_name)
+		for index in copies.size():
+			var card: CardData = copies[index]
+			var check := CheckBox.new()
+			check.text = PlayerData.deck_display_name(deck)
+			if copies.size() > 1:
+				check.text += Locale.t("editor.sync_copy_number", [index + 1])
+			check.disabled = deck_id == PlayerData.editing_deck_id and card.instance_id == original.instance_id
+			var same_design := SharePackage.gameplay_signature(PlayerData.serialize_card(card)) == original_design \
+				and PlayerData.same_card_art(card.art_path, original.art_path) \
+				and (card.is_spell() or PlayerData.same_card_art(card.damaged_art_path, original.damaged_art_path))
+			check.button_pressed = check.disabled or (same_design if _retry_sync_cards.is_empty() \
+				else (_retry_sync_cards.get(deck_id, []) as Array).has(card.instance_id))
+			var selected: Array = selected_ids.get_or_add(deck_id, [])
+			if check.button_pressed:
+				selected.append(card.instance_id)
+			UITheme.apply_button(check, "secondary")
+			check.toggled.connect(func(pressed: bool):
+				if pressed:
+					selected.append(card.instance_id)
+				else:
+					selected.erase(card.instance_id))
+			deck_box.add_child(check)
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	box.add_child(row)
@@ -1379,11 +1405,11 @@ func _show_sync_edit_popup(new_card: CardData) -> void:
 	save_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	UITheme.apply_button(save_btn, "primary")
 	save_btn.pressed.connect(func():
-		if not selected_ids.has(PlayerData.editing_deck_id):
+		if not (selected_ids.get(PlayerData.editing_deck_id, []) as Array).has(original.instance_id):
 			_show_message(Locale.t("editor.sync_keep_deck"))
 			return
 		popup_layer.queue_free()
-		_apply_synced_edit(new_card, original.card_name, selected_ids.keys())
+		_apply_synced_edit(new_card, original.card_name, selected_ids)
 	)
 	row.add_child(save_btn)
 	var cancel_btn := Button.new()
@@ -1392,9 +1418,11 @@ func _show_sync_edit_popup(new_card: CardData) -> void:
 	UITheme.apply_button(cancel_btn, "secondary")
 	cancel_btn.pressed.connect(popup_layer.queue_free)
 	row.add_child(cancel_btn)
+	UIMotion.register_popup(popup_layer)
 
 
-func _apply_synced_edit(new_card: CardData, original_name: String, target_deck_ids: Array) -> void:
+func _apply_synced_edit(new_card: CardData, original_name: String, selected_ids: Dictionary) -> void:
+	var target_deck_ids := selected_ids.keys().filter(func(id): return not selected_ids[id].is_empty())
 	for deck_id_variant in target_deck_ids:
 		var deck_id: String = deck_id_variant
 		for card in PlayerData.get_cards_for_deck(deck_id):
@@ -1403,13 +1431,10 @@ func _apply_synced_edit(new_card: CardData, original_name: String, target_deck_i
 				return
 	_clear_pending_save()
 	pending_save_target_ids = target_deck_ids
+	_pending_sync_cards = selected_ids.duplicate(true)
 	for deck_id_variant in target_deck_ids:
 		var deck_id: String = deck_id_variant
-		var matching_instance_ids: Array = []
-		for card in PlayerData.get_cards_for_deck(deck_id):
-			if card.card_name == original_name:
-				matching_instance_ids.append(card.instance_id)
-		for instance_id in matching_instance_ids:
+		for instance_id in selected_ids[deck_id]:
 			var staged := _stage_deck_save(deck_id, new_card, instance_id)
 			if staged == null:
 				_fail_card_save()
@@ -1567,12 +1592,14 @@ func _finish_multi_deck_save() -> void:
 	_record_saved_revision(saved_card)
 	PlayerData.card_draft = PlayerData.card_to_draft(saved_card)
 	_retry_save_target_ids.clear()
+	_retry_sync_cards.clear()
 	_show_after_save_popup(saved_card)
 	_clear_pending_save()
 
 
 func _fail_card_save() -> void:
 	_retry_save_target_ids = pending_save_target_ids.duplicate()
+	_retry_sync_cards = _pending_sync_cards.duplicate(true)
 	_clear_pending_save()
 	_show_message(Locale.t("editor.card_save_failed"))
 
@@ -1584,6 +1611,7 @@ func _clear_pending_save() -> void:
 	pending_saved_card = null
 	_pending_save_decks.clear()
 	_pending_prior_cards.clear()
+	_pending_sync_cards.clear()
 
 
 func _save_card_without_conflict(new_card: CardData) -> void:
@@ -1591,9 +1619,9 @@ func _save_card_without_conflict(new_card: CardData) -> void:
 	_start_multi_deck_save(new_card, [deck_id])
 
 
-func _save_name_taken(deck_id: String, card_name: String, ignored_card: CardData = null) -> bool:
+func _save_name_taken(deck_id: String, card_name: String) -> bool:
 	for card in PlayerData.get_cards_for_deck(deck_id):
-		if card != ignored_card and card.card_name == card_name:
+		if card.card_name == card_name:
 			return true
 	return false
 
@@ -1632,11 +1660,8 @@ func _show_save_conflict_popup(deck_id: String, local_card: CardData, new_card: 
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	UITheme.apply_title(title, 20)
 	vbox.add_child(title)
-	var cards_row := HBoxContainer.new()
-	cards_row.add_theme_constant_override("separation", 16)
-	vbox.add_child(cards_row)
-	cards_row.add_child(_make_conflict_summary(Locale.t("share.local_card"), local_card))
-	cards_row.add_child(_make_conflict_summary(Locale.t("share.incoming_card"), new_card))
+	vbox.add_child(preload("res://CardCollectionDialog.gd").make_comparison(
+		Locale.t("share.local_card"), local_card, Locale.t("share.incoming_card"), new_card))
 	var input := LineEdit.new()
 	input.text = _available_save_name(deck_id,new_card.card_name)
 	UITheme.apply_input(input)
@@ -1652,37 +1677,16 @@ func _show_save_conflict_popup(deck_id: String, local_card: CardData, new_card: 
 	var row := HBoxContainer.new()
 	row.add_theme_constant_override("separation", 8)
 	vbox.add_child(row)
-	var rename_local := Button.new()
-	rename_local.text = Locale.t("share.rename_local")
-	rename_local.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	UITheme.apply_button(rename_local, "secondary")
-	rename_local.pressed.connect(func():
-		var new_name := input.text.strip_edges()
-		if new_name.is_empty(): new_name = Locale.t("editor.unnamed")
-		if new_name == new_card.card_name or _save_name_taken(deck_id,new_name,local_card):
-			name_error.show()
-			return
-		var renamed := local_card.duplicate_card()
-		renamed.card_name = new_name
-		popup_layer.queue_free()
-		if _stage_deck_save(deck_id, renamed, local_card.instance_id) == null:
-			_fail_card_save()
-			return
-		if not _save_to_target_deck(deck_id):
-			return
-		pending_save_index += 1
-		_process_next_save_target()
-	)
-	row.add_child(rename_local)
 	var rename_new := Button.new()
 	rename_new.text = Locale.t("share.rename_incoming")
 	rename_new.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	UITheme.apply_button(rename_new, "secondary")
+	UITheme.apply_button(rename_new, "outlined")
 	rename_new.pressed.connect(func():
 		var new_name := input.text.strip_edges()
-		if new_name.is_empty(): new_name = Locale.t("editor.unnamed")
-		if _save_name_taken(deck_id,new_name):
+		if new_name.is_empty() or _save_name_taken(deck_id, new_name):
+			name_error.text = Locale.t("share.rename_empty" if new_name.is_empty() else "editor.sync_name_conflict")
 			name_error.show()
+			input.grab_focus()
 			return
 		new_card.card_name = new_name
 		popup_layer.queue_free()
@@ -1693,7 +1697,7 @@ func _show_save_conflict_popup(deck_id: String, local_card: CardData, new_card: 
 	)
 	row.add_child(rename_new)
 	var replace_btn := Button.new()
-	replace_btn.text = Locale.t("share.replace_local")
+	replace_btn.text = Locale.t("share.overwrite")
 	replace_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	UITheme.apply_button(replace_btn, "danger")
 	replace_btn.pressed.connect(func():
@@ -1713,9 +1717,10 @@ func _show_save_conflict_popup(deck_id: String, local_card: CardData, new_card: 
 	var cancel_btn := Button.new()
 	cancel_btn.text = Locale.t("common.cancel")
 	cancel_btn.size_flags_horizontal = Control.SIZE_SHRINK_END
-	UITheme.apply_button(cancel_btn, "secondary")
+	UITheme.apply_button(cancel_btn, "outlined")
 	cancel_btn.pressed.connect(cancel)
 	vbox.add_child(cancel_btn)
+	input.grab_focus()
 
 
 func _show_message(text: String) -> void:
@@ -1757,28 +1762,6 @@ func _show_message(text: String) -> void:
 	box.add_child(ok)
 
 
-func _make_conflict_summary(label_text: String, card: CardData) -> VBoxContainer:
-	var box := VBoxContainer.new()
-	box.custom_minimum_size = Vector2(260, 0)
-	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	box.add_theme_constant_override("separation", 6)
-	var label := Label.new()
-	label.text = label_text
-	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	UITheme.apply_label(label)
-	box.add_child(label)
-	var preview_holder := CenterContainer.new()
-	preview_holder.custom_minimum_size = Vector2(120, 150)
-	box.add_child(preview_holder)
-	var card_ui = card_ui_scene.instantiate()
-	preview_holder.add_child(card_ui)
-	card_ui.set_card(card)
-	card_ui.apply_ui_scale(0.82)
-	card_ui.set_battle_layout_preview(true)
-	card_ui.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	return box
-
-
 func _show_after_save_popup(saved_card: CardData) -> void:
 	# Keep editing the saved instance when the dialog closes, including a newly
 	# created card. Later saves must update it rather than add another copy.
@@ -1792,16 +1775,19 @@ func _show_after_save_popup(saved_card: CardData) -> void:
 				break
 	_apply_texts()
 	var page := preload("res://SelectionMenu.gd").new()
+	page.name = "CardSavedPopup"
 	page.layer = 100
 	page.heading = Locale.t("editor.saved_title")
-	page.backdrop = UITheme.COLOR_BG
+	page.backdrop = Color(Color.BLACK, 0.68)
+	page.blur_backdrop = true
 	add_child(page)
-	page.add_choice(Locale.t("editor.after_save_return"), page.queue_free)
-	var playtest := page.add_choice(Locale.t("editor.after_save_test"), func():
-		page.queue_free()
-		_start_solo_test(saved_card))
-	playtest.tooltip_text = Locale.t("editor.playtest_help")
+	var keep_editing := page.add_choice(Locale.t("editor.after_save_return"), page.dismiss)
+	page.add_choice(Locale.t("editor.after_save_test"), func():
+		page.dismiss()
+		_start_solo_test(saved_card), Locale.t("editor.playtest_help"))
+	UIMotion.register_popup(page, keep_editing)
 	page.finish(false)
+	UITheme.fade_enter(page.surface, 0.16)
 
 
 func _return_after_save() -> void:
@@ -1856,6 +1842,7 @@ func _on_back_button_pressed():
 			_discard_dialog.dialog_text = Locale.t("editor.discard_body")
 			add_child(_discard_dialog)
 			UITheme.apply_dialog(_discard_dialog,true)
+			UITheme.apply_destructive_confirmation(_discard_dialog, Locale.t("editor.discard_action"))
 			_discard_dialog.confirmed.connect(_discard_card_and_leave)
 		_discard_dialog.popup_centered()
 		return
@@ -1937,6 +1924,7 @@ func _build_damaged_art_controls() -> void:
 	_damaged_art_browse = _CardArtDropZone.new()
 	row.add_child(_damaged_art_browse)
 	_damaged_art_browse.pressed.connect(_browse_art.bind("damaged_art_path"))
+	_damaged_art_browse.paste_requested.connect(_paste_art.bind("damaged_art_path"))
 	_damaged_art_clear=Button.new()
 	_damaged_art_clear.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	row.add_child(_damaged_art_clear)
@@ -1944,6 +1932,7 @@ func _build_damaged_art_controls() -> void:
 	_damaged_art_clear.pressed.connect(func():
 		PlayerData.card_draft["damaged_art_path"]=""
 		PlayerData.queue_card_draft_recovery()
+		_show_art_status("damaged_art_path", "")
 		_refresh_card_preview())
 	_preview_damaged=CheckButton.new()
 	_preview_damaged.name="PreviewDamagedArt"
@@ -1953,5 +1942,6 @@ func _build_damaged_art_controls() -> void:
 	preview_title.reparent(header)
 	preview_title.size_flags_horizontal=Control.SIZE_EXPAND_FILL
 	header.add_child(_preview_damaged)
+	UITheme.apply_button(_preview_damaged, "utility", false)
 	_preview_damaged.add_theme_font_size_override("font_size",12)
 	_preview_damaged.toggled.connect(func(_on): _refresh_card_preview())
