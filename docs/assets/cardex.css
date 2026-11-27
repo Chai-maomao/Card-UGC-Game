@@ -68,11 +68,13 @@ nav a:hover, .repository-link:hover, .hero-version:hover { color: var(--paper); 
 .hero-version span { margin-inline-start: .18rem; color: var(--brass); }
 
 .section { margin: 5rem 0; }
-.feature { display: grid; gap: 1.15rem; }
-.feature-copy p { margin-top: .5rem; color: var(--muted); }
+.feature { display: grid; grid-template-columns: 1.5fr 1fr; gap: clamp(1.65rem, 5vw, 5rem); align-items: center; }
 .battle-view { padding: 7px; border: 1px solid var(--line); background: var(--deep); }
 .battle-view img { width: 100%; height: auto; border: 1px solid var(--hairline); }
 .battle-view figcaption { padding: .45rem .4rem .15rem; font-size: .85rem; color: var(--muted); }
+.feature-steps { display: grid; margin-top: 1.15rem; }
+.feature-steps div { padding: .65rem 0; border-bottom: 1px solid var(--hairline); }
+.feature-steps dd { color: var(--muted); margin-top: .14rem; }
 
 .section-heading { display: flex; align-items: end; justify-content: space-between; gap: 1rem; margin-bottom: 1.1rem; }
 .mode-tabs:not([hidden]) { display: flex; flex-wrap: wrap; gap: .3rem; border-bottom: 1px solid var(--line); }

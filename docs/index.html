@@ -8,9 +8,7 @@
   <title>CARDEX — 自定义卡牌对战</title>
   <link rel="icon" href="assets/cardex-icon.webp" type="image/webp">
   <link rel="stylesheet" href="assets/cardex.css">
-  <link rel="stylesheet" href="assets/skill-demo.css">
   <script src="assets/cardex-modes.js" defer></script>
-  <script src="assets/skill-demo.js" defer></script>
 </head>
 <body id="top">
   <a class="skip-link" href="#about">跳到正文</a>
@@ -46,70 +44,17 @@
     </section>
 
     <section class="section feature" id="features" aria-labelledby="features-title">
-      <div class="feature-copy">
-        <h2 id="features-title">卡牌创作</h2>
-        <p>点击积木或拖到工作区，先选触发时机，再接上效果。填好数值后，点「试一次」看结算。</p>
-      </div>
-      <figure class="battle-view" data-skill-fallback>
+      <figure class="battle-view">
         <img src="assets/skill-editor.webp" width="1280" height="720" alt="游戏内技能编辑器，左侧是积木库，右侧是所选积木的设置" loading="lazy">
         <figcaption>游戏内技能编辑器</figcaption>
       </figure>
-      <div class="skill-demo" id="skill-demo" aria-labelledby="skill-demo-title" hidden>
-        <div class="skill-demo-bar">
-          <h3 id="skill-demo-title">技能编辑器</h3>
-          <div class="skill-demo-actions">
-            <button type="button" class="demo-quiet" data-demo-command="example">载入示例</button>
-            <button type="button" class="demo-quiet" data-demo-command="clear" disabled>清空</button>
-          </div>
-        </div>
-        <div class="skill-demo-layout">
-          <section class="demo-palette" aria-labelledby="demo-palette-title">
-            <h4 id="demo-palette-title">积木库</h4>
-            <fieldset>
-              <legend>触发</legend>
-              <button type="button" class="demo-block trigger" data-block="attack" draggable="true">攻击时</button>
-              <button type="button" class="demo-block trigger" data-block="turn" draggable="true">回合开始时</button>
-            </fieldset>
-            <fieldset>
-              <legend>条件</legend>
-              <button type="button" class="demo-block condition" data-block="threshold" draggable="true">对手生命不高于</button>
-            </fieldset>
-            <fieldset>
-              <legend>效果</legend>
-              <button type="button" class="demo-block damage" data-block="damage" draggable="true">造成伤害</button>
-              <button type="button" class="demo-block heal" data-block="heal" draggable="true">恢复生命</button>
-              <button type="button" class="demo-block draw" data-block="draw" draggable="true">抽牌</button>
-            </fieldset>
-          </section>
-          <section class="demo-board" aria-labelledby="demo-board-title">
-            <h4 id="demo-board-title">工作区</h4>
-            <div class="demo-flow">
-              <div class="demo-slot" data-slot="trigger"></div>
-              <div class="demo-slot" data-slot="condition"></div>
-              <div class="demo-slot demo-effects" data-slot="effects"></div>
-            </div>
-            <div class="demo-board-actions">
-              <button type="button" class="demo-run" data-demo-command="run">试一次</button>
-              <p class="demo-message" aria-live="polite"></p>
-            </div>
-          </section>
-          <section class="demo-result" aria-labelledby="demo-result-title">
-            <h4 id="demo-result-title">试跑结果</h4>
-            <dl class="demo-stats">
-              <div class="demo-stat" data-stat="self">
-                <dt>我方生命</dt><dd><output>24</output><span class="demo-max">上限 30</span></dd>
-              </div>
-              <div class="demo-stat" data-stat="opponent">
-                <dt>对手生命</dt><dd><output>22</output><span class="demo-max">上限 30</span></dd>
-              </div>
-              <div class="demo-stat" data-stat="draw">
-                <dt>抽牌数</dt><dd><output>0</output></dd>
-              </div>
-            </dl>
-            <p class="demo-result-note">每次试跑从相同的初始状态开始。</p>
-            <ol class="demo-log" aria-live="polite"></ol>
-          </section>
-        </div>
+      <div class="feature-copy">
+        <h2 id="features-title">卡牌创作</h2>
+        <dl class="feature-steps">
+          <div><dt>制作卡牌</dt><dd>设定费用、生命和攻击，替换卡图。</dd></div>
+          <div><dt>编排技能</dt><dd>用积木组合触发条件和效果，做好后直接试打。</dd></div>
+          <div><dt>分享卡组</dt><dd>导出自己的卡组，或从创意工坊预览并导入。</dd></div>
+        </dl>
       </div>
     </section>
 
